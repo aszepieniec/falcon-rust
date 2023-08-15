@@ -1,6 +1,8 @@
 pub mod common;
 pub mod encoding;
 pub mod falcon;
+pub mod fft;
+pub mod fft_constants;
 pub mod field;
 pub mod ntt;
 pub mod ntt_constants;

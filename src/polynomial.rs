@@ -6,20 +6,20 @@ use itertools::Itertools;
 use crate::field::{Felt, Q};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Polynomial {
-    pub coefficients: Vec<Felt>,
+pub struct Polynomial<F> {
+    pub coefficients: Vec<F>,
 }
 
-impl Polynomial {
-    pub fn new(coefficients: &[Felt]) -> Self {
+impl<F: Clone> Polynomial<F> {
+    pub fn new(coefficients: &[F]) -> Self {
         Self {
             coefficients: coefficients.to_vec(),
         }
     }
 }
 
-impl Add for Polynomial {
-    type Output = Polynomial;
+impl<F: Add<Output = F> + Copy> Add for Polynomial<F> {
+    type Output = Polynomial<F>;
 
     fn add(self, rhs: Self) -> Self::Output {
         Self::Output {
@@ -28,13 +28,13 @@ impl Add for Polynomial {
                 .iter()
                 .zip_eq(rhs.coefficients.iter())
                 .map(|(a, b)| *a + *b)
-                .collect(),
+                .collect_vec(),
         }
     }
 }
 
-impl Sub for Polynomial {
-    type Output = Polynomial;
+impl<F: Sub<Output = F> + Copy> Sub for Polynomial<F> {
+    type Output = Polynomial<F>;
 
     fn sub(self, rhs: Self) -> Self::Output {
         Self::Output {
@@ -48,7 +48,7 @@ impl Sub for Polynomial {
     }
 }
 
-impl Neg for Polynomial {
+impl<F: Neg<Output = F> + Copy> Neg for Polynomial<F> {
     type Output = Self;
 
     fn neg(self) -> Self::Output {
@@ -60,7 +60,7 @@ impl Neg for Polynomial {
 
 /// Hash a string to a random polynomial in ZZ[X] mod <Phi(X), q>.
 /// Algorithm 3, "HashToPoint" in the spec (page 31).
-pub fn hash_to_point(string: &[u8], n: usize) -> Polynomial {
+pub fn hash_to_point(string: &[u8], n: usize) -> Polynomial<Felt> {
     const K: u32 = (1u32 << 16) / (Q as u32);
 
     let mut hasher = Shake256::default();
@@ -78,6 +78,19 @@ pub fn hash_to_point(string: &[u8], n: usize) -> Polynomial {
         }
     }
 
+    Polynomial { coefficients }
+}
+
+/// Compute the Hermitian adjoint of the polynomial f in the
+/// cyclotomic ring Q[X]/<Phi_n(X)> where n = deg(f)+1.
+/// In this structure, the Hermitian adjoint is given by
+/// f*(X) = f[0] + sum_{i=1}^{n-1} f[i] * X({n-i}).
+pub fn hermitian_adjoint<F: Copy>(f: Polynomial<F>) -> Polynomial<F> {
+    let coefficients = [
+        vec![f.coefficients[0]],
+        f.coefficients.into_iter().skip(1).rev().collect_vec(),
+    ]
+    .concat();
     Polynomial { coefficients }
 }
 

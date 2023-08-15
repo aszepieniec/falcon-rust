@@ -13,3 +13,6 @@ rand_chacha = "0.3.1"
 itertools = "0.11.0"
 hex = "0.4.3"
 sha3 = "0.10.8"
+num-complex = "0.4.4"
+dft = "0.5.5"
+

@@ -1,4 +1,3 @@
-use itertools::Itertools;
 use rand_distr::num_traits::Zero;
 
 use crate::{
@@ -77,12 +76,7 @@ pub(crate) fn ntt(f: &[Felt]) -> Vec<Felt> {
     }
 }
 
-/// Compute the inverse NTT of a polynomial.
-///
-/// Args:
-///     f_ntt: a NTT of a polynomial
-///
-/// Format: input as NTT, output as coefficients
+/// Compute the inverse NTT
 pub(crate) fn intt(f_ntt: &[Felt]) -> Vec<Felt> {
     let n = f_ntt.len();
     if n > 2 {
@@ -98,19 +92,13 @@ pub(crate) fn intt(f_ntt: &[Felt]) -> Vec<Felt> {
     }
 }
 
-/// This value is the ratio between:
-///     - The degree n
-///     - The number of complex coefficients of the NTT
-/// While here this ratio is 1, it is possible to develop a short NTT such that it is 2.
-const ntt_ratio: usize = 1;
-
 #[cfg(test)]
 mod test {
     use itertools::Itertools;
-    use rand::{thread_rng, Rng, RngCore};
+    use rand::{thread_rng, Rng};
 
     use crate::{
-        field::{Felt, Q},
+        field::Felt,
         ntt::{intt, ntt},
     };
 

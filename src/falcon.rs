@@ -7,7 +7,7 @@ use rand_distr::num_traits::Zero;
 use crate::{
     field::{Felt, Q},
     ntt::{intt, ntt},
-    polynomial::Polynomial,
+    polynomial::{hermitian_adjoint, Polynomial},
     samplerz::sampler_z,
 };
 
@@ -59,15 +59,17 @@ impl Params {
     }
 }
 
-fn gen_poly(n: usize, sigma_min: f64, rng: &mut dyn RngCore) -> Vec<Felt> {
+fn gen_poly(n: usize, sigma_min: f64, rng: &mut dyn RngCore) -> Polynomial<i16> {
     let mu = 0.0;
-    let sigma = 1.43300980528773;
-    (0..4096)
-        .map(|_| sampler_z(mu, sigma, sigma_min, rng))
-        .collect_vec()
-        .chunks(4096 / n)
-        .map(|ch| Felt(ch.iter().sum()))
-        .collect_vec()
+    let sigma_star = 1.43300980528773;
+    Polynomial {
+        coefficients: (0..4096)
+            .map(|_| sampler_z(mu, sigma_star, sigma_min, rng))
+            .collect_vec()
+            .chunks(4096 / n)
+            .map(|ch| ch.iter().sum())
+            .collect_vec(),
+    }
 }
 
 /// Sample 4 small polynomials f, g, F, G such that
@@ -76,20 +78,40 @@ fn gen_poly(n: usize, sigma_min: f64, rng: &mut dyn RngCore) -> Vec<Felt> {
 /// [1]: https://falcon-sign.info/falcon.pdf
 fn ntru_gen(
     n: usize,
-    sigma_min: f64,
     seed: [u8; 32],
-) -> (Polynomial, Polynomial, Polynomial, Polynomial) {
+) -> (
+    Polynomial<i16>,
+    Polynomial<i16>,
+    Polynomial<i16>,
+    Polynomial<i16>,
+) {
     let mut rng: StdRng = SeedableRng::from_seed(seed);
+    let sigma_fg = 1.17 * ((Q as f64) / (n as f64)).sqrt();
     loop {
-        let f = gen_poly(n, sigma_min, &mut rng);
-        let g = gen_poly(n, sigma_min, &mut rng);
-        // if gs_norm(f, g, Q) > 1.3689 * Q {
-        //     continue;
-        // }
-        let f_ntt = ntt(&f);
+        let f = gen_poly(n, sigma_fg, &mut rng);
+        let g = gen_poly(n, sigma_fg, &mut rng);
+        let f_ntt = ntt(&f
+            .coefficients
+            .iter()
+            .cloned()
+            .map(Felt::new)
+            .collect::<Vec<_>>());
         if f_ntt.iter().any(|e| e.is_zero()) {
             continue;
         }
+        let norm_f_g: i32 = f
+            .coefficients
+            .iter()
+            .chain(f.coefficients.iter())
+            .cloned()
+            .map(|c| c as i32)
+            .map(|c| c * c)
+            .sum();
+        let f_star = hermitian_adjoint(f);
+        let g_star = hermitian_adjoint(g);
+        // if gs_norm(f, g, Q) > 1.3689 * Q {
+        //     continue;
+        // }
         // let (capital_f, capital_g) = ntru_solve(f, g);
         // return (
         //     Polynomial::new(&f),
@@ -103,13 +125,13 @@ fn ntru_gen(
 
 #[derive(Debug, Clone)]
 pub struct SecretKey {
-    f: Polynomial,
-    g: Polynomial,
-    capital_f: Polynomial,
-    capital_g: Polynomial,
-    b0_ntt: Polynomial,
-    g0_ntt: Polynomial,
-    t_ntt: Polynomial,
+    f: Polynomial<i16>,
+    g: Polynomial<i16>,
+    capital_f: Polynomial<i16>,
+    capital_g: Polynomial<i16>,
+    b0_ntt: Polynomial<Felt>,
+    g0_ntt: Polynomial<Felt>,
+    t_ntt: Polynomial<Felt>,
 }
 
 impl Display for SecretKey {
@@ -149,7 +171,7 @@ impl SecretKey {
 
     pub fn generate_from_seed(variant: FalconVariant, seed: [u8; 32]) -> Self {
         let params = Params::new(variant);
-        // let (f, g, capital_f, capital_g) = ntru_gen(params.n, seed);
+        let (f, g, capital_f, capital_g) = ntru_gen(params.n, seed);
         // let b0 = [g, -f, capital_g, -capital_f];
         // let b0_ntt = b0.iter().map(|b| ntt(&b.coefficients)).collect();
         // let g0 = gram(b0);
@@ -177,8 +199,8 @@ pub struct PublicKey {
 
 impl PublicKey {
     pub fn from_secret_key(sk: &SecretKey) -> Self {
-        let f_ntt = ntt(&sk.f.coefficients);
-        let g_ntt = ntt(&sk.g.coefficients);
+        let f_ntt = ntt(&sk.f.coefficients.iter().cloned().map(Felt).collect_vec());
+        let g_ntt = ntt(&sk.g.coefficients.iter().cloned().map(Felt).collect_vec());
         let g_inv = Felt::batch_inverse_or_zero(&g_ntt);
         let h_ntt = f_ntt
             .into_iter()

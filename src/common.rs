@@ -1,20 +1,15 @@
-use rand_distr::num_traits::Zero;
+use std::ops::{Add, Mul};
 
-use crate::field::Felt;
+use rand_distr::num_traits::Zero;
 
 /// This file contains methods and objects which are reused through multiple files.
 ///
 
-/// Split a polynomial f into two polynomials
-/// of N coefficients, using even-off split.
-///
-///  Args:
-///      f: a polynomial
-///  Format: coefficients
-pub(crate) fn split(f: &[Felt]) -> (Vec<Felt>, Vec<Felt>) {
+/// Split a polynomial f into two polynomials using even-odd split.
+pub(crate) fn split<T: Zero + Copy>(f: &[T]) -> (Vec<T>, Vec<T>) {
     let n = f.len();
-    let mut f0 = vec![Felt::zero(); n / 2];
-    let mut f1 = vec![Felt::zero(); n / 2];
+    let mut f0 = vec![T::zero(); n / 2];
+    let mut f1 = vec![T::zero(); n / 2];
     for i in 0..n / 2 {
         f0[i] = f[2 * i];
         f1[i] = f[2 * i + 1];
@@ -22,14 +17,11 @@ pub(crate) fn split(f: &[Felt]) -> (Vec<Felt>, Vec<Felt>) {
     (f0, f1)
 }
 
-/// Merge two polynomials into a single
-/// polynomial f, using even-odd split.
-/// Args:
-///     f_list: a pair of polynomials
-/// Format: coefficients
-pub(crate) fn merge(f0: &[Felt], f1: &[Felt]) -> Vec<Felt> {
+/// Merge two polynomials into a single polynomial f, using even-odd
+/// split.
+pub(crate) fn merge<T: Zero + Copy>(f0: &[T], f1: &[T]) -> Vec<T> {
     let n = 2 * f0.len();
-    let mut f = vec![Felt::zero(); n];
+    let mut f = vec![T::zero(); n];
     for i in 0..n / 2 {
         f[2 * i + 0] = f0[i];
         f[2 * i + 1] = f1[i];
@@ -38,12 +30,10 @@ pub(crate) fn merge(f0: &[Felt], f1: &[Felt]) -> Vec<Felt> {
 }
 
 /// Compute the square euclidean norm of the vector v.
-pub(crate) fn sqnorm(v: &[Vec<Felt>]) -> u32 {
-    let mut res = 0u32;
-    for elt in v {
-        for coeff in elt {
-            res += (coeff.0 as u32) * (coeff.0 as u32);
-        }
+pub(crate) fn sqnorm<T: Mul<Output = T> + Add<Output = T> + Zero + Copy>(v: &[T]) -> T {
+    let mut res = T::zero();
+    for coeff in v {
+        res = res + (*coeff) * (*coeff);
     }
     res
 }
