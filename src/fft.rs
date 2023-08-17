@@ -62,8 +62,8 @@ fn ifft(f_fft: &[Complex64]) -> Vec<Complex64> {
         merge(&f0, &f1)
     } else {
         let mut f = vec![Complex64::zero(); 2];
-        f[0] = Complex64::new(f_fft[0].re, 0.0);
-        f[1] = Complex64::new(f_fft[0].im, 0.0);
+        f[0] = 0.5 * (f_fft[0] + f_fft[1]);
+        f[1] = 0.5 * (f_fft[0] - f_fft[1]) * Complex64::i().conj();
         f
     }
 }
@@ -81,12 +81,18 @@ mod test {
 
     fn assert_approx_equal(a: &[Complex64], b: &[Complex64]) {
         let norm = a
-            .into_iter()
-            .zip(b.into_iter())
+            .iter()
+            .zip(b.iter())
             .map(|(x, y)| x - y)
             .map(|x| x * x.conj())
             .sum::<Complex64>();
-        assert!(norm.re <= 1e-10, "squared norm of difference: {}", norm.re);
+        assert!(
+            norm.re <= 1e-10,
+            "squared norm of difference: {}\n\nlhs: {:?}\n\nrhs: {:?}",
+            norm.re,
+            a,
+            b
+        );
     }
 
     #[test]
@@ -127,7 +133,7 @@ mod test {
     #[test]
     fn test_fft_inverse() {
         let mut rng = thread_rng();
-        const N: usize = 256;
+        const N: usize = 1024;
         let v: [Complex64; N] = (0..N)
             .map(|_| Complex64::new(rng.gen(), rng.gen()))
             .collect_vec()
