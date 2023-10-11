@@ -1,6 +1,7 @@
 pub mod common;
 pub mod encoding;
 pub mod falcon;
+pub mod ffsampling;
 pub mod fft;
 pub mod fft_constants;
 pub mod field;

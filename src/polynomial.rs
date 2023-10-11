@@ -16,6 +16,19 @@ impl<F: Clone> Polynomial<F> {
             coefficients: coefficients.to_vec(),
         }
     }
+
+    /// Compute the Hermitian adjoint of the polynomial f in the
+    /// cyclotomic ring Q[X]/<Phi_n(X)> where n = deg(f)+1.
+    /// In this structure, the Hermitian adjoint is given by
+    /// f*(X) = f[0] + sum_{i=1}^{n-1} f[i] * X({n-i}).
+    pub fn hermitian_adjoint(self) -> Polynomial<F> {
+        let coefficients = [
+            vec![self.coefficients[0].clone()],
+            self.coefficients.into_iter().skip(1).rev().collect_vec(),
+        ]
+        .concat();
+        Polynomial { coefficients }
+    }
 }
 
 impl<F: Add<Output = F> + Copy> Add for Polynomial<F> {
@@ -78,19 +91,6 @@ pub fn hash_to_point(string: &[u8], n: usize) -> Polynomial<Felt> {
         }
     }
 
-    Polynomial { coefficients }
-}
-
-/// Compute the Hermitian adjoint of the polynomial f in the
-/// cyclotomic ring Q[X]/<Phi_n(X)> where n = deg(f)+1.
-/// In this structure, the Hermitian adjoint is given by
-/// f*(X) = f[0] + sum_{i=1}^{n-1} f[i] * X({n-i}).
-pub fn hermitian_adjoint<F: Copy>(f: Polynomial<F>) -> Polynomial<F> {
-    let coefficients = [
-        vec![f.coefficients[0]],
-        f.coefficients.into_iter().skip(1).rev().collect_vec(),
-    ]
-    .concat();
     Polynomial { coefficients }
 }
 

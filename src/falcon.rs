@@ -1,13 +1,16 @@
 use std::fmt::Display;
 
 use itertools::Itertools;
+use num_complex::Complex64;
 use rand::{rngs::StdRng, thread_rng, Rng, RngCore, SeedableRng};
 use rand_distr::num_traits::Zero;
 
 use crate::{
+    ffsampling::{ffldl, gram, normalize_tree, LdlTree},
+    fft::fft,
     field::{Felt, Q},
     ntt::{intt, ntt},
-    polynomial::{hermitian_adjoint, Polynomial},
+    polynomial::Polynomial,
     samplerz::sampler_z,
 };
 
@@ -107,8 +110,8 @@ fn ntru_gen(
             .map(|c| c as i32)
             .map(|c| c * c)
             .sum();
-        let f_star = hermitian_adjoint(f);
-        let g_star = hermitian_adjoint(g);
+        let f_star = f.hermitian_adjoint();
+        let g_star = g.hermitian_adjoint();
         // if gs_norm(f, g, Q) > 1.3689 * Q {
         //     continue;
         // }
@@ -125,39 +128,8 @@ fn ntru_gen(
 
 #[derive(Debug, Clone)]
 pub struct SecretKey {
-    f: Polynomial<i16>,
-    g: Polynomial<i16>,
-    capital_f: Polynomial<i16>,
-    capital_g: Polynomial<i16>,
-    b0_ntt: Polynomial<Felt>,
-    g0_ntt: Polynomial<Felt>,
-    t_ntt: Polynomial<Felt>,
-}
-
-impl Display for SecretKey {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_fmt(format_args!(
-            "Falcon-{} secret key:\n",
-            self.f.coefficients.len()
-        ))?;
-        f.write_fmt(format_args!(
-            "f = {}\n",
-            self.f.coefficients.iter().join(", ")
-        ))?;
-        f.write_fmt(format_args!(
-            "g = {}\n",
-            self.g.coefficients.iter().join(", ")
-        ))?;
-        f.write_fmt(format_args!(
-            "F = {}\n",
-            self.capital_f.coefficients.iter().join(", ")
-        ))?;
-        f.write_fmt(format_args!(
-            "G = {}\n",
-            self.capital_g.coefficients.iter().join(", ")
-        ))?;
-        Ok(())
-    }
+    b0_fft: [Vec<Complex64>; 4],
+    tree: LdlTree,
 }
 
 impl SecretKey {
@@ -172,23 +144,20 @@ impl SecretKey {
     pub fn generate_from_seed(variant: FalconVariant, seed: [u8; 32]) -> Self {
         let params = Params::new(variant);
         let (f, g, capital_f, capital_g) = ntru_gen(params.n, seed);
-        // let b0 = [g, -f, capital_g, -capital_f];
-        // let b0_ntt = b0.iter().map(|b| ntt(&b.coefficients)).collect();
-        // let g0 = gram(b0);
-        // let g0_ntt = g0.iter().map(|g| ntt(g)).collect();
-        // let mut t_ntt = ffldl(g0_ntt);
-        // normalize_tree(&mut t_ntt, params.sigma);
+        let b0 = [g, -f, capital_g, -capital_f];
+        let b0_fft = b0
+            .map(|v| v.coefficients)
+            .map(|c| {
+                c.iter()
+                    .map(|cc| Complex64::new(*cc as f64, 0.0))
+                    .collect_vec()
+            })
+            .map(|c| fft(&c));
+        let g0_fft = gram(b0_fft.clone());
+        let mut tree = ffldl(g0_fft);
+        normalize_tree(&mut tree, params.sigma);
 
-        // SecretKey {
-        //     f,
-        //     g,
-        //     capital_f,
-        //     capital_g,
-        //     b0_ntt,
-        //     g0_ntt,
-        //     t_ntt,
-        // }
-        todo!()
+        SecretKey { b0_fft, tree }
     }
 }
 
@@ -199,8 +168,14 @@ pub struct PublicKey {
 
 impl PublicKey {
     pub fn from_secret_key(sk: &SecretKey) -> Self {
-        let f_ntt = ntt(&sk.f.coefficients.iter().cloned().map(Felt).collect_vec());
-        let g_ntt = ntt(&sk.g.coefficients.iter().cloned().map(Felt).collect_vec());
+        let f_ntt = sk.b0_fft[0]
+            .iter()
+            .map(|c| Felt::new(c.re as i16))
+            .collect_vec();
+        let g_ntt = sk.b0_fft[1]
+            .iter()
+            .map(|c| Felt::new(-c.re as i16))
+            .collect_vec();
         let g_inv = Felt::batch_inverse_or_zero(&g_ntt);
         let h_ntt = f_ntt
             .into_iter()

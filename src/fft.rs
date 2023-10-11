@@ -8,7 +8,7 @@ use crate::{
 
 /// Split a polynomial into even and odd halves, except the polynomial
 /// is given in FFT representation.
-fn split_fft(f_fft: &[Complex64]) -> (Vec<Complex64>, Vec<Complex64>) {
+pub fn split_fft(f_fft: &[Complex64]) -> (Vec<Complex64>, Vec<Complex64>) {
     let n = f_fft.len();
     let w = roots_dict_complex(n);
     let mut f0_fft = vec![Complex64::zero(); n / 2];
@@ -22,7 +22,7 @@ fn split_fft(f_fft: &[Complex64]) -> (Vec<Complex64>, Vec<Complex64>) {
 
 /// Merge two polynomials into one by interleaving their coefficients,
 /// except the polynomials are given in FFT representation.
-fn merge_fft(f0_fft: &[Complex64], f1_fft: &[Complex64]) -> Vec<Complex64> {
+pub fn merge_fft(f0_fft: &[Complex64], f1_fft: &[Complex64]) -> Vec<Complex64> {
     let n = 2 * f0_fft.len();
     let w = roots_dict_complex(n);
     let mut f_fft = vec![Complex64::zero(); n];
@@ -35,7 +35,7 @@ fn merge_fft(f0_fft: &[Complex64], f1_fft: &[Complex64]) -> Vec<Complex64> {
 
 /// Compute the discrete Fourier transform of the given polynomial
 /// using the FFT algorithm (or rather, a variant of the FFT family).
-fn fft(f: &[Complex64]) -> Vec<Complex64> {
+pub fn fft(f: &[Complex64]) -> Vec<Complex64> {
     let n = f.len();
     if n > 2 {
         let (f0, f1) = split(f);
@@ -74,10 +74,7 @@ mod test {
     use num_complex::Complex64;
     use rand::{thread_rng, Rng};
 
-    use crate::{
-        common::sqnorm,
-        fft::{fft, ifft},
-    };
+    use crate::fft::{fft, ifft};
 
     fn assert_approx_equal(a: &[Complex64], b: &[Complex64]) {
         let norm = a
