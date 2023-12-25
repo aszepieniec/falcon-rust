@@ -29,16 +29,16 @@ impl Felt {
     }
 
     pub const fn inverse_or_zero(&self) -> Self {
-        inv_mod_q[self.0 as usize]
+        INV_MOD_Q[self.0 as usize]
     }
 
     pub fn batch_inverse_or_zero(batch: &[Self]) -> Vec<Self> {
         let mut acc = Felt::one();
         let mut rp: Vec<Felt> = Vec::with_capacity(batch.len());
-        for i in 0..batch.len() {
-            if !batch[i].is_zero() {
+        for batch_item in batch {
+            if !batch_item.is_zero() {
                 rp.push(acc);
-                acc = batch[i] * acc;
+                acc = *batch_item * acc;
             } else {
                 rp.push(Felt::zero());
             }
@@ -148,6 +148,7 @@ pub(crate) const fn roots_dict_zq(n: usize) -> &'static [Felt] {
     }
 }
 
+#[allow(clippy::suspicious_arithmetic_impl)]
 impl Div for Felt {
     type Output = Option<Felt>;
 
@@ -155,13 +156,13 @@ impl Div for Felt {
         if rhs.is_zero() {
             None
         } else {
-            Some(self * inv_mod_q[rhs.0 as usize])
+            Some(self * INV_MOD_Q[rhs.0 as usize])
         }
     }
 }
 
 /// The list of a^(-1) mod qFelt(), for a = Felt(0), Felt(1), ...Felt(), q - 1.
-const inv_mod_q: [Felt; 12289] = [
+const INV_MOD_Q: [Felt; 12289] = [
     Felt(0),
     Felt(1),
     Felt(6145),

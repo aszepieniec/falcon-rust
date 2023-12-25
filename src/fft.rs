@@ -27,7 +27,7 @@ pub fn merge_fft(f0_fft: &[Complex64], f1_fft: &[Complex64]) -> Vec<Complex64> {
     let w = roots_dict_complex(n);
     let mut f_fft = vec![Complex64::zero(); n];
     for i in 0..(n / 2) {
-        f_fft[2 * i + 0] = f0_fft[i] + w[2 * i] * f1_fft[i];
+        f_fft[2 * i] = f0_fft[i] + w[2 * i] * f1_fft[i];
         f_fft[2 * i + 1] = f0_fft[i] - w[2 * i] * f1_fft[i];
     }
     f_fft
@@ -113,13 +113,13 @@ mod test {
         let w_ntt = fft(&w);
         let lhs = v_ntt
             .into_iter()
-            .zip(w_ntt.into_iter())
+            .zip(w_ntt)
             .map(|(vv, ww)| a * vv + b * ww)
             .collect_vec();
 
         let rhs_coeffs = v
             .into_iter()
-            .zip(w.into_iter())
+            .zip(w)
             .map(|(vv, ww)| a * vv + b * ww)
             .collect_vec();
         let rhs = fft(&rhs_coeffs);
@@ -141,7 +141,7 @@ mod test {
         let v_again = ifft(&v_fft);
         let v_fft_again = fft(&v_again);
 
-        assert_approx_equal(&v.to_vec(), &v_again);
+        assert_approx_equal(v.as_ref(), &v_again);
         assert_approx_equal(&v_fft, &v_fft_again);
     }
 }

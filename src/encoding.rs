@@ -14,7 +14,7 @@ fn compress(v: &[i16], slen: usize) -> Option<Vec<u8>> {
     let mut bitvector: BitVec = BitVec::with_capacity(8 * slen);
     for coeff in v {
         // encode sign
-        bitvector.push(if *coeff < 0 { true } else { false });
+        bitvector.push(*coeff < 0);
         // encode low bits
         let s = (*coeff).abs();
         for i in (0..7).rev() {
@@ -67,13 +67,13 @@ fn decompress<const N: usize>(x: &[u8]) -> Option<[i16; N]> {
         // read low bits
         let mut low_bits = 0i16;
         for _ in 0..7 {
-            low_bits = (low_bits << 1) | if bitvector[index] == true { 1 } else { 0 };
+            low_bits = (low_bits << 1) | if bitvector[index] { 1 } else { 0 };
             index += 1;
         }
 
         // read high bits
         let mut high_bits = 0;
-        while bitvector[index] != true {
+        while !bitvector[index] {
             index += 1;
             high_bits += 1;
         }
@@ -114,7 +114,6 @@ mod test {
                 let slen = SIG_BYTELEN - SALT_LEN - HEAD_LEN;
 
                 let initial: [i16; N] = (0..N)
-                    .into_iter()
                     .map(|_| {
                         (distribution.sample(&mut rng) + 0.5)
                             .floor()

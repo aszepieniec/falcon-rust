@@ -1,3 +1,5 @@
+use std::f64::consts::LN_2;
+
 use rand::{Rng, RngCore};
 
 /// Sample an integer from {0, ..., 18} according to the distribution χ, which
@@ -70,9 +72,9 @@ fn approx_exp(x: f64, ccs: f64) -> u64 {
 /// A random bool that is true with probability ≈ ccs · exp(−x).
 fn ber_exp(x: f64, ccs: f64, random_bytes: [u8; 7]) -> bool {
     // 0.69314718055994530941 = ln(2)
-    let s = f64::floor(x / 0.69314718055994530941) as usize;
-    let r = x - 0.69314718055994530941 * (s as f64);
-    let shamt = usize::min(s as usize, 63);
+    let s = f64::floor(x / LN_2) as usize;
+    let r = x - LN_2 * (s as f64);
+    let shamt = usize::min(s, 63);
     let z = ((((approx_exp(r, ccs) as u128) << 1) - 1) >> shamt) as u64;
     let mut w = 0i16;
     for (index, i) in (0..64).step_by(8).rev().enumerate() {
@@ -82,7 +84,7 @@ fn ber_exp(x: f64, ccs: f64, random_bytes: [u8; 7]) -> bool {
             break;
         }
     }
-    return w < 0;
+    w < 0
 }
 
 /// Sample an integer from the Gaussian distribution with given mean (mu) and
@@ -238,26 +240,26 @@ mod test {
     fn test_ber_exp() {
         let kats = [
             (
-                1.268314048020498408,
-                0.7499908532676649031,
+                1.268_314_048_020_498_4,
+                0.749_990_853_267_664_9,
                 hex::decode("ea000000000000").unwrap(),
                 false,
             ),
             (
-                0.001563917959143409616,
-                0.7499908532676649031,
+                0.001_563_917_959_143_409_6,
+                0.749_990_853_267_664_9,
                 hex::decode("6c000000000000").unwrap(),
                 true,
             ),
             (
-                0.01792121575399923533,
-                0.7499908532676649031,
+                0.017_921_215_753_999_235,
+                0.749_990_853_267_664_9,
                 hex::decode("c2000000000000").unwrap(),
                 false,
             ),
             (
-                0.7761176488449805788,
-                0.7511815545425207796,
+                0.776_117_648_844_980_6,
+                0.751_181_554_542_520_8,
                 hex::decode("58000000000000").unwrap(),
                 true,
             ),

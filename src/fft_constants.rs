@@ -1,3 +1,5 @@
+use std::f64::consts::FRAC_1_SQRT_2;
+
 /// Constants (complex roots of cyclotomic polynomials) for
 /// The FFT.
 use num_complex::Complex64;
@@ -8,10 +10,10 @@ const PHI4_ROOTS: [Complex64; 2] = [
 ];
 
 const PHI8_ROOTS: [Complex64; 4] = [
-    Complex64::new(0.707106781186548, 0.707106781186547),
-    Complex64::new(-0.707106781186548, -0.707106781186547),
-    Complex64::new(0.707106781186548, -0.707106781186547),
-    Complex64::new(-0.707106781186548, 0.707106781186547),
+    Complex64::new(FRAC_1_SQRT_2, FRAC_1_SQRT_2),
+    Complex64::new(-FRAC_1_SQRT_2, -FRAC_1_SQRT_2),
+    Complex64::new(FRAC_1_SQRT_2, -FRAC_1_SQRT_2),
+    Complex64::new(-FRAC_1_SQRT_2, FRAC_1_SQRT_2),
 ];
 
 const PHI16_ROOTS: [Complex64; 8] = [

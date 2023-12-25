@@ -1,5 +1,3 @@
-use std::fmt::Display;
-
 use itertools::Itertools;
 use num_complex::Complex64;
 use rand::{rngs::StdRng, thread_rng, Rng, RngCore, SeedableRng};
@@ -18,7 +16,7 @@ pub const fn logn(mut n: u32) -> usize {
     let mut ctr = 0;
     while n != 0 {
         ctr += 1;
-        n = n >> 1;
+        n >>= 1;
     }
     ctr
 }
@@ -102,7 +100,7 @@ fn ntru_gen(
         if f_ntt.iter().any(|e| e.is_zero()) {
             continue;
         }
-        let norm_f_g: i32 = f
+        let _norm_f_g: i32 = f
             .coefficients
             .iter()
             .chain(f.coefficients.iter())
@@ -110,8 +108,8 @@ fn ntru_gen(
             .map(|c| c as i32)
             .map(|c| c * c)
             .sum();
-        let f_star = f.hermitian_adjoint();
-        let g_star = g.hermitian_adjoint();
+        let _f_star = f.hermitian_adjoint();
+        let _g_star = g.hermitian_adjoint();
         // if gs_norm(f, g, Q) > 1.3689 * Q {
         //     continue;
         // }
@@ -179,12 +177,10 @@ impl PublicKey {
         let g_inv = Felt::batch_inverse_or_zero(&g_ntt);
         let h_ntt = f_ntt
             .into_iter()
-            .zip_eq(g_inv.into_iter())
+            .zip_eq(g_inv)
             .map(|(a, b)| a * b)
             .collect_vec();
         let h = intt(&h_ntt);
-        Self {
-            h: h.try_into().unwrap(),
-        }
+        Self { h }
     }
 }

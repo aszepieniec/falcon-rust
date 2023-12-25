@@ -49,7 +49,7 @@ fn merge_ntt(f0_ntt: &[Felt], f1_ntt: &[Felt]) -> Vec<Felt> {
     let w = roots_dict_zq(n);
     let mut f_ntt = vec![Felt::zero(); n];
     for i in 0..(n / 2) {
-        f_ntt[2 * i + 0] = f0_ntt[i] + w[2 * i] * f1_ntt[i];
+        f_ntt[2 * i] = f0_ntt[i] + w[2 * i] * f1_ntt[i];
         f_ntt[2 * i + 1] = f0_ntt[i] - w[2 * i] * f1_ntt[i];
     }
     f_ntt
@@ -115,13 +115,13 @@ mod test {
         let w_ntt = ntt(&w);
         let lhs = v_ntt
             .into_iter()
-            .zip(w_ntt.into_iter())
+            .zip(w_ntt)
             .map(|(vv, ww)| a * vv + b * ww)
             .collect_vec();
 
         let rhs_coeffs = v
             .into_iter()
-            .zip(w.into_iter())
+            .zip(w)
             .map(|(vv, ww)| a * vv + b * ww)
             .collect_vec();
         let rhs = ntt(&rhs_coeffs);

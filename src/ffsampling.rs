@@ -1,10 +1,8 @@
-use std::{cell::RefCell, rc::Rc};
-
 use itertools::{Either, Itertools};
 use num_complex::{Complex, Complex64};
 use rand_distr::num_traits::{One, Zero};
 
-use crate::{common::split, fft::split_fft};
+use crate::fft::split_fft;
 
 /// Computes the Gram matrix. The argument must be a 2x2 matrix
 /// whose elements are equal-length vectors of complex numbers,
@@ -12,11 +10,7 @@ use crate::{common::split, fft::split_fft};
 pub fn gram(b: [Vec<Complex64>; 4]) -> [Vec<Complex64>; 4] {
     const N: usize = 2;
     let mut g: [Vec<Complex<f64>>; 4] = (0..4)
-        .map(|_| {
-            (0..b[0].len())
-                .map(|_| Complex64::zero().clone())
-                .collect_vec()
-        })
+        .map(|_| (0..b[0].len()).map(|_| Complex64::zero()).collect_vec())
         .collect::<Vec<_>>()
         .try_into()
         .unwrap();
@@ -108,13 +102,13 @@ pub fn ffldl(g: [Vec<Complex64>; 4]) -> LdlTree {
 
 pub fn normalize_tree(tree: &mut LdlTree, sigma: f64) {
     match tree.left.as_mut() {
-        Either::Left(mut left_tree) => normalize_tree(&mut left_tree, sigma),
+        Either::Left(left_tree) => normalize_tree(left_tree, sigma),
         Either::Right(r) => {
             *r = sigma / r.sqrt();
         }
     }
     match tree.right.as_mut() {
-        Either::Left(mut right_tree) => normalize_tree(&mut right_tree, sigma),
+        Either::Left(right_tree) => normalize_tree(right_tree, sigma),
         Either::Right(r) => {
             *r = sigma / r.sqrt();
         }

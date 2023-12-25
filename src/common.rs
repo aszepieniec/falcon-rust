@@ -23,7 +23,7 @@ pub(crate) fn merge<T: Zero + Copy>(f0: &[T], f1: &[T]) -> Vec<T> {
     let n = 2 * f0.len();
     let mut f = vec![T::zero(); n];
     for i in 0..n / 2 {
-        f[2 * i + 0] = f0[i];
+        f[2 * i] = f0[i];
         f[2 * i + 1] = f1[i];
     }
     f
