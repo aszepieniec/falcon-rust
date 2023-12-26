@@ -1,5 +1,3 @@
-use std::ops::{Add, Mul};
-
 use rand_distr::num_traits::Zero;
 
 /// This file contains methods and objects which are reused through multiple files.
@@ -27,13 +25,4 @@ pub(crate) fn merge<T: Zero + Copy>(f0: &[T], f1: &[T]) -> Vec<T> {
         f[2 * i + 1] = f1[i];
     }
     f
-}
-
-/// Compute the square euclidean norm of the vector v.
-pub(crate) fn sqnorm<T: Mul<Output = T> + Add<Output = T> + Zero + Copy>(v: &[T]) -> T {
-    let mut res = T::zero();
-    for coeff in v {
-        res = res + (*coeff) * (*coeff);
-    }
-    res
 }

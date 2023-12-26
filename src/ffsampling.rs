@@ -40,7 +40,6 @@ pub fn gram(b: [Vec<Complex64>; 4]) -> [Vec<Complex64>; 4] {
 
 pub fn ldl(g: [Vec<Complex64>; 4]) -> ([Vec<Complex64>; 4], [Vec<Complex64>; 4]) {
     let n = g[0].len();
-    const N: usize = 2;
 
     let zero = (0..n).map(|_| Complex64::zero()).collect_vec();
     let one = (0..n).map(|_| Complex64::one()).collect_vec();

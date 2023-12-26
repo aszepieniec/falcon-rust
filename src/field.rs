@@ -72,7 +72,7 @@ impl Sub for Felt {
     type Output = Self;
 
     fn sub(self, rhs: Self) -> Self::Output {
-        Felt(((Q as i16) + self.0 - rhs.0) % (Q as i16))
+        Felt(((Q - (rhs.0 as i32) + (self.0 as i32)) % Q) as i16)
     }
 }
 

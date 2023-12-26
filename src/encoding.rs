@@ -83,7 +83,7 @@ pub fn decompress(x: &[u8], n: usize) -> Option<Vec<i16>> {
         let integer = sign * ((high_bits << 7) | low_bits);
         result.push(integer);
     }
-    Some(result.try_into().unwrap())
+    Some(result)
 }
 
 #[cfg(test)]
