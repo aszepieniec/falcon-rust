@@ -55,10 +55,8 @@ fn merge_ntt(f0_ntt: &[Felt], f1_ntt: &[Felt]) -> Vec<Felt> {
     f_ntt
 }
 
-/// Compute the NTT of a polynomial.
-///
-/// Args:
-///     f: a polynomial
+/// Compute the number-theoretic transform (NTT) of a polynomial, producing its
+/// evaluations on the unit circle.
 ///
 /// Format: input as coefficients, output as NTT
 pub(crate) fn ntt(f: &[Felt]) -> Vec<Felt> {

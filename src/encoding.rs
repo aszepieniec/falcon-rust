@@ -10,7 +10,7 @@ use bit_vec::BitVec;
 /// - the sign is encoded on 1 bit
 /// - the 7 lower bits are encoded naively (binary)
 /// - the high bits are encoded in unary encoding
-fn compress(v: &[i16], slen: usize) -> Option<Vec<u8>> {
+pub fn compress(v: &[i16], slen: usize) -> Option<Vec<u8>> {
     let mut bitvector: BitVec = BitVec::with_capacity(8 * slen);
     for coeff in v {
         // encode sign
@@ -45,11 +45,11 @@ fn compress(v: &[i16], slen: usize) -> Option<Vec<u8>> {
 /// Take as input an encoding x, and a length n, and return a list of
 /// integers v of length n such that x encode v. If such a list does
 /// not exist, the encoding is invalid and we output None.
-fn decompress<const N: usize>(x: &[u8]) -> Option<[i16; N]> {
+pub fn decompress(x: &[u8], n: usize) -> Option<Vec<i16>> {
     let bitvector = BitVec::from_bytes(x);
     let mut index = 0;
-    let mut result = Vec::with_capacity(N);
-    for _ in 0..N {
+    let mut result = Vec::with_capacity(n);
+    for _ in 0..n {
         // early return if
         if index + 8 >= bitvector.len() {
             println!(
@@ -124,8 +124,8 @@ mod test {
                     .try_into()
                     .unwrap();
                 let compressed = compress(&initial, slen).unwrap();
-                let decompressed = decompress(&compressed).unwrap();
-                assert_eq!(initial, decompressed);
+                let decompressed = decompress(&compressed, N).unwrap();
+                assert_eq!(initial.to_vec(), decompressed);
             }
 
             // N = 1024
@@ -145,8 +145,8 @@ mod test {
                     .try_into()
                     .unwrap();
                 let compressed = compress(&initial, slen).unwrap();
-                let decompressed = decompress(&compressed).unwrap();
-                assert_eq!(initial, decompressed);
+                let decompressed = decompress(&compressed, N).unwrap();
+                assert_eq!(initial.to_vec(), decompressed);
             }
         }
     }

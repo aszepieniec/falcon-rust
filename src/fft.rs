@@ -53,7 +53,7 @@ pub fn fft(f: &[Complex64]) -> Vec<Complex64> {
 /// Compute the inverse discrete Fourier transform of the given
 /// polynomial using the FFT algorithm (the logical inverse of
 /// the previous one).
-fn ifft(f_fft: &[Complex64]) -> Vec<Complex64> {
+pub fn ifft(f_fft: &[Complex64]) -> Vec<Complex64> {
     let n = f_fft.len();
     if n > 2 {
         let (f0_fft, f1_fft) = split_fft(f_fft);

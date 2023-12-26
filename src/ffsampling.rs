@@ -1,8 +1,13 @@
 use itertools::{Either, Itertools};
 use num_complex::{Complex, Complex64};
+use rand::RngCore;
 use rand_distr::num_traits::{One, Zero};
 
-use crate::fft::split_fft;
+use crate::{
+    falcon,
+    fft::{merge_fft, split_fft},
+    samplerz::sampler_z,
+};
 
 /// Computes the Gram matrix. The argument must be a 2x2 matrix
 /// whose elements are equal-length vectors of complex numbers,
@@ -113,6 +118,47 @@ pub fn normalize_tree(tree: &mut LdlTree, sigma: f64) {
             *r = sigma / r.sqrt();
         }
     }
+}
+
+/// Sample short polynomials using a Falcon tree. Algorithm 11 from the spec [1, p.40].
+/// [1]: https://falcon-sign.info/falcon.pdf
+pub fn ffsampling(
+    t: &(Vec<Complex64>, Vec<Complex64>),
+    tree: &LdlTree,
+    parameters: &falcon::SignatureScheme,
+    rng: &mut dyn RngCore,
+) -> (Vec<Complex64>, Vec<Complex64>) {
+    if t.0.len() == 1 {
+        let sigma_prime = tree.value[0];
+        let z0 = sampler_z(t.0[0].re, sigma_prime.re, parameters.sigmin, rng);
+        let z1 = sampler_z(t.1[0].re, sigma_prime.re, parameters.sigmin, rng);
+        return (
+            vec![Complex64::new(z0 as f64, 0.0)],
+            vec![Complex64::new(z1 as f64, 0.0)],
+        );
+    }
+
+    let (l, tree0, tree1) = (
+        tree.value.clone(),
+        *tree.left.clone().left().unwrap(),
+        *tree.right.clone().left().unwrap(),
+    );
+
+    let bold_t1 = split_fft(&t.1);
+    let bold_z1 = ffsampling(&bold_t1, &tree1, parameters, rng);
+    let z1 = merge_fft(&bold_z1.0, &bold_z1.1);
+
+    // t0' = t0  + (t1 - z1) * l
+    let t0_prime =
+        t.0.iter()
+            .zip(t.1.iter().zip(z1.iter().zip(l.iter())))
+            .map(|(t0_, (t1_, (z1_, l_)))| t0_ + (t1_ - z1_) * l_)
+            .collect_vec();
+    let bold_t0 = split_fft(&t0_prime);
+    let bold_z0 = ffsampling(&bold_t0, &tree0, parameters, rng);
+    let z0 = merge_fft(&bold_z0.0, &bold_z0.1);
+
+    (z0, z1)
 }
 
 #[cfg(test)]
