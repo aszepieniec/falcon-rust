@@ -52,6 +52,9 @@ impl SignatureScheme {
     }
 }
 
+/// Generate a polynomial of degree at most n-1 whose coefficients are
+/// distributed according to a discrete Gaussian with mu = 0 and
+/// sigma = 1.17 * sqrt(Q / (2n)).
 fn gen_poly(n: usize, sigma_min: f64, rng: &mut dyn RngCore) -> Polynomial<i16> {
     let mu = 0.0;
     let sigma_star = 1.43300980528773;
@@ -63,6 +66,40 @@ fn gen_poly(n: usize, sigma_min: f64, rng: &mut dyn RngCore) -> Polynomial<i16> 
             .map(|ch| ch.iter().sum())
             .collect_vec(),
     }
+}
+
+/// Computes the l2-norm (square root of sum of squares) of a vector of integers.
+fn l2_norm(vector: &[i32]) -> f64 {
+    let l2_norm_squared = vector.iter().map(|&i| (i as i64) * (i as i64)).sum::<i64>();
+    f64::sqrt(l2_norm_squared as f64)
+}
+
+/// Compute the Gram-Schmidt norm of B = [[g, -f], [G, -F]] from f and g.
+/// Corresponds to line 9 in algorithm 5 of the spec [1, p.34]
+///
+/// [1]: https://falcon-sign.info/falcon.pdf
+fn gram_schmidt_norm(f: &Polynomial<i16>, g: &Polynomial<i16>) -> f64 {
+    let n = f.coefficients.len();
+    let norm_f = f.l2_norm();
+    let norm_g = g.l2_norm();
+    let sqnorm = norm_f * norm_f + norm_g * norm_g;
+    let gamma1 = f64::sqrt(sqnorm);
+
+    let f_adj = f.hermitian_adjoint();
+    let g_adj = g.hermitian_adjoint();
+    let ffgg = (f.clone() * f_adj.clone() + g.clone() * g_adj.clone()).reduce_by_cyclotomic(n);
+    let ffgg_float = ffgg.lift(|c| c as f64);
+    let ffgginv = ffgg_float.approximate_cyclotomic_ring_inverse(n);
+    let qf_over_ffgg =
+        (f_adj.lift(|c| (c as f64)) * (Q as f64) * ffgginv.clone()).reduce_by_cyclotomic(n);
+    let qg_over_ffgg = (g_adj.lift(|c| (c as f64)) * (Q as f64) * ffgginv).reduce_by_cyclotomic(n);
+    let norm_f_over_ffgg = qf_over_ffgg.l2_norm();
+    let norm_g_over_ffgg = qg_over_ffgg.l2_norm();
+
+    let gamma2 =
+        f64::sqrt(norm_f_over_ffgg * norm_f_over_ffgg + norm_g_over_ffgg * norm_g_over_ffgg);
+
+    f64::max(gamma1, gamma2)
 }
 
 /// Sample 4 small polynomials f, g, F, G such that f * G - g * F = q mod (X^n + 1).
@@ -93,56 +130,11 @@ fn ntru_gen(
             println!("got zero element; restarting ...");
             continue;
         }
-        let norm_f_g = f
-            .coefficients
-            .iter()
-            .chain(g.coefficients.iter())
-            .cloned()
-            .map(|c| c as i32)
-            .map(|c| (c * c) as u64)
-            .sum::<u64>();
-
-        let f_fft = fft(&f
-            .clone()
-            .coefficients
-            .clone()
-            .iter()
-            .map(|a| Complex64::new(*a as f64, 0.0))
-            .collect_vec());
-        let g_fft = fft(&g
-            .clone()
-            .coefficients
-            .clone()
-            .iter()
-            .map(|a| Complex64::new(*a as f64, 0.0))
-            .collect_vec());
-        let f_star_fft = f_fft.iter().map(|&a| a.conj()).collect_vec();
-        let g_star_fft = g_fft.iter().map(|&a| a.conj()).collect_vec();
-        let ffstar_plus_ggstar_fft = f_fft
-            .iter()
-            .zip(f_star_fft.iter().zip(g_fft.iter().zip(g_star_fft.iter())))
-            .map(|(&a, (&b, (&c, &d)))| a * b + c * d)
-            .collect_vec();
-        let f_over_d_fft = f_star_fft
-            .iter()
-            .zip(ffstar_plus_ggstar_fft.iter())
-            .map(|(&a, &b)| a / (b * n as f64))
-            .collect_vec();
-        let g_over_d_fft = g_star_fft
-            .iter()
-            .zip(ffstar_plus_ggstar_fft.iter())
-            .map(|(&a, &b)| a / (b * n as f64))
-            .collect_vec();
-        let gamma2 = f_over_d_fft
-            .iter()
-            .chain(g_over_d_fft.iter())
-            .map(|&a| (Q as f64) * (a * a.conj()).re)
-            .sum::<f64>();
-        let gamma = f64::max(norm_f_g as f64, gamma2);
-        if gamma > 1.3689f64 * (Q as f64) {
+        let gamma = gram_schmidt_norm(&f, &g);
+        if gamma * gamma > 1.3689f64 * (Q as f64) {
             println!(
-                "norm is too big! got {} but max is {}",
-                gamma,
+                "norm is too big! got gamma^2={} but bound is {}",
+                gamma * gamma,
                 1.3689f64 * (Q as f64)
             );
             continue;
@@ -306,6 +298,14 @@ fn ntru_solve(f: &[i32], g: &[i32]) -> Option<(Vec<i32>, Vec<i32>)> {
     let mut capital_f = reduced_product(&capital_f_prime_xsq, &g_minx);
     let mut capital_g = reduced_product(&capital_g_prime_xsq, &f_minx);
     reduce(f, g, &mut capital_f, &mut capital_g);
+
+    println!(
+        "in ntru_solve, got f, g, F, G of norms {}, {}, {}, {}",
+        l2_norm(f),
+        l2_norm(g),
+        l2_norm(&capital_f),
+        l2_norm(&capital_g)
+    );
 
     Some((capital_f, capital_g))
 }
@@ -528,11 +528,11 @@ mod test {
 
     use crate::{
         encoding::compress,
-        falcon::Signature,
+        falcon::{gram_schmidt_norm, Signature},
         polynomial::{hash_to_point, Polynomial},
     };
 
-    use super::{PublicKey, SecretKey, SignatureScheme};
+    use super::{gen_poly, ntru_gen, reduced_product, PublicKey, SecretKey, SignatureScheme};
 
     #[test]
     fn test_operation() {
@@ -1153,6 +1153,66 @@ mod test {
                 .iter()
                 .map(|i| i.0)
                 .collect_vec()
+        );
+    }
+
+    #[test]
+    fn test_ntru_gen() {
+        let mut rng = thread_rng();
+        let (f, g, capital_f, capital_g) = ntru_gen(1024, rng.gen());
+
+        let f_times_capital_g = reduced_product(
+            &f.coefficients.iter().map(|&i| i as i32).collect_vec(),
+            &capital_g
+                .coefficients
+                .iter()
+                .map(|&i| i as i32)
+                .collect_vec(),
+        );
+        let g_times_capital_f = reduced_product(
+            &g.coefficients.iter().map(|&i| i as i32).collect_vec(),
+            &capital_f
+                .coefficients
+                .iter()
+                .map(|&i| i as i32)
+                .collect_vec(),
+        );
+        let difference = f_times_capital_g
+            .iter()
+            .zip(g_times_capital_f.iter())
+            .map(|(&a, &b)| a - b)
+            .collect_vec();
+        println!("{:?}", difference);
+    }
+
+    #[test]
+    fn test_gen_poly() {
+        let mut rng = thread_rng();
+        let n = 1024;
+        let sigma_min = SignatureScheme::falcon_1024().sigmin;
+        let mut sum_norms = 0.0;
+        let num_iterations = 100;
+        for _ in 0..num_iterations {
+            let f = gen_poly(n, sigma_min, &mut rng);
+            sum_norms += f.l2_norm();
+        }
+        let average = sum_norms / (num_iterations as f64);
+        assert!(90.0 < average);
+        assert!(average < 94.0);
+    }
+
+    #[test]
+    fn test_gs_norm() {
+        let n = 512;
+        let f = (0..n).map(|i| i % 5).collect_vec();
+        let g = (0..n).map(|i| (i % 7) - 4).collect_vec();
+        let norm = gram_schmidt_norm(&Polynomial::new(&f), &Polynomial::new(&g));
+        let difference = (norm * norm) - 5992556.183229722;
+        assert!(
+            difference * difference < 0.00001,
+            "norm was {} with square {} =/= 5992556.183229722",
+            norm,
+            norm * norm
         );
     }
 }

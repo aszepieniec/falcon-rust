@@ -150,13 +150,13 @@ pub(crate) const fn roots_dict_zq(n: usize) -> &'static [Felt] {
 
 #[allow(clippy::suspicious_arithmetic_impl)]
 impl Div for Felt {
-    type Output = Option<Felt>;
+    type Output = Felt;
 
     fn div(self, rhs: Self) -> Self::Output {
         if rhs.is_zero() {
-            None
+            panic!("Cannot divide by zero");
         } else {
-            Some(self * INV_MOD_Q[rhs.0 as usize])
+            self * INV_MOD_Q[rhs.0 as usize]
         }
     }
 }

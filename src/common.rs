@@ -1,8 +1,5 @@
 use rand_distr::num_traits::Zero;
 
-/// This file contains methods and objects which are reused through multiple files.
-///
-
 /// Split a polynomial f into two polynomials using even-odd split.
 pub(crate) fn split<T: Zero + Copy>(f: &[T]) -> (Vec<T>, Vec<T>) {
     let n = f.len();

@@ -1,67 +1,321 @@
+use num_complex::Complex64;
+use rand_distr::num_traits::{One, Zero};
 use sha3::{digest::*, Shake256};
-use std::ops::{Add, Neg, Sub};
+use std::fmt::Debug;
+use std::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 
 use itertools::Itertools;
 
+use crate::fft::{fft, ifft};
 use crate::field::{Felt, Q};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct Polynomial<F> {
     pub coefficients: Vec<F>,
 }
 
-impl<F: Clone> Polynomial<F> {
+impl<F> Polynomial<F>
+where
+    F: Clone,
+{
     pub fn new(coefficients: &[F]) -> Self {
         Self {
             coefficients: coefficients.to_vec(),
         }
     }
+}
 
+impl<F> Polynomial<F>
+where
+    F: Clone + Neg<Output = F>,
+{
     /// Compute the Hermitian adjoint of the polynomial f in the
-    /// cyclotomic ring Q[X]/<Phi_n(X)> where n = deg(f)+1.
+    /// cyclotomic ring Q[ X ] / < Phi_n(X) > where n >= deg(f)+1.
     /// In this structure, the Hermitian adjoint is given by
-    /// f*(X) = f[0] + sum_{i=1}^{n-1} f[i] * X({n-i}).
-    pub fn hermitian_adjoint(self) -> Polynomial<F> {
+    ///
+    ///     f*(X) = f[0] + sum_{i=1}^{n-1} f[i] * X({n-i}) .
+    pub fn hermitian_adjoint(&self) -> Polynomial<F> {
         let coefficients = [
             vec![self.coefficients[0].clone()],
-            self.coefficients.into_iter().skip(1).rev().collect_vec(),
+            self.coefficients
+                .iter()
+                .skip(1)
+                .cloned()
+                .map(|c| -c)
+                .rev()
+                .collect_vec(),
         ]
         .concat();
         Polynomial { coefficients }
     }
 }
 
-impl<F: Add<Output = F> + Copy> Add for Polynomial<F> {
+impl<F: Zero + PartialEq + Clone> Polynomial<F> {
+    pub fn degree(&self) -> Option<usize> {
+        if self.coefficients.is_empty() {
+            return None;
+        }
+        let mut max_index = self.coefficients.len() - 1;
+        while self.coefficients[max_index] == F::zero() {
+            if let Some(new_index) = max_index.checked_sub(1) {
+                max_index = new_index;
+            } else {
+                return None;
+            }
+        }
+        Some(max_index)
+    }
+    pub fn lc(&self) -> F {
+        match self.degree() {
+            Some(non_negative_degree) => self.coefficients[non_negative_degree].clone(),
+            None => F::zero(),
+        }
+    }
+}
+
+impl<F: Zero + Clone> Polynomial<F> {
+    pub fn shift(&self, shamt: usize) -> Self {
+        Self {
+            coefficients: [vec![F::zero(); shamt], self.coefficients.clone()].concat(),
+        }
+    }
+
+    pub fn constant(f: F) -> Self {
+        Self {
+            coefficients: vec![f],
+        }
+    }
+
+    pub fn lift<G: Clone, C: FnMut(F) -> G>(&self, closure: C) -> Polynomial<G> {
+        Polynomial::<G>::new(&self.coefficients.iter().cloned().map(closure).collect_vec())
+    }
+}
+
+impl<
+        F: One
+            + Zero
+            + Clone
+            + Neg<Output = F>
+            + MulAssign
+            + AddAssign
+            + Div<Output = F>
+            + Sub<Output = F>
+            + PartialEq,
+    > Polynomial<F>
+{
+    /// Reduce the polynomial by X^n + 1.
+    pub fn reduce_by_cyclotomic(&self, n: usize) -> Self {
+        let mut coefficients = vec![F::zero(); n];
+        let mut sign = -F::one();
+        for (i, c) in self.coefficients.iter().cloned().enumerate() {
+            if i % n == 0 {
+                sign *= -F::one();
+            }
+            coefficients[i % n] += sign.clone() * c;
+        }
+        Polynomial::new(&coefficients)
+    }
+
+    /// Compute the multiplicative inverse of the polynomial in the ring
+    /// F[ X ] / <X^n + 1>
+    ///
+    /// This function assumes that F is a field; otherwise the gcd will never end.
+    pub fn cyclotomic_ring_inverse(&self, n: usize) -> Self {
+        let mut cyclotomic_coefficients = vec![F::zero(); n + 1];
+        cyclotomic_coefficients[0] = F::one();
+        cyclotomic_coefficients[n] = F::one();
+        let (_, a, _) = Polynomial::xgcd(self, &Polynomial::new(&cyclotomic_coefficients));
+        a
+    }
+
+    /// Extended Euclidean algorithm for polynomials. Uses the EEA to compute
+    /// the greatest common divisor g and Bezout coefficients u, v such that
+    ///     u * a + v * b = 1
+    pub fn xgcd(a: &Self, b: &Self) -> (Self, Self, Self) {
+        if a.is_zero() || b.is_zero() {
+            return (Self::zero(), Self::zero(), Self::zero());
+        }
+        let (mut old_r, mut r) = (a.clone(), b.clone());
+        let (mut old_s, mut s) = (Self::one(), Self::zero());
+        let (mut old_t, mut t) = (Self::zero(), Self::one());
+
+        while !r.is_zero() {
+            let quotient = old_r.clone() / r.clone();
+            (old_r, r) = (r.clone(), old_r.clone() - quotient.clone() * r.clone());
+            (old_s, s) = (s.clone(), old_s.clone() - quotient.clone() * s.clone());
+            (old_t, t) = (t.clone(), old_t.clone() - quotient.clone() * t.clone());
+        }
+
+        (old_r, old_s, old_t)
+    }
+}
+
+impl Polynomial<f64> {
+    /// Compute a floating-point approximation of the multiplicative inverse of the
+    /// polynomial in the ring  F[ X ] / <X^n + 1>
+    pub fn approximate_cyclotomic_ring_inverse(&self, n: usize) -> Self {
+        let coefficients = [
+            self.coefficients.clone(),
+            vec![0.0; n - self.coefficients.len()],
+        ]
+        .concat()
+        .iter()
+        .map(|r| Complex64::new(*r, 0.0))
+        .collect_vec();
+        let fft_coefficients = fft(&coefficients);
+        let inverse_coefficients =
+            ifft(&fft_coefficients.into_iter().map(|c| 1.0 / c).collect_vec());
+        Self {
+            coefficients: inverse_coefficients.iter().map(|c| c.re).collect_vec(),
+        }
+    }
+    pub fn approximate_cyclotomic_ring_divide(&self, other: &Self, n: usize) -> Self {
+        let self_coefficients = [
+            self.coefficients.clone(),
+            vec![0.0; n - self.coefficients.len()],
+        ]
+        .concat()
+        .iter()
+        .map(|r| Complex64::new(*r, 0.0))
+        .collect_vec();
+        let other_coefficients = [
+            other.coefficients.clone(),
+            vec![0.0; n - other.coefficients.len()],
+        ]
+        .concat()
+        .iter()
+        .map(|r| Complex64::new(*r, 0.0))
+        .collect_vec();
+        let self_fft = fft(&self_coefficients);
+        let other_fft = fft(&other_coefficients);
+        let quotient_fft = self_fft
+            .into_iter()
+            .zip(other_fft)
+            .map(|(a, b)| a / b)
+            .collect_vec();
+        let quotient_coefficients = ifft(&quotient_fft);
+        Polynomial::new(
+            &quotient_coefficients
+                .into_iter()
+                .map(|c| c.re)
+                .collect_vec(),
+        )
+    }
+}
+
+impl<F: Clone + Into<f64>> Polynomial<F> {
+    pub fn l2_norm(&self) -> f64 {
+        self.coefficients
+            .iter()
+            .map(|i| Into::<f64>::into(i.clone()))
+            .map(|i| i * i)
+            .sum::<f64>()
+            .sqrt()
+    }
+}
+
+impl<F> PartialEq for Polynomial<F>
+where
+    F: Zero
+        + One
+        + PartialEq
+        + Neg<Output = F>
+        + Clone
+        + AddAssign
+        + MulAssign
+        + Div<Output = F>
+        + Sub<Output = F>,
+{
+    fn eq(&self, other: &Self) -> bool {
+        if self.is_zero() && other.is_zero() {
+            true
+        } else if self.is_zero() || other.is_zero() {
+            false
+        } else {
+            let self_degree = self.degree().unwrap();
+            let other_degree = other.degree().unwrap();
+            self.coefficients[0..=self_degree] == other.coefficients[0..=other_degree]
+        }
+    }
+}
+
+impl<F> Eq for Polynomial<F> where
+    F: Zero
+        + One
+        + PartialEq
+        + Neg<Output = F>
+        + Clone
+        + AddAssign
+        + MulAssign
+        + Div<Output = F>
+        + Sub<Output = F>
+{
+}
+
+impl<F> Add for Polynomial<F>
+where
+    F: Add<Output = F> + AddAssign + Clone,
+{
     type Output = Polynomial<F>;
 
     fn add(self, rhs: Self) -> Self::Output {
-        Self::Output {
-            coefficients: self
-                .coefficients
-                .iter()
-                .zip_eq(rhs.coefficients.iter())
-                .map(|(a, b)| *a + *b)
-                .collect_vec(),
+        let coefficients = if self.coefficients.len() >= rhs.coefficients.len() {
+            let mut coefficients = self.coefficients.clone();
+            for (i, c) in rhs.coefficients.into_iter().enumerate() {
+                coefficients[i] += c;
+            }
+            coefficients
+        } else {
+            let mut coefficients = rhs.coefficients.clone();
+            for (i, c) in self.coefficients.into_iter().enumerate() {
+                coefficients[i] += c;
+            }
+            coefficients
+        };
+        Self::Output { coefficients }
+    }
+}
+
+impl<F> AddAssign for Polynomial<F>
+where
+    F: Add<Output = F> + AddAssign + Clone,
+{
+    fn add_assign(&mut self, rhs: Self) {
+        if self.coefficients.len() >= rhs.coefficients.len() {
+            for (i, c) in rhs.coefficients.into_iter().enumerate() {
+                self.coefficients[i] += c;
+            }
+        } else {
+            let mut coefficients = rhs.coefficients.clone();
+            for (i, c) in self.coefficients.iter().enumerate() {
+                coefficients[i] += c.clone();
+            }
+            self.coefficients = coefficients;
         }
     }
 }
 
-impl<F: Sub<Output = F> + Copy> Sub for Polynomial<F> {
+impl<F> Sub for Polynomial<F>
+where
+    F: Sub<Output = F> + Clone + Neg<Output = F> + Add<Output = F> + AddAssign,
+{
     type Output = Polynomial<F>;
 
     fn sub(self, rhs: Self) -> Self::Output {
-        Self::Output {
-            coefficients: self
-                .coefficients
-                .iter()
-                .zip_eq(rhs.coefficients.iter())
-                .map(|(a, b)| *a - *b)
-                .collect(),
-        }
+        self + (-rhs)
     }
 }
 
-impl<F: Neg<Output = F> + Copy> Neg for Polynomial<F> {
+impl<F> SubAssign for Polynomial<F>
+where
+    F: Add<Output = F> + Neg<Output = F> + AddAssign + Clone + Sub<Output = F>,
+{
+    fn sub_assign(&mut self, rhs: Self) {
+        self.coefficients = self.clone().sub(rhs).coefficients;
+    }
+}
+
+impl<F: Neg<Output = F> + Clone> Neg for Polynomial<F> {
     type Output = Self;
 
     fn neg(self) -> Self::Output {
@@ -71,7 +325,136 @@ impl<F: Neg<Output = F> + Copy> Neg for Polynomial<F> {
     }
 }
 
-/// Hash a string to a random polynomial in ZZ[X] mod <Phi(X), q>.
+impl<F> Mul for Polynomial<F>
+where
+    F: Add
+        + AddAssign
+        + Mul<Output = F>
+        + MulAssign
+        + Div<Output = F>
+        + Neg<Output = F>
+        + Sub<Output = F>
+        + Zero
+        + One
+        + PartialEq
+        + Clone,
+{
+    type Output = Self;
+
+    fn mul(self, other: Self) -> Self::Output {
+        if self.is_zero() || other.is_zero() {
+            return Self::zero();
+        }
+        let mut coefficients =
+            vec![F::zero(); self.coefficients.len() + other.coefficients.len() - 1];
+        for i in 0..self.coefficients.len() {
+            for j in 0..other.coefficients.len() {
+                coefficients[i + j] += self.coefficients[i].clone() * other.coefficients[j].clone();
+            }
+        }
+        Self { coefficients }
+    }
+}
+
+impl<F: Add + Mul<Output = F> + Zero + Clone> Mul<F> for Polynomial<F> {
+    type Output = Self;
+
+    fn mul(self, other: F) -> Self::Output {
+        Self {
+            coefficients: self
+                .coefficients
+                .iter()
+                .cloned()
+                .map(|i| i * other.clone())
+                .collect_vec(),
+        }
+    }
+}
+impl<F> One for Polynomial<F>
+where
+    F: Zero
+        + One
+        + Neg<Output = F>
+        + PartialEq
+        + AddAssign
+        + Clone
+        + Add<Output = F>
+        + Sub<Output = F>
+        + Mul<Output = F>
+        + Div<Output = F>
+        + MulAssign,
+{
+    fn one() -> Self {
+        Self {
+            coefficients: vec![F::one()],
+        }
+    }
+}
+
+impl<
+        F: Zero
+            + One
+            + Neg<Output = F>
+            + PartialEq
+            + AddAssign
+            + Clone
+            + Add<Output = F>
+            + Mul<Output = F>
+            + MulAssign
+            + Div<Output = F>
+            + Sub<Output = F>,
+    > Zero for Polynomial<F>
+{
+    fn zero() -> Self {
+        Self {
+            coefficients: vec![],
+        }
+    }
+
+    fn is_zero(&self) -> bool {
+        self.degree().is_none()
+    }
+}
+
+impl<F> Div<Polynomial<F>> for Polynomial<F>
+where
+    F: Zero
+        + One
+        + PartialEq
+        + AddAssign
+        + Clone
+        + Mul<Output = F>
+        + MulAssign
+        + Div<Output = F>
+        + Neg<Output = F>
+        + Sub<Output = F>,
+{
+    type Output = Polynomial<F>;
+
+    fn div(self, denominator: Self) -> Self::Output {
+        if denominator.is_zero() {
+            panic!();
+        }
+        if self.is_zero() {
+            Self::zero();
+        }
+        let mut remainder = self.clone();
+        let mut quotient = Polynomial::<F>::zero();
+        while remainder.degree().unwrap() >= denominator.degree().unwrap() {
+            let shift = remainder.degree().unwrap() - denominator.degree().unwrap();
+            let quotient_coefficient = remainder.lc() / denominator.lc();
+            let monomial = Self::constant(quotient_coefficient).shift(shift);
+            quotient += monomial.clone();
+            remainder -= monomial * denominator.clone();
+            if remainder.is_zero() {
+                break;
+            }
+        }
+        quotient
+    }
+}
+
+/// Hash a string to a random polynomial in ZZ[ X ] mod <Phi(X), q>.
 /// Algorithm 3, "HashToPoint" in the spec (page 31).
 pub fn hash_to_point(string: &[u8], n: usize) -> Polynomial<Felt> {
     const K: u32 = (1u32 << 16) / (Q as u32);
@@ -96,11 +479,18 @@ pub fn hash_to_point(string: &[u8], n: usize) -> Polynomial<Felt> {
 
 #[cfg(test)]
 mod test {
+    use itertools::Itertools;
+    use num_complex::Complex64;
+    use rand::thread_rng;
+    use rand::Rng;
+    use rand_distr::num_traits::One;
     use sha3::digest::ExtendableOutput;
     use sha3::digest::Update;
     use sha3::digest::XofReader;
     use sha3::Shake256;
 
+    use crate::fft::fft;
+    use crate::fft::ifft;
     use crate::field::Felt;
     use crate::polynomial::hash_to_point;
     use crate::polynomial::Polynomial;
@@ -177,5 +567,120 @@ mod test {
             .to_vec(),
         };
         assert_eq!(hash_of_empty, hash_to_point(&[], 512));
+    }
+
+    #[test]
+    fn test_div() {
+        let mut rng = thread_rng();
+        let n = rng.gen_range(1..100);
+        let m = rng.gen_range(1..100);
+        let expected_coefficients = (0..n).map(|_| rng.gen_range(-5..5)).collect_vec();
+        let cofactor_coefficients = (0..m).map(|_| rng.gen_range(-5..5)).collect_vec();
+        let cofactor_polynomial = Polynomial::new(&cofactor_coefficients);
+        let product = Polynomial::new(&expected_coefficients) * cofactor_polynomial.clone();
+        let quotient = product / cofactor_polynomial;
+        assert_eq!(Polynomial::new(&expected_coefficients), quotient);
+        println!("quotient: {:?}", quotient);
+    }
+
+    #[test]
+    fn test_approximate_cyclotomic_ring_inverse() {
+        let mut rng = thread_rng();
+        let n = 64;
+        let coefficients = (0..n).map(|_| rng.gen_range(-5..5) as f64).collect_vec();
+        let polynomial = Polynomial::new(&coefficients);
+        let inverse = polynomial.approximate_cyclotomic_ring_inverse(n);
+        let product = polynomial * inverse;
+        let difference = product.reduce_by_cyclotomic(n) - Polynomial::<f64>::one();
+        assert!(difference.l2_norm() < f64::EPSILON * 100.0);
+    }
+
+    #[test]
+    fn test_cyclotomic_multiplication() {
+        let mut rng = thread_rng();
+        let n = 64;
+        let coefficients_a = (0..n).map(|_| rng.gen_range(-5..5) as f64).collect_vec();
+        let coefficients_b = (0..n).map(|_| rng.gen_range(-5..5) as f64).collect_vec();
+        let polynomial_a = Polynomial::new(&coefficients_a);
+        let polynomial_b = Polynomial::new(&coefficients_b);
+        let reduced = (polynomial_a * polynomial_b).reduce_by_cyclotomic(n);
+
+        let complex_coefficients_a = coefficients_a
+            .into_iter()
+            .map(|r| Complex64::new(r, 0.0))
+            .collect_vec();
+        let complex_coefficients_b = coefficients_b
+            .into_iter()
+            .map(|r| Complex64::new(r, 0.0))
+            .collect_vec();
+        let fft_a = fft(&complex_coefficients_a);
+        let fft_b = fft(&complex_coefficients_b);
+        let had = fft_a
+            .into_iter()
+            .zip(fft_b)
+            .map(|(a, b)| a * b)
+            .collect_vec();
+        let product = ifft(&had);
+        let fft_polynomial = Polynomial::new(&product.iter().map(|&c| c.re).collect_vec());
+
+        let difference = reduced.clone() - fft_polynomial.clone();
+        assert!(
+            difference.l2_norm() <= f64::EPSILON * 10000.0,
+            "reduced: {:?}\nfft: {:?}",
+            reduced,
+            fft_polynomial
+        );
+    }
+
+    #[test]
+    fn test_adjoint() {
+        let mut rng = thread_rng();
+        let n = 64;
+        let coefficients = (0..n).map(|_| rng.gen_range(-5..5) as f64).collect_vec();
+        let polynomial = Polynomial::new(&coefficients);
+        let hermitian_adjoint = polynomial.hermitian_adjoint();
+        let coefficients_fft = fft(&coefficients
+            .into_iter()
+            .map(|c| Complex64::new(c, 0.0))
+            .collect_vec());
+        let coefficients_conjugate =
+            ifft(&coefficients_fft.into_iter().map(|c| c.conj()).collect_vec());
+        let conjugate_polynomial = Polynomial::new(
+            &coefficients_conjugate
+                .into_iter()
+                .map(|c| c.re)
+                .collect_vec(),
+        );
+
+        let difference = hermitian_adjoint.clone() - conjugate_polynomial.clone();
+        assert!(
+            difference.l2_norm() <= f64::EPSILON * 100.0,
+            "hermitian_adjoint: {:?}\nconjugate: {:?}",
+            hermitian_adjoint.coefficients,
+            conjugate_polynomial.coefficients
+        );
+    }
+
+    #[test]
+    fn test_approximate_cyclotomic_ring_divide() {
+        let mut rng = thread_rng();
+        let n = 64;
+        let coefficients_lhs = (0..n).map(|_| rng.gen_range(-5..5) as f64).collect_vec();
+        let lhs = Polynomial::new(&coefficients_lhs);
+        let coefficients_rhs = (0..n).map(|_| rng.gen_range(-5..5) as f64).collect_vec();
+        let rhs = Polynomial::new(&coefficients_rhs);
+
+        let inverse = rhs.approximate_cyclotomic_ring_inverse(n);
+        let product1 = (lhs.clone() * inverse).reduce_by_cyclotomic(n);
+
+        let product2 = lhs.approximate_cyclotomic_ring_divide(&rhs, n);
+
+        let difference = product1.clone() - product2.clone();
+        assert!(
+            difference.l2_norm() <= f64::EPSILON * 100.0,
+            "lhs*inverse: {:?}\nlhs/rhs: {:?}",
+            product1.coefficients,
+            product2.coefficients
+        );
     }
 }

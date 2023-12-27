@@ -37,16 +37,20 @@ pub fn merge_fft(f0_fft: &[Complex64], f1_fft: &[Complex64]) -> Vec<Complex64> {
 /// using the FFT algorithm (or rather, a variant of the FFT family).
 pub fn fft(f: &[Complex64]) -> Vec<Complex64> {
     let n = f.len();
-    if n > 2 {
-        let (f0, f1) = split(f);
-        let f0_fft = fft(&f0);
-        let f1_fft = fft(&f1);
-        merge_fft(&f0_fft, &f1_fft)
-    } else {
-        let mut f_fft = vec![Complex64::zero(); n];
-        f_fft[0] = f[0] + Complex64::i() * f[1];
-        f_fft[1] = f[0] - Complex64::i() * f[1];
-        f_fft
+    match n {
+        1 => f.to_vec(),
+        2 => {
+            let mut f_fft = vec![Complex64::zero(); n];
+            f_fft[0] = f[0] + Complex64::i() * f[1];
+            f_fft[1] = f[0] - Complex64::i() * f[1];
+            f_fft
+        }
+        _ => {
+            let (f0, f1) = split(f);
+            let f0_fft = fft(&f0);
+            let f1_fft = fft(&f1);
+            merge_fft(&f0_fft, &f1_fft)
+        }
     }
 }
 
