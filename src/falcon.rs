@@ -1,10 +1,10 @@
 use itertools::Itertools;
+use num::{BigInt, FromPrimitive, One};
 use num_complex::{Complex, Complex64};
 use rand::{rngs::StdRng, thread_rng, Rng, RngCore, SeedableRng};
 use rand_distr::num_traits::Zero;
 
 use crate::{
-    common::split,
     encoding::{compress, decompress},
     ffsampling::{ffldl, ffsampling, gram, normalize_tree, LdlTree},
     fft::{fft, ifft},
@@ -58,6 +58,7 @@ impl SignatureScheme {
 fn gen_poly(n: usize, sigma_min: f64, rng: &mut dyn RngCore) -> Polynomial<i16> {
     let mu = 0.0;
     let sigma_star = 1.43300980528773;
+    let sigma_min = sigma_star - 0.001; // ignore simga_min, but why?
     Polynomial {
         coefficients: (0..4096)
             .map(|_| sampler_z(mu, sigma_star, sigma_min, rng))
@@ -66,12 +67,6 @@ fn gen_poly(n: usize, sigma_min: f64, rng: &mut dyn RngCore) -> Polynomial<i16> 
             .map(|ch| ch.iter().sum())
             .collect_vec(),
     }
-}
-
-/// Computes the l2-norm (square root of sum of squares) of a vector of integers.
-fn l2_norm(vector: &[i32]) -> f64 {
-    let l2_norm_squared = vector.iter().map(|&i| (i as i64) * (i as i64)).sum::<i64>();
-    f64::sqrt(l2_norm_squared as f64)
 }
 
 /// Compute the Gram-Schmidt norm of B = [[g, -f], [G, -F]] from f and g.
@@ -88,11 +83,11 @@ fn gram_schmidt_norm(f: &Polynomial<i16>, g: &Polynomial<i16>) -> f64 {
     let f_adj = f.hermitian_adjoint();
     let g_adj = g.hermitian_adjoint();
     let ffgg = (f.clone() * f_adj.clone() + g.clone() * g_adj.clone()).reduce_by_cyclotomic(n);
-    let ffgg_float = ffgg.lift(|c| c as f64);
+    let ffgg_float = ffgg.map(|c| c as f64);
     let ffgginv = ffgg_float.approximate_cyclotomic_ring_inverse(n);
     let qf_over_ffgg =
-        (f_adj.lift(|c| (c as f64)) * (Q as f64) * ffgginv.clone()).reduce_by_cyclotomic(n);
-    let qg_over_ffgg = (g_adj.lift(|c| (c as f64)) * (Q as f64) * ffgginv).reduce_by_cyclotomic(n);
+        (f_adj.map(|c| (c as f64)) * (Q as f64) * ffgginv.clone()).reduce_by_cyclotomic(n);
+    let qg_over_ffgg = (g_adj.map(|c| (c as f64)) * (Q as f64) * ffgginv).reduce_by_cyclotomic(n);
     let norm_f_over_ffgg = qf_over_ffgg.l2_norm();
     let norm_g_over_ffgg = qg_over_ffgg.l2_norm();
 
@@ -114,7 +109,6 @@ fn ntru_gen(
     Polynomial<i16>,
     Polynomial<i16>,
 ) {
-    println!("inside ntru_gen ...");
     let mut rng: StdRng = SeedableRng::from_seed(seed);
     let sigma_fg = 1.17 * ((Q as f64) / (n as f64)).sqrt();
     loop {
@@ -127,38 +121,20 @@ fn ntru_gen(
             .map(Felt::new)
             .collect::<Vec<_>>());
         if f_ntt.iter().any(|e| e.is_zero()) {
-            println!("got zero element; restarting ...");
             continue;
         }
         let gamma = gram_schmidt_norm(&f, &g);
         if gamma * gamma > 1.3689f64 * (Q as f64) {
-            println!(
-                "norm is too big! got gamma^2={} but bound is {}",
-                gamma * gamma,
-                1.3689f64 * (Q as f64)
-            );
             continue;
         }
 
-        if let Some((capital_f_coefficients, capital_g_coefficients)) = ntru_solve(
-            &f.coefficients.iter().map(|&i| i as i32).collect_vec(),
-            &g.coefficients.iter().map(|&i| i as i32).collect_vec(),
-        ) {
+        if let Some((capital_f, capital_g)) = ntru_solve(&f.map(|i| i.into()), &g.map(|i| i.into()))
+        {
             return (
                 f,
                 g,
-                Polynomial::new(
-                    &capital_f_coefficients
-                        .iter()
-                        .map(|&i| i as i16)
-                        .collect_vec(),
-                ),
-                Polynomial::new(
-                    &capital_g_coefficients
-                        .iter()
-                        .map(|&i| i as i16)
-                        .collect_vec(),
-                ),
+                capital_f.map(|i| i.try_into().unwrap()),
+                capital_g.map(|i| i.try_into().unwrap()),
             );
         }
     }
@@ -172,140 +148,131 @@ fn ntru_gen(
 /// Implementation adapted from Wikipedia [1].
 ///
 /// [1]: https://en.wikipedia.org/wiki/Extended_Euclidean_algorithm#Pseudocode
-fn xgcd(a: i32, b: i32) -> (i32, i32, i32) {
-    let (mut old_r, mut r) = (a, b);
-    let (mut old_s, mut s) = (1, 0);
-    let (mut old_t, mut t) = (0, 1);
+fn xgcd(a: &BigInt, b: &BigInt) -> (BigInt, BigInt, BigInt) {
+    let (mut old_r, mut r) = (a.clone(), b.clone());
+    let (mut old_s, mut s) = (BigInt::one(), BigInt::zero());
+    let (mut old_t, mut t) = (BigInt::zero(), BigInt::one());
 
-    while r != 0 {
-        let quotient = old_r / r;
-        (old_r, r) = (r, old_r - quotient * r);
-        (old_s, s) = (s, old_s - quotient * s);
-        (old_t, t) = (t, old_t - quotient * t);
+    while r != BigInt::zero() {
+        let quotient = old_r.clone() / r.clone();
+        (old_r, r) = (r.clone(), old_r.clone() - quotient.clone() * r);
+        (old_s, s) = (s.clone(), old_s.clone() - quotient.clone() * s);
+        (old_t, t) = (t.clone(), old_t.clone() - quotient * t);
     }
 
     (old_r, old_s, old_t)
 }
 
-/// Compute the product of f(X) and g(X) modulo X^n + 1
-fn reduced_product(f: &[i32], g: &[i32]) -> Vec<i32> {
-    let mut p = vec![0i32; f.len()];
-    for i in 0..f.len() {
-        for j in 0..g.len() {
-            if i + j >= f.len() {
-                p[i + j - f.len()] -= f[i] * g[j];
-            } else {
-                p[i + j] += f[i] * g[j];
-            }
-        }
-    }
-    p
-}
+/// Gram-Schmidt orthogonalize the vector (F,G) relative to (f,g). This method
+/// follows the python implementation [1].
+///
+/// Algorithm 7 in the spec [2, p.35]
+///
+/// [1]: https://github.com/tprest/falcon.py
+///
+/// [2]: https://falcon-sign.info/falcon.pdf
+fn gram_schmidt_reduce(
+    f: &Polynomial<BigInt>,
+    g: &Polynomial<BigInt>,
+    capital_f: &mut Polynomial<BigInt>,
+    capital_g: &mut Polynomial<BigInt>,
+) {
+    let bitsize = |bi: BigInt| (bi.bits() + 7) & (u64::MAX ^ 7);
+    let n = f.coefficients.len();
+    let size = [
+        f.map(bitsize).fold(0, u64::max),
+        g.map(bitsize).fold(0, u64::max),
+        53,
+    ]
+    .into_iter()
+    .max()
+    .unwrap();
+    let shift = (size as i64) - 53;
+    let f_adjusted = f.map(|bi| i64::try_from(bi >> shift).unwrap() as f64);
+    let g_adjusted = g.map(|bi| i64::try_from(bi >> shift).unwrap() as f64);
 
-/// Compute the field norm as required by ntru_solve. Mathematically, let
-/// L = QQ[ X ] / < X^n + 1 > and K = QQ[ X ] / < X^{n/2} + 1 > then field_norm maps
-///
-///     L       -> K
-///
-///     (a,b)   -> a^2 + x*b^2 .
-fn field_norm(f: &[i32]) -> Vec<i32> {
-    let (f0, f1) = split(f);
-    let mut f0_squared = reduced_product(&f0, &f0);
-    let n = f0_squared.len();
-    let f1_squared = reduced_product(&f1, &f1);
-    for (i, xb2) in f1_squared.into_iter().enumerate() {
-        f0_squared[(i + 1) % n] += xb2;
-    }
-    f0_squared
-}
+    let f_star = f_adjusted.hermitian_adjoint();
+    let g_star = g_adjusted.hermitian_adjoint();
+    let ffgg = (f_adjusted.clone() * f_star.clone()).reduce_by_cyclotomic(n)
+        + (g_adjusted.clone() * g_star.clone()).reduce_by_cyclotomic(n);
 
-/// Gram-Schmidt orthogonalize the vector (F,G) relative to (f,g).
-///
-/// Algorithm 7 in the spec [1, p.35]
-///
-/// [1]: https://falcon-sign.info/falcon.pdf
-fn reduce(f: &[i32], g: &[i32], capital_f: &mut [i32], capital_g: &mut [i32]) {
+    let approximate_denom_inv = ffgg.approximate_cyclotomic_ring_inverse(n);
+
     loop {
-        let f_star = Polynomial::new(f).hermitian_adjoint().coefficients;
-        let g_star = Polynomial::new(g).hermitian_adjoint().coefficients;
-        let ffstar = reduced_product(f, &f_star);
-        let ggstar = reduced_product(g, &g_star);
-        let ffstar_plus_ggstar = ffstar
-            .iter()
-            .zip(ggstar.iter())
-            .map(|(&a, &b)| a + b)
-            .collect_vec();
-        let capital_ffstar = reduced_product(capital_f, &f_star);
-        let capital_ggstar = reduced_product(capital_g, &g_star);
-        let capital_ffstar_plus_capital_ggstar = capital_ffstar
-            .into_iter()
-            .zip(capital_ggstar)
-            .map(|(a, b)| a + b)
-            .collect_vec();
-        let k = capital_ffstar_plus_capital_ggstar
-            .into_iter()
-            .zip(ffstar_plus_ggstar)
-            .map(|(n, d)| f64::round((n as f64) / (d as f64)) as i32)
-            .collect_vec();
-        if k == vec![0i32; k.len()] {
+        let capital_size = [
+            capital_f.map(bitsize).fold(0, u64::max),
+            capital_g.map(bitsize).fold(0, u64::max),
+            53,
+        ]
+        .into_iter()
+        .max()
+        .unwrap();
+
+        if capital_size < size {
             break;
         }
-        let k_had_f = k.iter().zip(f.iter()).map(|(&a, &b)| a * b).collect_vec();
-        let k_had_g = k.iter().zip(g.iter()).map(|(&a, &b)| a * b).collect_vec();
-        for i in 0..k_had_f.len() {
-            capital_f[i] -= k_had_f[i];
-            capital_g[i] -= k_had_g[i];
+        let capital_shift = (capital_size as i64) - 53;
+        let capital_f_adjusted =
+            capital_f.map(|bi| i64::try_from(bi >> capital_shift).unwrap() as f64);
+        let capital_g_adjusted =
+            capital_g.map(|bi| i64::try_from(bi >> capital_shift).unwrap() as f64);
+
+        let capital_ffstar = (capital_f_adjusted.clone() * f_star.clone()).reduce_by_cyclotomic(n);
+        let capital_ggstar = (capital_g_adjusted.clone() * g_star.clone()).reduce_by_cyclotomic(n);
+        let quotient = ((capital_ffstar + capital_ggstar) * approximate_denom_inv.clone())
+            .reduce_by_cyclotomic(n);
+        let k = quotient.map(|f| Into::<BigInt>::into(f.round() as i64));
+        if k.is_zero() {
+            break;
         }
+        let kf = (k.clone() * f.clone())
+            .reduce_by_cyclotomic(n)
+            .map(|bi| bi << (capital_size - size));
+        let kg = (k.clone() * g.clone())
+            .reduce_by_cyclotomic(n)
+            .map(|bi| bi << (capital_size - size));
+        *capital_f -= kf;
+        *capital_g -= kg;
     }
 }
 
 /// Solve the NTRU equation. Given f, g in ZZ[ X ], find F, G in ZZ[ X ] such that
 ///
-///     fG - gF = q (mod X^n + 1)  (<-- NTRU equation)
+///     f*G - g*F = q (mod X^n + 1)  (<-- NTRU equation)
 ///
 /// Algorithm 6 of the specification [1, p.35].
 ///
 /// [1]: https://falcon-sign.info/falcon.pdf
-fn ntru_solve(f: &[i32], g: &[i32]) -> Option<(Vec<i32>, Vec<i32>)> {
-    if f.len() == 1 {
-        let (gcd, u, v) = xgcd(f[0], g[0]);
-        if gcd != 1 {
+fn ntru_solve(
+    f: &Polynomial<BigInt>,
+    g: &Polynomial<BigInt>,
+) -> Option<(Polynomial<BigInt>, Polynomial<BigInt>)> {
+    let n = f.coefficients.len();
+    if n == 1 {
+        let (gcd, u, v) = xgcd(&f.coefficients[0], &g.coefficients[0]);
+        if gcd != BigInt::one() {
             return None;
         }
-        return Some(((vec![u * Q]), vec![v * Q]));
+        return Some((
+            (Polynomial::new(&[-v * BigInt::from_i32(Q).unwrap()])),
+            Polynomial::new(&[u * BigInt::from_i32(Q).unwrap()]),
+        ));
     }
 
-    let f_prime = field_norm(f);
-    let g_prime = field_norm(g);
+    let f_prime = f.field_norm();
+    let g_prime = g.field_norm();
     let Some((capital_f_prime, capital_g_prime)) = ntru_solve(&f_prime, &g_prime) else {
         return None;
     };
-    let mut capital_f_prime_xsq = vec![0i32; f.len()];
-    let mut capital_g_prime_xsq = vec![0i32; g.len()];
-    for i in 0..g.len() / 2 {
-        capital_f_prime_xsq[2 * i] = capital_f_prime[i];
-        capital_g_prime_xsq[2 * i] = capital_g_prime[i];
-    }
-    let mut f_minx = f.to_vec();
-    let mut g_minx = g.to_vec();
-    for i in 0..g.len() {
-        if i % 2 == 1 {
-            f_minx[i] *= -1;
-            g_minx[i] *= -1;
-        }
-    }
+    let capital_f_prime_xsq = capital_f_prime.lift_next_cyclotomic();
+    let capital_g_prime_xsq = capital_g_prime.lift_next_cyclotomic();
+    let f_minx = f.galois_adjoint();
+    let g_minx = g.galois_adjoint();
 
-    let mut capital_f = reduced_product(&capital_f_prime_xsq, &g_minx);
-    let mut capital_g = reduced_product(&capital_g_prime_xsq, &f_minx);
-    reduce(f, g, &mut capital_f, &mut capital_g);
+    let mut capital_f = (capital_f_prime_xsq * g_minx).reduce_by_cyclotomic(n);
+    let mut capital_g = (capital_g_prime_xsq * f_minx).reduce_by_cyclotomic(n);
 
-    println!(
-        "in ntru_solve, got f, g, F, G of norms {}, {}, {}, {}",
-        l2_norm(f),
-        l2_norm(g),
-        l2_norm(&capital_f),
-        l2_norm(&capital_g)
-    );
+    gram_schmidt_reduce(f, g, &mut capital_f, &mut capital_g);
 
     Some((capital_f, capital_g))
 }
@@ -327,9 +294,7 @@ impl SecretKey {
 
     pub fn generate_from_seed(params: &SignatureScheme, seed: [u8; 32]) -> Self {
         // separate sk gen for testing purposes
-        println!("generating from seed ....");
         let b0 = Self::gen_b0(params.n, seed);
-        println!("got b0.");
         Self::from_b0(params.sigma, b0)
     }
 
@@ -524,6 +489,7 @@ impl SignatureScheme {
 #[cfg(test)]
 mod test {
     use itertools::Itertools;
+    use num::{BigInt, FromPrimitive};
     use rand::{thread_rng, Rng, RngCore};
 
     use crate::{
@@ -532,7 +498,7 @@ mod test {
         polynomial::{hash_to_point, Polynomial},
     };
 
-    use super::{gen_poly, ntru_gen, reduced_product, PublicKey, SecretKey, SignatureScheme};
+    use super::{gen_poly, ntru_gen, ntru_solve, PublicKey, SecretKey, SignatureScheme};
 
     #[test]
     fn test_operation() {
@@ -1158,31 +1124,14 @@ mod test {
 
     #[test]
     fn test_ntru_gen() {
+        let n = 512;
         let mut rng = thread_rng();
-        let (f, g, capital_f, capital_g) = ntru_gen(1024, rng.gen());
+        let (f, g, capital_f, capital_g) = ntru_gen(n, rng.gen());
 
-        let f_times_capital_g = reduced_product(
-            &f.coefficients.iter().map(|&i| i as i32).collect_vec(),
-            &capital_g
-                .coefficients
-                .iter()
-                .map(|&i| i as i32)
-                .collect_vec(),
-        );
-        let g_times_capital_f = reduced_product(
-            &g.coefficients.iter().map(|&i| i as i32).collect_vec(),
-            &capital_f
-                .coefficients
-                .iter()
-                .map(|&i| i as i32)
-                .collect_vec(),
-        );
-        let difference = f_times_capital_g
-            .iter()
-            .zip(g_times_capital_f.iter())
-            .map(|(&a, &b)| a - b)
-            .collect_vec();
-        println!("{:?}", difference);
+        let f_times_capital_g = (f * capital_g).reduce_by_cyclotomic(n);
+        let g_times_capital_f = (g * capital_f).reduce_by_cyclotomic(n);
+        let difference = f_times_capital_g - g_times_capital_f;
+        assert_eq!(Polynomial::constant(12289), difference);
     }
 
     #[test]
@@ -1214,5 +1163,43 @@ mod test {
             norm,
             norm * norm
         );
+    }
+
+    #[test]
+    fn test_ntru_solve() {
+        let n = 64;
+        let f_coefficients = (0..n).map(|i| ((i % 7) as i32) - 4).collect_vec();
+        let f = Polynomial::new(&f_coefficients).map(|i| i.into());
+        let g_coefficients = (0..n).map(|i| ((i % 5) as i32) - 3).collect_vec();
+        let g = Polynomial::new(&g_coefficients).map(|i| i.into());
+        let (capital_f, capital_g) = ntru_solve(&f, &g).unwrap();
+
+        let expected_capital_f: [i16; 64] = [
+            -221, -19, 133, 81, -488, -112, 189, -75, -112, -223, 143, 241, -249, 33, 47, -16, 32,
+            -145, 183, -57, -99, 104, -44, 78, -129, 26, 77, -88, 52, -36, 69, -66, -37, 80, -45,
+            32, -67, 93, -24, -79, 87, -49, 68, -116, 60, 108, -158, 68, -52, 87, -32, -116, 233,
+            -120, -111, 65, 119, 144, -307, -98, 295, -163, -194, -325,
+        ];
+        let expected_capital_g: [i16; 64] = [
+            -861, 625, -531, 151, 80, 11, 132, 547, -308, 4, 184, -134, -74, -61, 215, -2, -188,
+            40, 104, -38, -59, 21, 51, -12, -101, 86, 12, -40, 0, -31, 86, -72, 7, 24, -32, 46,
+            -71, 53, 0, -21, 23, -49, 60, -16, -38, 30, 18, 3, -41, -42, 114, 2, -119, 80, -64, 95,
+            -37, -18, 238, -429, 87, 193, -3, -111,
+        ];
+        assert_eq!(
+            expected_capital_f
+                .map(|i| BigInt::from_i16(i).unwrap())
+                .to_vec(),
+            capital_f.coefficients
+        );
+        assert_eq!(
+            expected_capital_g
+                .map(|i| BigInt::from_i16(i).unwrap())
+                .to_vec(),
+            capital_g.coefficients
+        );
+
+        let ntru = (f * capital_g - g * capital_f).reduce_by_cyclotomic(n);
+        assert_eq!(Polynomial::constant(12289.into()), ntru);
     }
 }

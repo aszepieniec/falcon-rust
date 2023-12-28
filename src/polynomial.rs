@@ -86,11 +86,20 @@ impl<F: Zero + Clone> Polynomial<F> {
         }
     }
 
-    pub fn lift<G: Clone, C: FnMut(F) -> G>(&self, closure: C) -> Polynomial<G> {
+    pub fn map<G: Clone, C: FnMut(F) -> G>(&self, closure: C) -> Polynomial<G> {
         Polynomial::<G>::new(&self.coefficients.iter().cloned().map(closure).collect_vec())
+    }
+
+    pub fn fold<G, C: FnMut(G, F) -> G + Clone>(&self, mut initial_value: G, closure: C) -> G {
+        for c in self.coefficients.iter().cloned() {
+            initial_value = (closure.clone())(initial_value, c);
+        }
+        initial_value
     }
 }
 
+/// The following implementations are specific to cyclotomic polynomial rings,
+/// i.e., F[ X ] / <X^n + 1>, and are used extensively in Falcon.
 impl<
         F: One
             + Zero
@@ -128,6 +137,67 @@ impl<
         a
     }
 
+    /// Compute the field norm of the polynomial as an element of the cyclotomic
+    /// ring  F[ X ] / <X^n + 1 > relative to one of half the size, i.e.,
+    ///  F[ X ] / <X^(n/2) + 1> .
+    ///
+    /// Corresponds to formula 3.25 in the spec [1, p.30].
+    ///
+    /// [1]: https://falcon-sign.info/falcon.pdf
+    pub fn field_norm(&self) -> Self {
+        let n = self.coefficients.len();
+        let mut f0_coefficients = vec![F::zero(); n / 2];
+        let mut f1_coefficients = vec![F::zero(); n / 2];
+        for i in 0..n / 2 {
+            f0_coefficients[i] = self.coefficients[2 * i].clone();
+            f1_coefficients[i] = self.coefficients[2 * i + 1].clone();
+        }
+        let f0 = Polynomial::new(&f0_coefficients);
+        let f1 = Polynomial::new(&f1_coefficients);
+        let f0_squared = (f0.clone() * f0).reduce_by_cyclotomic(n / 2);
+        let f1_squared = (f1.clone() * f1).reduce_by_cyclotomic(n / 2);
+        let x = Polynomial::new(&[F::zero(), F::one()]);
+        f0_squared - (x * f1_squared).reduce_by_cyclotomic(n / 2)
+    }
+
+    /// Lift an element from a cyclotomic polynomial ring to one of double the
+    /// size.
+    pub fn lift_next_cyclotomic(&self) -> Self {
+        let n = self.coefficients.len();
+        let mut coefficients = vec![F::zero(); n * 2];
+        for i in 0..n {
+            coefficients[2 * i] = self.coefficients[i].clone();
+        }
+        Self::new(&coefficients)
+    }
+
+    /// Compute the galois adjoint of the polynomial in the cyclotomic ring
+    /// F[ X ] / < X^n + 1 > , which corresponds to f(x^2).
+    pub fn galois_adjoint(&self) -> Self {
+        Self::new(
+            &self
+                .coefficients
+                .iter()
+                .cloned()
+                .enumerate()
+                .map(|(i, c)| if i % 2 == 0 { c } else { -c })
+                .collect_vec(),
+        )
+    }
+}
+
+impl<
+        F: One
+            + Zero
+            + Clone
+            + Neg<Output = F>
+            + MulAssign
+            + AddAssign
+            + Div<Output = F>
+            + Sub<Output = F>
+            + PartialEq,
+    > Polynomial<F>
+{
     /// Extended Euclidean algorithm for polynomials. Uses the EEA to compute
     /// the greatest common divisor g and Bezout coefficients u, v such that
     ///     u * a + v * b = 1
