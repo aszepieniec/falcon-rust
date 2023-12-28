@@ -83,11 +83,11 @@ fn gram_schmidt_norm(f: &Polynomial<i16>, g: &Polynomial<i16>) -> f64 {
     let f_adj = f.hermitian_adjoint();
     let g_adj = g.hermitian_adjoint();
     let ffgg = (f.clone() * f_adj.clone() + g.clone() * g_adj.clone()).reduce_by_cyclotomic(n);
-    let ffgg_float = ffgg.map(|c| c as f64);
+    let ffgg_float = ffgg.map(|c| *c as f64);
     let ffgginv = ffgg_float.approximate_cyclotomic_ring_inverse(n);
     let qf_over_ffgg =
-        (f_adj.map(|c| (c as f64)) * (Q as f64) * ffgginv.clone()).reduce_by_cyclotomic(n);
-    let qg_over_ffgg = (g_adj.map(|c| (c as f64)) * (Q as f64) * ffgginv).reduce_by_cyclotomic(n);
+        (f_adj.map(|c| (*c as f64)) * (Q as f64) * ffgginv.clone()).reduce_by_cyclotomic(n);
+    let qg_over_ffgg = (g_adj.map(|c| (*c as f64)) * (Q as f64) * ffgginv).reduce_by_cyclotomic(n);
     let norm_f_over_ffgg = qf_over_ffgg.l2_norm();
     let norm_g_over_ffgg = qg_over_ffgg.l2_norm();
 
@@ -128,7 +128,8 @@ fn ntru_gen(
             continue;
         }
 
-        if let Some((capital_f, capital_g)) = ntru_solve(&f.map(|i| i.into()), &g.map(|i| i.into()))
+        if let Some((capital_f, capital_g)) =
+            ntru_solve(&f.map(|&i| i.into()), &g.map(|&i| i.into()))
         {
             return (
                 f,
@@ -177,11 +178,11 @@ fn gram_schmidt_reduce(
     capital_f: &mut Polynomial<BigInt>,
     capital_g: &mut Polynomial<BigInt>,
 ) {
-    let bitsize = |bi: BigInt| (bi.bits() + 7) & (u64::MAX ^ 7);
+    let bitsize = |bi: &BigInt| (bi.bits() + 7) & (u64::MAX ^ 7);
     let n = f.coefficients.len();
     let size = [
-        f.map(bitsize).fold(0, u64::max),
-        g.map(bitsize).fold(0, u64::max),
+        f.map(bitsize).fold(0, |a, &b| u64::max(a, b)),
+        g.map(bitsize).fold(0, |a, &b| u64::max(a, b)),
         53,
     ]
     .into_iter()
@@ -200,8 +201,8 @@ fn gram_schmidt_reduce(
 
     loop {
         let capital_size = [
-            capital_f.map(bitsize).fold(0, u64::max),
-            capital_g.map(bitsize).fold(0, u64::max),
+            capital_f.map(bitsize).fold(0, |a, &b| u64::max(a, b)),
+            capital_g.map(bitsize).fold(0, |a, &b| u64::max(a, b)),
             53,
         ]
         .into_iter()
@@ -254,8 +255,8 @@ fn ntru_solve(
             return None;
         }
         return Some((
-            (Polynomial::new(&[-v * BigInt::from_i32(Q).unwrap()])),
-            Polynomial::new(&[u * BigInt::from_i32(Q).unwrap()]),
+            (Polynomial::new(vec![-v * BigInt::from_i32(Q).unwrap()])),
+            Polynomial::new(vec![u * BigInt::from_i32(Q).unwrap()]),
         ));
     }
 
@@ -630,10 +631,10 @@ mod test {
             16, 61, 31, 28, 8, -2, 21, -3, -25, -12, -32, -15, -38, 20, -7, -35, 28, 29, 9, -27,
         ];
         let b0 = [
-            Polynomial::new(&g),
-            Polynomial::new(&f.into_iter().map(|i| -i).collect_vec()),
-            Polynomial::new(&capital_g),
-            Polynomial::new(&capital_f.into_iter().map(|i| -i).collect_vec()),
+            Polynomial::new(g),
+            Polynomial::new(f.into_iter().map(|i| -i).collect_vec()),
+            Polynomial::new(capital_g),
+            Polynomial::new(capital_f.into_iter().map(|i| -i).collect_vec()),
         ];
         let sk = SecretKey::from_b0(SignatureScheme::falcon_512().sigma, b0);
 
@@ -945,10 +946,10 @@ mod test {
             -14, 16,
         ];
         let b0 = [
-            Polynomial::new(&g),
-            Polynomial::new(&f.into_iter().map(|i| -i).collect_vec()),
-            Polynomial::new(&capital_g),
-            Polynomial::new(&capital_f.into_iter().map(|i| -i).collect_vec()),
+            Polynomial::new(g),
+            Polynomial::new(f.into_iter().map(|i| -i).collect_vec()),
+            Polynomial::new(capital_g),
+            Polynomial::new(capital_f.into_iter().map(|i| -i).collect_vec()),
         ];
         let sk = SecretKey::from_b0(SignatureScheme::falcon_512().sigma, b0);
 
@@ -1155,7 +1156,7 @@ mod test {
         let n = 512;
         let f = (0..n).map(|i| i % 5).collect_vec();
         let g = (0..n).map(|i| (i % 7) - 4).collect_vec();
-        let norm = gram_schmidt_norm(&Polynomial::new(&f), &Polynomial::new(&g));
+        let norm = gram_schmidt_norm(&Polynomial::new(f), &Polynomial::new(g));
         let difference = (norm * norm) - 5992556.183229722;
         assert!(
             difference * difference < 0.00001,
@@ -1169,9 +1170,9 @@ mod test {
     fn test_ntru_solve() {
         let n = 64;
         let f_coefficients = (0..n).map(|i| ((i % 7) as i32) - 4).collect_vec();
-        let f = Polynomial::new(&f_coefficients).map(|i| i.into());
+        let f = Polynomial::new(f_coefficients).map(|&i| i.into());
         let g_coefficients = (0..n).map(|i| ((i % 5) as i32) - 3).collect_vec();
-        let g = Polynomial::new(&g_coefficients).map(|i| i.into());
+        let g = Polynomial::new(g_coefficients).map(|&i| i.into());
         let (capital_f, capital_g) = ntru_solve(&f, &g).unwrap();
 
         let expected_capital_f: [i16; 64] = [
