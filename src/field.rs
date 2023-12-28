@@ -33,6 +33,14 @@ impl Felt {
         self.0
     }
 
+    pub fn balanced_value(&self) -> i16 {
+        if self.0 > ((Q as i16) / 2) {
+            self.0 - (Q as i16)
+        } else {
+            self.0
+        }
+    }
+
     pub const fn inverse_or_zero(&self) -> Self {
         INV_MOD_Q[self.0 as usize]
     }

@@ -26,7 +26,7 @@ pub struct SignatureScheme {
     pub n: usize,
     pub sigma: f64,
     pub sigmin: f64,
-    pub sig_bound: u64,
+    pub sig_bound: i64,
     pub sig_bytelen: usize,
 }
 
@@ -431,7 +431,7 @@ impl SignatureScheme {
                 let length_squared: f64 = s0.iter().map(|a| (a * a.conj()).re).sum::<f64>()
                     + s1.iter().map(|a| (a * a.conj()).re).sum::<f64>();
 
-                if length_squared > (n as u64 * bound) as f64 {
+                if length_squared > (n as i64 * bound) as f64 {
                     continue;
                 }
 
@@ -466,12 +466,10 @@ impl SignatureScheme {
         let s2 = match decompress(&sig.s, (self.sig_bytelen - 41) * 8, n) {
             Some(success) => success,
             None => {
-                println!("decompress failure.");
                 return false;
             }
         };
         let s2_ntt = ntt(&s2.iter().map(|a| Felt::new(*a)).collect_vec());
-        println!("s2 ntt: {:?}", s2_ntt);
         let h_ntt = ntt(&pk.h);
         let c_ntt = ntt(&c.coefficients);
 
@@ -485,9 +483,10 @@ impl SignatureScheme {
 
         let length_squared = s1
             .iter()
-            .map(|&i| (i.value() * i.value()) as u64)
-            .sum::<u64>()
-            + s2.iter().map(|&i| (i * i) as u64).sum::<u64>();
+            .map(|i| i.balanced_value() as i64)
+            .map(|i| (i * i))
+            .sum::<i64>()
+            + s2.iter().map(|&i| i as i64).map(|i| (i * i)).sum::<i64>();
         length_squared < self.sig_bound
     }
 }
