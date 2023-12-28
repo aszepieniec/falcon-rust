@@ -329,18 +329,21 @@ pub struct PublicKey {
 
 impl PublicKey {
     pub fn from_secret_key(sk: &SecretKey) -> Self {
-        let f_ntt = sk.b0_fft[0]
+        let f = ifft(&sk.b0_fft[1])
             .iter()
-            .map(|c| Felt::new(c.re as i16))
+            .map(|c| -Felt::new(c.re.round() as i16))
             .collect_vec();
-        let g_ntt = sk.b0_fft[1]
+        let f_ntt = ntt(&f);
+        let g = ifft(&sk.b0_fft[0])
             .iter()
-            .map(|c| Felt::new(-c.re as i16))
+            .map(|c| Felt::new(c.re.round() as i16))
             .collect_vec();
-        let g_inv = Felt::batch_inverse_or_zero(&g_ntt);
-        let h_ntt = f_ntt
+        let g_ntt = ntt(&g);
+        let f_inv = Felt::batch_inverse_or_zero(&f_ntt);
+        let h_ntt = g_ntt
+            .clone()
             .into_iter()
-            .zip_eq(g_inv)
+            .zip_eq(f_inv)
             .map(|(a, b)| a * b)
             .collect_vec();
         let h = intt(&h_ntt);
@@ -384,7 +387,7 @@ impl SignatureScheme {
         let c_over_q_fft = fft(&c
             .coefficients
             .iter()
-            .map(|cc| Complex::new(one_over_q * cc.0 as f64, 0.0))
+            .map(|cc| Complex::new(one_over_q * cc.value() as f64, 0.0))
             .collect_vec());
 
         // B = [[FFT(g), -FFT(f)], [FFT(G), -FFT(F)]]
@@ -437,7 +440,7 @@ impl SignatureScheme {
             let s2: Vec<Complex64> = ifft(&bold_s)[n / 2..].to_vec();
             let maybe_s = compress(
                 &s2.iter().map(|a| a.re as i16).collect_vec(),
-                8 * self.sig_bytelen - 328,
+                8 * (self.sig_bytelen - 41),
             );
 
             match maybe_s {
@@ -460,16 +463,15 @@ impl SignatureScheme {
         let r_cat_m = [sig.r.to_vec(), m.to_vec()].concat();
         let c = hash_to_point(&r_cat_m, n);
 
-        if 8 * self.sig_bytelen - 328 != sig.s.len() {
-            return false;
-        }
-        let s2 = match decompress(&sig.s, n) {
+        let s2 = match decompress(&sig.s, (self.sig_bytelen - 41) * 8, n) {
             Some(success) => success,
             None => {
+                println!("decompress failure.");
                 return false;
             }
         };
-        let s2_ntt = ntt(&s2.iter().map(|a| Felt(*a)).collect_vec());
+        let s2_ntt = ntt(&s2.iter().map(|a| Felt::new(*a)).collect_vec());
+        println!("s2 ntt: {:?}", s2_ntt);
         let h_ntt = ntt(&pk.h);
         let c_ntt = ntt(&c.coefficients);
 
@@ -481,7 +483,10 @@ impl SignatureScheme {
             .collect_vec();
         let s1 = intt(&s1_ntt);
 
-        let length_squared = s1.iter().map(|&i| (i.0 * i.0) as u64).sum::<u64>()
+        let length_squared = s1
+            .iter()
+            .map(|&i| (i.value() * i.value()) as u64)
+            .sum::<u64>()
             + s2.iter().map(|&i| (i * i) as u64).sum::<u64>();
         length_squared < self.sig_bound
     }
@@ -674,7 +679,7 @@ mod test {
             r: nonce.try_into().unwrap(),
             s: compress(
                 &expected_signature_vector,
-                SignatureScheme::falcon_512().sig_bytelen,
+                (SignatureScheme::falcon_512().sig_bytelen - 41) * 8,
             )
             .unwrap(),
         };
@@ -1019,7 +1024,7 @@ mod test {
             r: nonce.try_into().unwrap(),
             s: compress(
                 &signature_vector,
-                SignatureScheme::falcon_1024().sig_bytelen,
+                (SignatureScheme::falcon_1024().sig_bytelen - 41) * 8,
             )
             .unwrap(),
         };

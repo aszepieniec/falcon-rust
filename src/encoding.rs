@@ -11,7 +11,7 @@ use bit_vec::BitVec;
 /// - the 7 lower bits are encoded naively (binary)
 /// - the high bits are encoded in unary encoding
 pub fn compress(v: &[i16], slen: usize) -> Option<Vec<u8>> {
-    let mut bitvector: BitVec = BitVec::with_capacity(8 * slen);
+    let mut bitvector: BitVec = BitVec::with_capacity(slen);
     for coeff in v {
         // encode sign
         bitvector.push(*coeff < 0);
@@ -27,16 +27,16 @@ pub fn compress(v: &[i16], slen: usize) -> Option<Vec<u8>> {
         bitvector.push(true);
     }
     // return failure if encoding is too long
-    if bitvector.len() > 8 * slen {
+    if bitvector.len() > slen {
         println!(
             "bitvector length: {} but allowed string length: {}",
             bitvector.len(),
-            8 * slen
+            slen
         );
         return None;
     }
     // pad
-    while bitvector.len() < 8 * slen {
+    while bitvector.len() < slen {
         bitvector.push(false);
     }
     Some(bitvector.to_bytes())
@@ -45,7 +45,11 @@ pub fn compress(v: &[i16], slen: usize) -> Option<Vec<u8>> {
 /// Take as input an encoding x, and a length n, and return a list of
 /// integers v of length n such that x encode v. If such a list does
 /// not exist, the encoding is invalid and we output None.
-pub fn decompress(x: &[u8], n: usize) -> Option<Vec<i16>> {
+pub fn decompress(x: &[u8], bitlength: usize, n: usize) -> Option<Vec<i16>> {
+    if x.len() * 8 != bitlength {
+        return None;
+    }
+
     let bitvector = BitVec::from_bytes(x);
     let mut index = 0;
     let mut result = Vec::with_capacity(n);
@@ -90,6 +94,7 @@ pub fn decompress(x: &[u8], n: usize) -> Option<Vec<i16>> {
 mod test {
     use crate::{
         encoding::{compress, decompress},
+        falcon::SignatureScheme,
         field::Q,
     };
     use rand::thread_rng;
@@ -123,8 +128,13 @@ mod test {
                     .collect::<Vec<_>>()
                     .try_into()
                     .unwrap();
-                let compressed = compress(&initial, slen).unwrap();
-                let decompressed = decompress(&compressed, N).unwrap();
+                let compressed = compress(&initial, slen * 8).unwrap();
+                let decompressed = decompress(
+                    &compressed,
+                    (SignatureScheme::falcon_512().sig_bytelen - SALT_LEN - HEAD_LEN) * 8,
+                    N,
+                )
+                .unwrap();
                 assert_eq!(initial.to_vec(), decompressed);
             }
 
@@ -144,8 +154,8 @@ mod test {
                     .collect::<Vec<_>>()
                     .try_into()
                     .unwrap();
-                let compressed = compress(&initial, slen).unwrap();
-                let decompressed = decompress(&compressed, N).unwrap();
+                let compressed = compress(&initial, slen * 8).unwrap();
+                let decompressed = decompress(&compressed, slen * 8, N).unwrap();
                 assert_eq!(initial.to_vec(), decompressed);
             }
         }
