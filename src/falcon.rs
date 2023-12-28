@@ -746,7 +746,7 @@ mod test {
             obtained_hashed_message
                 .coefficients
                 .iter()
-                .map(|i| i.0)
+                .map(|i| i.value())
                 .collect_vec()
         );
     }
@@ -1123,7 +1123,7 @@ mod test {
             obtained_hashed_message
                 .coefficients
                 .iter()
-                .map(|i| i.0)
+                .map(|i| i.value())
                 .collect_vec()
         );
     }

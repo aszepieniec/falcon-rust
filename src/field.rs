@@ -21,11 +21,16 @@ use crate::ntt_constants::PHI8_ROOTS_ZQ;
 pub(crate) const Q: i32 = 12 * 1024 + 1;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Felt(pub i16);
+pub struct Felt(i16);
 
 impl Felt {
     pub const fn new(value: i16) -> Self {
-        Self(value % (Q as i16))
+        let b = (value < 0) as i16;
+        Self((value % (Q as i16)) + (b * (Q as i16)))
+    }
+
+    pub fn value(&self) -> i16 {
+        self.0
     }
 
     pub const fn inverse_or_zero(&self) -> Self {
@@ -86,7 +91,7 @@ impl Neg for Felt {
     type Output = Felt;
 
     fn neg(self) -> Self::Output {
-        Felt(Q as i16 - self.0)
+        Felt((Q as i16 - self.0) % (Q as i16))
     }
 }
 

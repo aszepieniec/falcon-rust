@@ -15,7 +15,7 @@ use crate::{
 /// It is probably possible to use templating to merge both implementations.
 
 /// I2 is the inverse of 2 mod q.
-const I2: Felt = Felt(6145);
+const I2: Felt = Felt::new(6145);
 
 /// sqr1 is a square root of (-1) mod q (currently, sqr1 = 1479).
 const SQR1: Felt = roots_dict_zq(2)[0];
@@ -85,7 +85,7 @@ pub(crate) fn intt(f_ntt: &[Felt]) -> Vec<Felt> {
     } else {
         let mut f = vec![Felt::zero(); n];
         f[0] = I2 * (f_ntt[0] + f_ntt[1]);
-        f[1] = I2 * Felt(1479).inverse_or_zero() * (f_ntt[0] - f_ntt[1]);
+        f[1] = I2 * Felt::new(1479).inverse_or_zero() * (f_ntt[0] - f_ntt[1]);
         f
     }
 }
@@ -144,9 +144,9 @@ mod test {
     #[test]
     fn test_ntt_a() {
         const N: usize = 512;
-        let mut f = [Felt(0); N];
-        f[0] = Felt(1);
-        f[1] = Felt(2);
+        let mut f = [Felt::new(0); N];
+        f[0] = Felt::new(1);
+        f[1] = Felt::new(2);
 
         let g = [
             7915, 4376, 5679, 6612, 4255, 8036, 303, 11988, 863, 11428, 3159, 9132, 11813, 478,
@@ -187,7 +187,7 @@ mod test {
             554, 11471, 820, 5311, 6980, 6631, 5660, 853, 11438, 9509, 2782, 3717, 8574, 3951,
             8340, 7515, 4776, 5851, 6440, 695, 11596,
         ]
-        .map(Felt);
+        .map(Felt::new);
 
         assert_eq!(ntt(&f), g.to_vec());
     }
@@ -195,11 +195,11 @@ mod test {
     #[test]
     fn test_intt_a() {
         const N: usize = 512;
-        let mut f = [Felt(0); N];
-        f[0] = Felt(1);
-        f[1] = Felt(2);
-        f[2] = Felt(3);
-        f[3] = Felt(4);
+        let mut f = [Felt::new(0); N];
+        f[0] = Felt::new(1);
+        f[1] = Felt::new(2);
+        f[2] = Felt::new(3);
+        f[3] = Felt::new(4);
 
         let g = [
             12049, 11544, 3185, 5360, 361, 5985, 4682, 8323, 1966, 8663, 4120, 9345, 1856, 1665,
@@ -240,7 +240,7 @@ mod test {
             2008, 3958, 4985, 12146, 8859, 7462, 8119, 3953, 1575, 7107, 1664, 1069, 10688, 7897,
             6509, 7660, 10140, 10293, 7670, 12032, 109, 8942,
         ]
-        .map(Felt);
+        .map(Felt::new);
 
         assert_eq!(intt(&f), g.to_vec());
     }
