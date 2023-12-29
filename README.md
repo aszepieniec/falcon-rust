@@ -16,7 +16,7 @@ and the official [python implementation](https://github.com/tprest/falcon.py).
  - [x] signature generation
  - [x] signature verification
  - [x] derandomized algorithms
- - [ ] serialization
+ - [ ] (de)serialization
  - [ ] uncompressed signature format
  - [ ] signed-message interface
  - [ ] optimal algorithms (e.g. Karatsuba)
@@ -27,6 +27,7 @@ and the official [python implementation](https://github.com/tprest/falcon.py).
 
  - [ ] serialization
  - [ ] benchmarking suite
+ - [ ] store signature vector as `Vec<Felt>`
  - [ ] include usage example in readme
  - [ ] make LdlTree straightforward
  - [ ] test interoperability against the reference implementation
