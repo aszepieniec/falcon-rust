@@ -10,7 +10,7 @@ use crate::fft::{fft, ifft};
 use crate::field::{Felt, Q};
 
 #[derive(Debug, Clone)]
-pub struct Polynomial<F> {
+pub(crate) struct Polynomial<F> {
     pub coefficients: Vec<F>,
 }
 
@@ -127,7 +127,8 @@ impl<
     /// F[ X ] / <X^n + 1>
     ///
     /// This function assumes that F is a field; otherwise the gcd will never end.
-    pub fn cyclotomic_ring_inverse(&self, n: usize) -> Self {
+    #[allow(dead_code)]
+    pub(crate) fn cyclotomic_ring_inverse(&self, n: usize) -> Self {
         let mut cyclotomic_coefficients = vec![F::zero(); n + 1];
         cyclotomic_coefficients[0] = F::one();
         cyclotomic_coefficients[n] = F::one();
@@ -202,8 +203,13 @@ impl<
 {
     /// Extended Euclidean algorithm for polynomials. Uses the EEA to compute
     /// the greatest common divisor g and Bezout coefficients u, v such that
-    ///     u * a + v * b = 1
-    pub fn xgcd(a: &Self, b: &Self) -> (Self, Self, Self) {
+    ///
+    /// $$  u a + v b = 1 . $$
+    ///
+    /// Implementation adapted from Wikipedia [1].
+    ///
+    /// [1]: https://en.wikipedia.org/wiki/Extended_Euclidean_algorithm#Pseudocode
+    pub(crate) fn xgcd(a: &Self, b: &Self) -> (Self, Self, Self) {
         if a.is_zero() || b.is_zero() {
             return (Self::zero(), Self::zero(), Self::zero());
         }
@@ -241,7 +247,11 @@ impl Polynomial<f64> {
             coefficients: inverse_coefficients.iter().map(|c| c.re).collect_vec(),
         }
     }
-    pub fn approximate_cyclotomic_ring_divide(&self, other: &Self, n: usize) -> Self {
+
+    /// Use the FFT to compute approximately the division a / b of elements in the
+    /// cyclotomic ring F[X] / <X^n + 1>.
+    #[allow(dead_code)]
+    pub(crate) fn approximate_cyclotomic_ring_divide(&self, other: &Self, n: usize) -> Self {
         let self_coefficients = [
             self.coefficients.clone(),
             vec![0.0; n - self.coefficients.len()],
@@ -276,7 +286,7 @@ impl Polynomial<f64> {
 }
 
 impl<F: Clone + Into<f64>> Polynomial<F> {
-    pub fn l2_norm(&self) -> f64 {
+    pub(crate) fn l2_norm(&self) -> f64 {
         self.coefficients
             .iter()
             .map(|i| Into::<f64>::into(i.clone()))
@@ -555,7 +565,7 @@ where
 
 /// Hash a string to a random polynomial in ZZ[ X ] mod <Phi(X), q>.
 /// Algorithm 3, "HashToPoint" in the spec (page 31).
-pub fn hash_to_point(string: &[u8], n: usize) -> Polynomial<Felt> {
+pub(crate) fn hash_to_point(string: &[u8], n: usize) -> Polynomial<Felt> {
     const K: u32 = (1u32 << 16) / (Q as u32);
 
     let mut hasher = Shake256::default();

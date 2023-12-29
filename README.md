@@ -7,6 +7,9 @@ Falcon was submitted to the NIST PQC standardization project and was selected fo
 standardization. The final standard is still outstanding. We do anticipate slight changes
 between the standard and the submission, and these changes might break compatibility.
 
+This implementation was written following the [specification](https://falcon-sign.info/falcon.pdf)
+and the official [python implementation](https://github.com/tprest/falcon.py).
+
 ## Features
 
  - [x] key generation
@@ -18,12 +21,16 @@ between the standard and the submission, and these changes might break compatibi
  - [ ] signed-message interface
  - [ ] optimal algorithms (e.g. Karatsuba)
  - [ ] hardware optimizations
+ - [ ] message-recovery mode
 
 ## To-do's
 
  - [ ] serialization
- - [ ] test against the reference implementation
  - [ ] benchmarking suite
+ - [ ] include usage example in readme
+ - [ ] make LdlTree straightforward
+ - [ ] test interoperability against the reference implementation
+ - [ ] negative tests
  - [ ] Montgomery representation for field elements
  - [ ] Karatsuba for big integer polynomial multiplication
 

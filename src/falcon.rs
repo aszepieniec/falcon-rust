@@ -14,22 +14,13 @@ use crate::{
     samplerz::sampler_z,
 };
 
-pub const fn logn(mut n: u32) -> usize {
-    let mut ctr = 0;
-    while n != 0 {
-        ctr += 1;
-        n >>= 1;
-    }
-    ctr
-}
-
 #[derive(Copy, Clone, Debug)]
 pub struct SignatureScheme {
-    pub n: usize,
-    pub sigma: f64,
-    pub sigmin: f64,
-    pub sig_bound: i64,
-    pub sig_bytelen: usize,
+    pub(crate) n: usize,
+    pub(crate) sigma: f64,
+    pub(crate) sigmin: f64,
+    pub(crate) sig_bound: i64,
+    pub(crate) sig_bytelen: usize,
 }
 
 pub const FALCON_512: SignatureScheme = SignatureScheme {
@@ -281,6 +272,7 @@ pub struct SecretKey {
 }
 
 impl SecretKey {
+    /// Generate a secret key using randomness supplied by the operating system.
     pub fn generate(scheme: &SignatureScheme) -> Self {
         // According to the docs [1], `thread_rng` uses entropy supplied
         // by the operating system and ChaCha12 to extend it. So it is
@@ -289,6 +281,7 @@ impl SecretKey {
         Self::generate_from_seed(scheme, thread_rng().gen())
     }
 
+    /// Generate a secret key pseudorandomly by expanding a given seed.
     pub fn generate_from_seed(params: &SignatureScheme, seed: [u8; 32]) -> Self {
         // separate sk gen for testing purposes
         let b0 = Self::gen_b0(params.n, seed);
@@ -324,6 +317,7 @@ pub struct PublicKey {
 }
 
 impl PublicKey {
+    /// Compute the public key that matches with this secret key.
     pub fn from_secret_key(sk: &SecretKey) -> Self {
         let f = ifft(&sk.b0_fft[1])
             .iter()
@@ -353,7 +347,7 @@ pub struct Signature {
 }
 
 impl SignatureScheme {
-    // Generate a key pair from a seed.
+    // Generate a key pair pseudorandomly by expanding a seed.
     pub fn keygen(&self, seed: [u8; 32]) -> (SecretKey, PublicKey) {
         let sk = SecretKey::generate_from_seed(self, seed);
         let pk = PublicKey::from_secret_key(&sk);
@@ -452,6 +446,7 @@ impl SignatureScheme {
     }
 
     /// Verify a signature. Algorithm 16 in the spec [1, p.45].
+    ///
     /// [1]: https://falcon-sign.info/falcon.pdf
     pub fn verify(&self, m: &[u8], sig: &Signature, pk: &PublicKey) -> bool {
         let n = self.n;

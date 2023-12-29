@@ -12,7 +12,7 @@ use crate::{
 /// Computes the Gram matrix. The argument must be a 2x2 matrix
 /// whose elements are equal-length vectors of complex numbers,
 /// representing polynomials in FFT domain.
-pub fn gram(b: [Vec<Complex64>; 4]) -> [Vec<Complex64>; 4] {
+pub(crate) fn gram(b: [Vec<Complex64>; 4]) -> [Vec<Complex64>; 4] {
     const N: usize = 2;
     let mut g: [Vec<Complex<f64>>; 4] = (0..4)
         .map(|_| (0..b[0].len()).map(|_| Complex64::zero()).collect_vec())
@@ -42,7 +42,7 @@ pub fn gram(b: [Vec<Complex64>; 4]) -> [Vec<Complex64>; 4] {
 ///     L D L* = G
 /// where D is diagonal, and L is lower-triangular. The elements of matrices
 /// are in FFT domain.
-pub fn ldl(g: [Vec<Complex64>; 4]) -> ([Vec<Complex64>; 4], [Vec<Complex64>; 4]) {
+pub(crate) fn ldl(g: [Vec<Complex64>; 4]) -> ([Vec<Complex64>; 4], [Vec<Complex64>; 4]) {
     let n = g[0].len();
 
     let zero = (0..n).map(|_| Complex64::zero()).collect_vec();

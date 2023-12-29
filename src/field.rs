@@ -21,7 +21,7 @@ use crate::ntt_constants::PHI8_ROOTS_ZQ;
 pub(crate) const Q: i32 = 12 * 1024 + 1;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Felt(i16);
+pub(crate) struct Felt(i16);
 
 impl Felt {
     pub const fn new(value: i16) -> Self {

@@ -10,7 +10,7 @@ use bit_vec::BitVec;
 /// - the sign is encoded on 1 bit
 /// - the 7 lower bits are encoded naively (binary)
 /// - the high bits are encoded in unary encoding
-pub fn compress(v: &[i16], slen: usize) -> Option<Vec<u8>> {
+pub(crate) fn compress(v: &[i16], slen: usize) -> Option<Vec<u8>> {
     let mut bitvector: BitVec = BitVec::with_capacity(slen);
     for coeff in v {
         // encode sign
@@ -40,7 +40,7 @@ pub fn compress(v: &[i16], slen: usize) -> Option<Vec<u8>> {
 /// Take as input an encoding x, and a length n, and return a list of
 /// integers v of length n such that x encode v. If such a list does
 /// not exist, the encoding is invalid and we output None.
-pub fn decompress(x: &[u8], bitlength: usize, n: usize) -> Option<Vec<i16>> {
+pub(crate) fn decompress(x: &[u8], bitlength: usize, n: usize) -> Option<Vec<i16>> {
     if x.len() * 8 != bitlength {
         return None;
     }

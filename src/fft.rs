@@ -8,7 +8,7 @@ use crate::{
 
 /// Split a polynomial into even and odd halves, except the polynomial
 /// is given in FFT representation.
-pub fn split_fft(f_fft: &[Complex64]) -> (Vec<Complex64>, Vec<Complex64>) {
+pub(crate) fn split_fft(f_fft: &[Complex64]) -> (Vec<Complex64>, Vec<Complex64>) {
     let n = f_fft.len();
     let w = roots_dict_complex(n);
     let mut f0_fft = vec![Complex64::zero(); n / 2];
@@ -22,7 +22,7 @@ pub fn split_fft(f_fft: &[Complex64]) -> (Vec<Complex64>, Vec<Complex64>) {
 
 /// Merge two polynomials into one by interleaving their coefficients,
 /// except the polynomials are given in FFT representation.
-pub fn merge_fft(f0_fft: &[Complex64], f1_fft: &[Complex64]) -> Vec<Complex64> {
+pub(crate) fn merge_fft(f0_fft: &[Complex64], f1_fft: &[Complex64]) -> Vec<Complex64> {
     let n = 2 * f0_fft.len();
     let w = roots_dict_complex(n);
     let mut f_fft = vec![Complex64::zero(); n];
@@ -35,7 +35,7 @@ pub fn merge_fft(f0_fft: &[Complex64], f1_fft: &[Complex64]) -> Vec<Complex64> {
 
 /// Compute the discrete Fourier transform of the given polynomial
 /// using the FFT algorithm (or rather, a variant of the FFT family).
-pub fn fft(f: &[Complex64]) -> Vec<Complex64> {
+pub(crate) fn fft(f: &[Complex64]) -> Vec<Complex64> {
     let n = f.len();
     match n {
         1 => f.to_vec(),
@@ -57,7 +57,7 @@ pub fn fft(f: &[Complex64]) -> Vec<Complex64> {
 /// Compute the inverse discrete Fourier transform of the given
 /// polynomial using the FFT algorithm (the logical inverse of
 /// the previous one).
-pub fn ifft(f_fft: &[Complex64]) -> Vec<Complex64> {
+pub(crate) fn ifft(f_fft: &[Complex64]) -> Vec<Complex64> {
     let n = f_fft.len();
     if n > 2 {
         let (f0_fft, f1_fft) = split_fft(f_fft);
