@@ -1,3 +1,4 @@
+use bit_vec::BitVec;
 use itertools::Itertools;
 use num::{BigInt, FromPrimitive, One};
 use num_complex::{Complex, Complex64};
@@ -265,8 +266,19 @@ fn ntru_solve(
     Some((capital_f, capital_g))
 }
 
+#[derive(Debug)]
+pub enum FalconDeserializationError {
+    CannotDetermineFieldElementEncodingMethod,
+    CannotInferFalconVariant,
+    InvalidHeaderFormat,
+    InvalidLogN,
+    BadEncodingLength,
+    BadFieldElementEncoding,
+}
+
 #[derive(Debug, Clone)]
 pub struct SecretKey {
+    /// b0_fft = [[g_fft, -f_fft], [G_fft, -F_fft]]
     b0_fft: [Vec<Complex64>; 4],
     tree: LdlTree,
 }
@@ -309,6 +321,224 @@ impl SecretKey {
 
         SecretKey { b0_fft, tree }
     }
+
+    fn field_element_width(n: usize, polynomial_index: usize) -> usize {
+        if polynomial_index == 2 {
+            8
+        } else {
+            match n {
+                1024 => 5,
+                512 => 6,
+                _ => unreachable!(),
+            }
+        }
+    }
+
+    fn serialize_field_element(element_width: usize, element: Felt) -> BitVec {
+        let mut bits = BitVec::new();
+        let int = element.balanced_value();
+        for i in (0..element_width).rev() {
+            bits.push(int & (1i16 << i) != 0);
+        }
+        bits
+    }
+
+    fn deserialize_field_element(bits: &BitVec) -> Result<Felt, FalconDeserializationError> {
+        if bits[0] && bits.iter().skip(1).all(|b| !b) {
+            return Err(FalconDeserializationError::BadFieldElementEncoding);
+        }
+
+        let mut uint = 0;
+        for bit in bits {
+            uint = (uint << 1) | (bit as i16);
+        }
+        if bits[0] {
+            uint = (uint << (16 - bits.len())) >> (16 - bits.len());
+        }
+        Ok(Felt::new(uint))
+    }
+
+    /// Serialize the secret key to a vector of bytes.
+    pub fn to_bytes(&self) -> Vec<u8> {
+        // header
+        let n = self.b0_fft[0].len();
+        let l = n.checked_ilog2().unwrap() as u8;
+        let header: u8 = (5 << 4) // fixed bits
+                        | l;
+
+        let f = ifft(&self.b0_fft[1])
+            .into_iter()
+            .map(|c| Felt::new(-c.re.round() as i16))
+            .collect_vec();
+        let g = ifft(&self.b0_fft[0])
+            .into_iter()
+            .map(|c| Felt::new(c.re.round() as i16))
+            .collect_vec();
+        let capital_f = ifft(&self.b0_fft[3])
+            .into_iter()
+            .map(|c| Felt::new(-c.re.round() as i16))
+            .collect_vec();
+
+        let mut bits = BitVec::from_bytes(&[header]);
+        // f
+        let width = Self::field_element_width(n, 0);
+        for fi in f.into_iter() {
+            let mut substring = Self::serialize_field_element(width, fi);
+            bits.append(&mut substring);
+        }
+        // g
+        let width = Self::field_element_width(n, 1);
+        for fi in g.into_iter() {
+            let mut substring = Self::serialize_field_element(width, fi);
+            bits.append(&mut substring);
+        }
+        // capital_f
+        let width = Self::field_element_width(n, 2);
+        for fi in capital_f.into_iter() {
+            let mut substring = Self::serialize_field_element(width, fi);
+            bits.append(&mut substring);
+        }
+
+        bits.to_bytes()
+    }
+
+    /// Deserialize a secret key from a slice of bytes.
+    pub fn from_bytes(byte_vector: &[u8]) -> Result<Self, FalconDeserializationError> {
+        // check length
+        if byte_vector.len() < 2 {
+            return Err(FalconDeserializationError::BadEncodingLength);
+        }
+
+        // read fields
+        let header = byte_vector[0];
+        let bit_buffer = BitVec::from_bytes(&byte_vector[1..]);
+
+        // check fixed bits in header
+        if (header >> 4) != 5 {
+            return Err(FalconDeserializationError::InvalidHeaderFormat);
+        }
+
+        // check log n
+        let logn = (header & 15) as usize;
+        let n = match logn {
+            9 => 512,
+            10 => 1024,
+            _ => return Err(FalconDeserializationError::InvalidLogN),
+        };
+
+        // decode integer polynomials using BitVec as intermediate representation
+
+        // f
+        let width_f = Self::field_element_width(n, 0);
+        let f = bit_buffer
+            .iter()
+            .take(n * width_f)
+            .chunks(width_f)
+            .into_iter()
+            .map(BitVec::from_iter)
+            .map(|subs| Self::deserialize_field_element(&subs))
+            .collect::<Result<Vec<Felt>, _>>()?;
+
+        // g
+        let width_g = Self::field_element_width(n, 1);
+        let g = bit_buffer
+            .iter()
+            .skip(n * width_f)
+            .take(n * width_g)
+            .chunks(width_g)
+            .into_iter()
+            .map(BitVec::from_iter)
+            .map(|subs| Self::deserialize_field_element(&subs))
+            .collect::<Result<Vec<Felt>, _>>()?;
+
+        // capital_f
+        let width_capital_f = Self::field_element_width(n, 2);
+        let capital_f = bit_buffer
+            .iter()
+            .skip(n * width_g + n * width_f)
+            .take(n * width_capital_f)
+            .chunks(width_capital_f)
+            .into_iter()
+            .map(BitVec::from_iter)
+            .map(|subs| Self::deserialize_field_element(&subs))
+            .collect::<Result<Vec<Felt>, _>>()?;
+
+        // all bits in the bit buffer should have been read at this point
+        if bit_buffer.len() != n * width_f + n * width_g + n * width_capital_f {
+            return Err(FalconDeserializationError::BadEncodingLength);
+        }
+
+        // compute capital_g from f, g, capital_f
+        let f_ntt = ntt(&f);
+        let g_ntt = ntt(&g);
+        let capital_f_ntt = ntt(&capital_f);
+        let capital_g_ntt = g_ntt
+            .into_iter()
+            .zip(capital_f_ntt)
+            .zip(f_ntt)
+            .map(|((g, cf), f)| g * cf / f)
+            .collect_vec();
+        let capital_g = intt(&capital_g_ntt);
+
+        let sigma = match n {
+            1024 => FALCON_1024.sigma,
+            512 => FALCON_512.sigma,
+            _ => unreachable!(),
+        };
+
+        Ok(Self::from_b0(
+            sigma,
+            [
+                Polynomial::new(g.to_vec()).map(|f| f.balanced_value()),
+                -Polynomial::new(f.to_vec()).map(|f| f.balanced_value()),
+                Polynomial::new(capital_g.to_vec()).map(|f| f.balanced_value()),
+                -Polynomial::new(capital_f.to_vec()).map(|f| f.balanced_value()),
+            ],
+        ))
+    }
+}
+
+impl PartialEq for SecretKey {
+    fn eq(&self, other: &Self) -> bool {
+        let own_f = ifft(&self.b0_fft[1])
+            .into_iter()
+            .map(|c| Felt::new(-c.re.round() as i16))
+            .collect_vec();
+        let own_g = ifft(&self.b0_fft[0])
+            .into_iter()
+            .map(|c| Felt::new(c.re.round() as i16))
+            .collect_vec();
+        let own_capital_f = ifft(&self.b0_fft[3])
+            .into_iter()
+            .map(|c| Felt::new(-c.re.round() as i16))
+            .collect_vec();
+        let own_capital_g = ifft(&self.b0_fft[2])
+            .into_iter()
+            .map(|c| Felt::new(-c.re.round() as i16))
+            .collect_vec();
+
+        let other_f = ifft(&other.b0_fft[1])
+            .into_iter()
+            .map(|c| Felt::new(-c.re.round() as i16))
+            .collect_vec();
+        let other_g = ifft(&other.b0_fft[0])
+            .into_iter()
+            .map(|c| Felt::new(c.re.round() as i16))
+            .collect_vec();
+        let other_capital_f = ifft(&other.b0_fft[3])
+            .into_iter()
+            .map(|c| Felt::new(-c.re.round() as i16))
+            .collect_vec();
+        let other_capital_g = ifft(&other.b0_fft[2])
+            .into_iter()
+            .map(|c| Felt::new(-c.re.round() as i16))
+            .collect_vec();
+
+        own_f == other_f
+            && own_g == other_g
+            && own_capital_f == other_capital_f
+            && own_capital_g == other_capital_g
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -347,14 +577,6 @@ pub struct Signature {
     s: Vec<u8>,
 }
 
-#[derive(Debug)]
-pub enum FalconDeserializationError {
-    Encoding,
-    Variant,
-    HeaderFormat,
-    LogN,
-}
-
 impl Signature {
     /// Serialize the signature to a vector of bytes.
     pub fn to_bytes(&self) -> Vec<u8> {
@@ -377,7 +599,7 @@ impl Signature {
         } else if byte_vector.len() == FALCON_1024.sig_bytelen {
             1024
         } else {
-            return Err(FalconDeserializationError::Variant);
+            return Err(FalconDeserializationError::CannotInferFalconVariant);
         };
 
         // read fields
@@ -388,18 +610,18 @@ impl Signature {
         // check encoding and reject if not standard
         let felt_encoding: u8 = 2; // standard
         if (header >> 5) & 3 != felt_encoding {
-            return Err(FalconDeserializationError::Encoding);
+            return Err(FalconDeserializationError::CannotDetermineFieldElementEncodingMethod);
         }
 
         // check fixed bits in header
         if (header >> 7) != 0 || ((header >> 4) & 1) == 0 {
-            return Err(FalconDeserializationError::HeaderFormat);
+            return Err(FalconDeserializationError::InvalidHeaderFormat);
         }
 
         // check log n
         let logn = (header & 15) as usize;
         if n != (1 << logn) {
-            return Err(FalconDeserializationError::LogN);
+            return Err(FalconDeserializationError::InvalidLogN);
         }
 
         // tests pass; assemble object
@@ -554,6 +776,7 @@ mod test {
     use crate::{
         encoding::compress,
         falcon::{gram_schmidt_norm, Signature, FALCON_1024, FALCON_512},
+        field::Felt,
         polynomial::{hash_to_point, Polynomial},
     };
 
@@ -1216,8 +1439,10 @@ mod test {
 
         let serialized = original_signature.to_bytes();
         let deserialized = Signature::from_bytes(&serialized).unwrap();
+        let reserialized = deserialized.to_bytes();
 
         assert_eq!(original_signature, deserialized);
+        assert_eq!(serialized, reserialized);
     }
 
     #[test]
@@ -1245,6 +1470,61 @@ mod test {
         let len = serialized.len();
         let shorter = serialized[0..(len - 1)].to_vec();
         assert!(Signature::from_bytes(&shorter).is_err());
+    }
+
+    #[test]
+    fn test_secret_key_serialization() {
+        let sk = SecretKey::generate(&FALCON_512);
+        let serialized = sk.to_bytes();
+        let deserialized = SecretKey::from_bytes(&serialized).unwrap();
+        let reserialized = deserialized.to_bytes();
+
+        assert_eq!(sk, deserialized);
+        assert_eq!(serialized, reserialized);
+    }
+
+    #[test]
+    fn test_secret_key_serialization_fail() {
+        let sk = SecretKey::generate(&FALCON_512);
+        let mut serialized = sk.to_bytes();
+        let len = serialized.len();
+
+        // test every bit in header
+        for i in 0..8 {
+            serialized[0] ^= 1 << i;
+            assert!(SecretKey::from_bytes(&serialized).is_err());
+            serialized[0] ^= 1 << i;
+        }
+
+        // change length
+        let longer = [serialized, vec![0]].concat();
+        assert!(SecretKey::from_bytes(&longer).is_err());
+
+        let shorter = &longer[0..len - 1];
+        assert!(SecretKey::from_bytes(shorter).is_err());
+    }
+
+    #[test]
+    fn test_secret_key_field_element_serialization() {
+        let mut rng = thread_rng();
+        for n in [512, 1024] {
+            for polynomial_index in [0, 1, 2] {
+                let width = SecretKey::field_element_width(n, polynomial_index);
+                for _ in 0..100000 {
+                    let int = rng.gen_range(-(1 << (width - 1))..(1 << (width - 1)));
+                    if int == -(1i16 << (width - 1)) {
+                        continue;
+                    }
+                    let felt = Felt::new(int);
+                    let ser = SecretKey::serialize_field_element(width, felt);
+                    let des = SecretKey::deserialize_field_element(&ser).unwrap();
+                    let res = SecretKey::serialize_field_element(width, des);
+
+                    assert_eq!(felt, des);
+                    assert_eq!(ser, res);
+                }
+            }
+        }
     }
 
     #[test]

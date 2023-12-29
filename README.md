@@ -3,7 +3,8 @@
 Unofficial rust implementation of the [Falcon](https://falcon-sign.info/) post-quantum
 digital signature scheme.
 
-Falcon was submitted to the NIST PQC standardization project and was selected for 
+Falcon was submitted to the [NIST PQC](https://csrc.nist.gov/projects/post-quantum-cryptography)
+standardization project and was [selected](https://csrc.nist.gov/Projects/post-quantum-cryptography/selected-algorithms-2022) for 
 standardization. The final standard is still outstanding. We do anticipate slight changes
 between the standard and the submission, and these changes might break compatibility.
 
@@ -27,7 +28,7 @@ and the official [python implementation](https://github.com/tprest/falcon.py).
 
  - [ ] serialization
  - [ ] benchmarking suite
- - [ ] store signature vector as `Vec<Felt>`
+ - [ ] optimize representation of secret key, signature, public key
  - [ ] include usage example in readme
  - [ ] make LdlTree straightforward
  - [ ] test interoperability against the reference implementation
