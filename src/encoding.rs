@@ -28,11 +28,6 @@ pub fn compress(v: &[i16], slen: usize) -> Option<Vec<u8>> {
     }
     // return failure if encoding is too long
     if bitvector.len() > slen {
-        println!(
-            "bitvector length: {} but allowed string length: {}",
-            bitvector.len(),
-            slen
-        );
         return None;
     }
     // pad
@@ -94,7 +89,7 @@ pub fn decompress(x: &[u8], bitlength: usize, n: usize) -> Option<Vec<i16>> {
 mod test {
     use crate::{
         encoding::{compress, decompress},
-        falcon::SignatureScheme,
+        falcon::FALCON_512,
         field::Q,
     };
     use rand::thread_rng;
@@ -131,7 +126,7 @@ mod test {
                 let compressed = compress(&initial, slen * 8).unwrap();
                 let decompressed = decompress(
                     &compressed,
-                    (SignatureScheme::falcon_512().sig_bytelen - SALT_LEN - HEAD_LEN) * 8,
+                    (FALCON_512.sig_bytelen - SALT_LEN - HEAD_LEN) * 8,
                     N,
                 )
                 .unwrap();

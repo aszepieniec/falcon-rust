@@ -28,10 +28,10 @@ where
     F: Clone + Neg<Output = F>,
 {
     /// Compute the Hermitian adjoint of the polynomial f in the
-    /// cyclotomic ring Q[ X ] / < Phi_n(X) > where n >= deg(f)+1.
+    /// cyclotomic ring $\mathbb{Q}[X] / \langle X^n + 1 \rangle$ where $n \geq \deg(f)+1$.
     /// In this structure, the Hermitian adjoint is given by
     ///
-    ///     f*(X) = f[0] + sum_{i=1}^{n-1} f[i] * X({n-i}) .
+    /// $$ f*(X) = f_{[0]} + \sum_{i=1}^{n-1} f_{[i]} * X({n-i}) . $$
     pub fn hermitian_adjoint(&self) -> Polynomial<F> {
         let coefficients = [
             vec![self.coefficients[0].clone()],

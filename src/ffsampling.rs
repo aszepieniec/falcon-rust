@@ -1,4 +1,4 @@
-use itertools::{Either, Itertools};
+use itertools::Itertools;
 use num_complex::{Complex, Complex64};
 use rand::RngCore;
 use rand_distr::num_traits::{One, Zero};
@@ -11,7 +11,7 @@ use crate::{
 
 /// Computes the Gram matrix. The argument must be a 2x2 matrix
 /// whose elements are equal-length vectors of complex numbers,
-/// representing polynomials in evaluation domain.
+/// representing polynomials in FFT domain.
 pub fn gram(b: [Vec<Complex64>; 4]) -> [Vec<Complex64>; 4] {
     const N: usize = 2;
     let mut g: [Vec<Complex<f64>>; 4] = (0..4)
@@ -38,6 +38,10 @@ pub fn gram(b: [Vec<Complex64>; 4]) -> [Vec<Complex64>; 4] {
     g
 }
 
+/// Compute the LDL decomposition of a 2x2 matrix G such that
+///     L D L* = G
+/// where D is diagonal, and L is lower-triangular. The elements of matrices
+/// are in FFT domain.
 pub fn ldl(g: [Vec<Complex64>; 4]) -> ([Vec<Complex64>; 4], [Vec<Complex64>; 4]) {
     let n = g[0].len();
 
@@ -63,15 +67,16 @@ pub fn ldl(g: [Vec<Complex64>; 4]) -> ([Vec<Complex64>; 4], [Vec<Complex64>; 4])
 }
 
 #[derive(Debug, Clone)]
-pub struct LdlTree {
-    pub left: Either<Box<LdlTree>, Complex64>,
-    pub right: Either<Box<LdlTree>, Complex64>,
-    pub value: Vec<Complex64>,
+pub(crate) enum LdlTree {
+    Branch(Vec<Complex64>, Box<LdlTree>, Box<LdlTree>),
+    Leaf([Complex64; 2]),
 }
 
-/// Compute the LDL tree of G. Corresponds to Algorithm 9 of the
-/// specification.
-pub fn ffldl(g: [Vec<Complex64>; 4]) -> LdlTree {
+/// Compute the LDL Tree of G. Corresponds to Algorithm 9 of the
+/// specification [1, p.37]
+///
+/// [1]: https://falcon-sign.info/falcon.pdf
+pub(crate) fn ffldl(g: [Vec<Complex64>; 4]) -> LdlTree {
     let n = g[0].len();
     let (l, d) = ldl(g);
 
@@ -90,74 +95,65 @@ pub fn ffldl(g: [Vec<Complex64>; 4]) -> LdlTree {
             d11.iter().map(|c| c.conj()).collect_vec(),
             d10,
         ];
-        LdlTree {
-            left: Either::Left(Box::new(ffldl(g0))),
-            right: Either::Left(Box::new(ffldl(g1))),
-            value: l[2].clone(),
-        }
+        LdlTree::Branch(l[2].clone(), Box::new(ffldl(g0)), Box::new(ffldl(g1)))
     } else {
-        LdlTree {
-            left: Either::Right(d[0][0]),
-            right: Either::Right(d[3][0]),
-            value: l[2].clone(),
-        }
+        LdlTree::Branch(
+            l[2].clone(),
+            Box::new(LdlTree::Leaf(d[0].clone().try_into().unwrap())),
+            Box::new(LdlTree::Leaf(d[3].clone().try_into().unwrap())),
+        )
     }
 }
 
-pub fn normalize_tree(tree: &mut LdlTree, sigma: f64) {
-    match tree.left.as_mut() {
-        Either::Left(left_tree) => normalize_tree(left_tree, sigma),
-        Either::Right(r) => {
-            *r = sigma / r.sqrt();
+pub(crate) fn normalize_tree(tree: &mut LdlTree, sigma: f64) {
+    match tree {
+        LdlTree::Branch(_ell, left, right) => {
+            normalize_tree(left, sigma);
+            normalize_tree(right, sigma);
         }
-    }
-    match tree.right.as_mut() {
-        Either::Left(right_tree) => normalize_tree(right_tree, sigma),
-        Either::Right(r) => {
-            *r = sigma / r.sqrt();
+        LdlTree::Leaf(vector) => {
+            vector[0] = Complex::new(sigma / vector[0].re.sqrt(), 0.0);
+            vector[1] = Complex64::zero();
         }
     }
 }
 
 /// Sample short polynomials using a Falcon tree. Algorithm 11 from the spec [1, p.40].
+///
 /// [1]: https://falcon-sign.info/falcon.pdf
-pub fn ffsampling(
+pub(crate) fn ffsampling(
     t: &(Vec<Complex64>, Vec<Complex64>),
     tree: &LdlTree,
     parameters: &falcon::SignatureScheme,
     rng: &mut dyn RngCore,
 ) -> (Vec<Complex64>, Vec<Complex64>) {
-    if t.0.len() == 1 {
-        let sigma_prime = tree.value[0];
-        let z0 = sampler_z(t.0[0].re, sigma_prime.re, parameters.sigmin, rng);
-        let z1 = sampler_z(t.1[0].re, sigma_prime.re, parameters.sigmin, rng);
-        return (
-            vec![Complex64::new(z0 as f64, 0.0)],
-            vec![Complex64::new(z1 as f64, 0.0)],
-        );
+    match tree {
+        LdlTree::Branch(ell, left, right) => {
+            let bold_t1 = split_fft(&t.1);
+            let bold_z1 = ffsampling(&bold_t1, right, parameters, rng);
+            let z1 = merge_fft(&bold_z1.0, &bold_z1.1);
+
+            // t0' = t0  + (t1 - z1) * l
+            let t0_prime =
+                t.0.iter()
+                    .zip(t.1.iter().zip(z1.iter().zip(ell.iter())))
+                    .map(|(t0_, (t1_, (z1_, l_)))| t0_ + (t1_ - z1_) * l_)
+                    .collect_vec();
+            let bold_t0 = split_fft(&t0_prime);
+            let bold_z0 = ffsampling(&bold_t0, left, parameters, rng);
+            let z0 = merge_fft(&bold_z0.0, &bold_z0.1);
+
+            (z0, z1)
+        }
+        LdlTree::Leaf(value) => {
+            let z0 = sampler_z(t.0[0].re, value[0].re, parameters.sigmin, rng);
+            let z1 = sampler_z(t.1[0].re, value[0].re, parameters.sigmin, rng);
+            (
+                vec![Complex64::new(z0 as f64, 0.0)],
+                vec![Complex64::new(z1 as f64, 0.0)],
+            )
+        }
     }
-
-    let (l, tree0, tree1) = (
-        tree.value.clone(),
-        *tree.left.clone().left().unwrap(),
-        *tree.right.clone().left().unwrap(),
-    );
-
-    let bold_t1 = split_fft(&t.1);
-    let bold_z1 = ffsampling(&bold_t1, &tree1, parameters, rng);
-    let z1 = merge_fft(&bold_z1.0, &bold_z1.1);
-
-    // t0' = t0  + (t1 - z1) * l
-    let t0_prime =
-        t.0.iter()
-            .zip(t.1.iter().zip(z1.iter().zip(l.iter())))
-            .map(|(t0_, (t1_, (z1_, l_)))| t0_ + (t1_ - z1_) * l_)
-            .collect_vec();
-    let bold_t0 = split_fft(&t0_prime);
-    let bold_z0 = ffsampling(&bold_t0, &tree0, parameters, rng);
-    let z0 = merge_fft(&bold_z0.0, &bold_z0.1);
-
-    (z0, z1)
 }
 
 #[cfg(test)]

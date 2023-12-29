@@ -22,6 +22,8 @@ pub const fn logn(mut n: u32) -> usize {
     }
     ctr
 }
+
+#[derive(Copy, Clone, Debug)]
 pub struct SignatureScheme {
     pub n: usize,
     pub sigma: f64,
@@ -30,38 +32,31 @@ pub struct SignatureScheme {
     pub sig_bytelen: usize,
 }
 
-impl SignatureScheme {
-    pub const fn falcon_512() -> Self {
-        Self {
-            n: 512,
-            sigma: 165.7366171829776,
-            sigmin: 1.2778336969128337,
-            sig_bound: 34034726,
-            sig_bytelen: 666,
-        }
-    }
+pub const FALCON_512: SignatureScheme = SignatureScheme {
+    n: 512,
+    sigma: 165.7366171829776,
+    sigmin: 1.2778336969128337,
+    sig_bound: 34034726,
+    sig_bytelen: 666,
+};
 
-    pub const fn falcon_1024() -> Self {
-        Self {
-            n: 1024,
-            sigma: 168.38857144654395,
-            sigmin: 1.298280334344292,
-            sig_bound: 70265242,
-            sig_bytelen: 1280,
-        }
-    }
-}
+pub const FALCON_1024: SignatureScheme = SignatureScheme {
+    n: 1024,
+    sigma: 168.38857144654395,
+    sigmin: 1.298280334344292,
+    sig_bound: 70265242,
+    sig_bytelen: 1280,
+};
 
 /// Generate a polynomial of degree at most n-1 whose coefficients are
 /// distributed according to a discrete Gaussian with mu = 0 and
 /// sigma = 1.17 * sqrt(Q / (2n)).
-fn gen_poly(n: usize, sigma_min: f64, rng: &mut dyn RngCore) -> Polynomial<i16> {
+fn gen_poly(n: usize, rng: &mut dyn RngCore) -> Polynomial<i16> {
     let mu = 0.0;
     let sigma_star = 1.43300980528773;
-    let sigma_min = sigma_star - 0.001; // ignore simga_min, but why?
     Polynomial {
         coefficients: (0..4096)
-            .map(|_| sampler_z(mu, sigma_star, sigma_min, rng))
+            .map(|_| sampler_z(mu, sigma_star, sigma_star - 0.001, rng))
             .collect_vec()
             .chunks(4096 / n)
             .map(|ch| ch.iter().sum())
@@ -99,6 +94,7 @@ fn gram_schmidt_norm(f: &Polynomial<i16>, g: &Polynomial<i16>) -> f64 {
 
 /// Sample 4 small polynomials f, g, F, G such that f * G - g * F = q mod (X^n + 1).
 /// Algorithm 5 (NTRUgen) of the documentation [1, p.34].
+///
 /// [1]: https://falcon-sign.info/falcon.pdf
 fn ntru_gen(
     n: usize,
@@ -110,10 +106,9 @@ fn ntru_gen(
     Polynomial<i16>,
 ) {
     let mut rng: StdRng = SeedableRng::from_seed(seed);
-    let sigma_fg = 1.17 * ((Q as f64) / (n as f64)).sqrt();
     loop {
-        let f = gen_poly(n, sigma_fg, &mut rng);
-        let g = gen_poly(n, sigma_fg, &mut rng);
+        let f = gen_poly(n, &mut rng);
+        let g = gen_poly(n, &mut rng);
         let f_ntt = ntt(&f
             .coefficients
             .iter()
@@ -141,10 +136,10 @@ fn ntru_gen(
     }
 }
 
-/// Extended Euclidean algorithm for computing the greatest common divisor (gcd) and
+/// Extended Euclidean algorithm for computing the greatest common divisor (g) and
 /// Bézout coefficients (u, v) for the relation
 ///
-///     ua + vb = gcd .   (<-- Bézout relation)
+/// $$ u a + v b = g . $$
 ///
 /// Implementation adapted from Wikipedia [1].
 ///
@@ -164,7 +159,7 @@ fn xgcd(a: &BigInt, b: &BigInt) -> (BigInt, BigInt, BigInt) {
     (old_r, old_s, old_t)
 }
 
-/// Gram-Schmidt orthogonalize the vector (F,G) relative to (f,g). This method
+/// Reduce the vector (F,G) relative to (f,g). This method
 /// follows the python implementation [1].
 ///
 /// Algorithm 7 in the spec [2, p.35]
@@ -172,7 +167,7 @@ fn xgcd(a: &BigInt, b: &BigInt) -> (BigInt, BigInt, BigInt) {
 /// [1]: https://github.com/tprest/falcon.py
 ///
 /// [2]: https://falcon-sign.info/falcon.pdf
-fn gram_schmidt_reduce(
+fn babai_reduce(
     f: &Polynomial<BigInt>,
     g: &Polynomial<BigInt>,
     capital_f: &mut Polynomial<BigInt>,
@@ -237,9 +232,10 @@ fn gram_schmidt_reduce(
     }
 }
 
-/// Solve the NTRU equation. Given f, g in ZZ[ X ], find F, G in ZZ[ X ] such that
+/// Solve the NTRU equation. Given $f, g \in \mathbb{Z}[X]$, find $F, G \in \mathbb{Z}[X]$
+/// such that
 ///
-///     f*G - g*F = q (mod X^n + 1)  (<-- NTRU equation)
+/// $$    f G - g F = q \mod \langle X^n + 1 \rangle $$
 ///
 /// Algorithm 6 of the specification [1, p.35].
 ///
@@ -273,7 +269,7 @@ fn ntru_solve(
     let mut capital_f = (capital_f_prime_xsq * g_minx).reduce_by_cyclotomic(n);
     let mut capital_g = (capital_g_prime_xsq * f_minx).reduce_by_cyclotomic(n);
 
-    gram_schmidt_reduce(f, g, &mut capital_f, &mut capital_g);
+    babai_reduce(f, g, &mut capital_f, &mut capital_g);
 
     Some((capital_f, capital_g))
 }
@@ -359,11 +355,8 @@ pub struct Signature {
 impl SignatureScheme {
     // Generate a key pair from a seed.
     pub fn keygen(&self, seed: [u8; 32]) -> (SecretKey, PublicKey) {
-        println!("inside keygen.");
         let sk = SecretKey::generate_from_seed(self, seed);
-        println!("got sk.");
         let pk = PublicKey::from_secret_key(&sk);
-        println!("got pk.");
         (sk, pk)
     }
 
@@ -428,18 +421,20 @@ impl SignatureScheme {
                     .map(|(a, (b, (c, d)))| a * b + c * d)
                     .collect_vec();
 
-                let length_squared: f64 = s0.iter().map(|a| (a * a.conj()).re).sum::<f64>()
-                    + s1.iter().map(|a| (a * a.conj()).re).sum::<f64>();
+                // compute the norm of (s0||s1) and note that they are in FFT representation
+                let length_squared: f64 = (s0.iter().map(|a| (a * a.conj()).re).sum::<f64>()
+                    + s1.iter().map(|a| (a * a.conj()).re).sum::<f64>())
+                    / (n as f64);
 
-                if length_squared > (n as i64 * bound) as f64 {
+                if length_squared > (bound as f64) {
                     continue;
                 }
 
-                break [s0, s1].concat();
+                break [s0, s1];
             };
-            let s2: Vec<Complex64> = ifft(&bold_s)[n / 2..].to_vec();
+            let s2: Vec<Complex64> = ifft(&bold_s[1]).to_vec();
             let maybe_s = compress(
-                &s2.iter().map(|a| a.re as i16).collect_vec(),
+                &s2.iter().map(|a| a.re.round() as i16).collect_vec(),
                 8 * (self.sig_bytelen - 41),
             );
 
@@ -499,11 +494,11 @@ mod test {
 
     use crate::{
         encoding::compress,
-        falcon::{gram_schmidt_norm, Signature},
+        falcon::{gram_schmidt_norm, Signature, FALCON_1024, FALCON_512},
         polynomial::{hash_to_point, Polynomial},
     };
 
-    use super::{gen_poly, ntru_gen, ntru_solve, PublicKey, SecretKey, SignatureScheme};
+    use super::{gen_poly, ntru_gen, ntru_solve, PublicKey, SecretKey};
 
     #[test]
     fn test_operation() {
@@ -512,7 +507,7 @@ mod test {
         rng.fill_bytes(&mut msg);
 
         println!("testing small scheme ...");
-        let small_scheme = SignatureScheme::falcon_512();
+        let small_scheme = FALCON_512;
         println!("-> keygen ...");
         let (sk, pk) = small_scheme.keygen(rng.gen());
         println!("-> sign ...");
@@ -521,10 +516,15 @@ mod test {
         assert!(small_scheme.verify(&msg, &sig, &pk));
         println!("-> ok.");
 
-        let big_scheme = SignatureScheme::falcon_1024();
+        println!("testing big scheme ...");
+        let big_scheme = FALCON_1024;
+        println!("-> keygen ...");
         let (sk, pk) = big_scheme.keygen(rng.gen());
+        println!("-> sign ...");
         let sig = big_scheme.sign(&msg, &sk);
+        println!("-> verify ...");
         assert!(big_scheme.verify(&msg, &sig, &pk));
+        println!("-> ok.");
     }
 
     #[test]
@@ -640,7 +640,7 @@ mod test {
             Polynomial::new(capital_g),
             Polynomial::new(capital_f.into_iter().map(|i| -i).collect_vec()),
         ];
-        let sk = SecretKey::from_b0(SignatureScheme::falcon_512().sigma, b0);
+        let sk = SecretKey::from_b0(FALCON_512.sigma, b0);
 
         let expected_signature_vector = vec![
             11, 201, 176, -24, -141, -151, -63, -323, 154, -363, 168, -173, -29, -184, -142, 419,
@@ -678,7 +678,7 @@ mod test {
             r: nonce.try_into().unwrap(),
             s: compress(
                 &expected_signature_vector,
-                (SignatureScheme::falcon_512().sig_bytelen - 41) * 8,
+                (FALCON_512.sig_bytelen - 41) * 8,
             )
             .unwrap(),
         };
@@ -688,7 +688,7 @@ mod test {
         // let obtained_signature = SignatureScheme::new(FalconVariant::Falcon512).sign(&data, &sk);
 
         let pk = PublicKey::from_secret_key(&sk);
-        assert!(SignatureScheme::falcon_512().verify(&data, &sig, &pk));
+        assert!(FALCON_512.verify(&data, &sig, &pk));
     }
 
     #[test]
@@ -955,7 +955,7 @@ mod test {
             Polynomial::new(capital_g),
             Polynomial::new(capital_f.into_iter().map(|i| -i).collect_vec()),
         ];
-        let sk = SecretKey::from_b0(SignatureScheme::falcon_512().sigma, b0);
+        let sk = SecretKey::from_b0(FALCON_512.sigma, b0);
 
         let signature_vector = vec![
             -65, 348, 265, 166, -45, 9, 28, 84, 68, 20, -184, 212, -363, -20, -176, -33, 210, 165,
@@ -1021,15 +1021,11 @@ mod test {
         ];
         let sig = Signature {
             r: nonce.try_into().unwrap(),
-            s: compress(
-                &signature_vector,
-                (SignatureScheme::falcon_1024().sig_bytelen - 41) * 8,
-            )
-            .unwrap(),
+            s: compress(&signature_vector, (FALCON_1024.sig_bytelen - 41) * 8).unwrap(),
         };
 
         let pk = PublicKey::from_secret_key(&sk);
-        assert!(SignatureScheme::falcon_1024().verify(&data, &sig, &pk));
+        assert!(FALCON_1024.verify(&data, &sig, &pk));
     }
 
     #[test]
@@ -1143,11 +1139,10 @@ mod test {
     fn test_gen_poly() {
         let mut rng = thread_rng();
         let n = 1024;
-        let sigma_min = SignatureScheme::falcon_1024().sigmin;
         let mut sum_norms = 0.0;
         let num_iterations = 100;
         for _ in 0..num_iterations {
-            let f = gen_poly(n, sigma_min, &mut rng);
+            let f = gen_poly(n, &mut rng);
             sum_norms += f.l2_norm();
         }
         let average = sum_norms / (num_iterations as f64);
