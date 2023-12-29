@@ -541,7 +541,7 @@ impl PartialEq for SecretKey {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct PublicKey {
     h: Vec<Felt>,
 }
@@ -568,6 +568,59 @@ impl PublicKey {
             .collect_vec();
         let h = intt(&h_ntt);
         Self { h }
+    }
+
+    /// Deserialize the given slice of bytes into a public key.
+    pub fn from_bytes(byte_array: &[u8]) -> Result<Self, FalconDeserializationError> {
+        let n: usize = match byte_array.len() {
+            897 => 512,
+            1793 => 1024,
+            _ => return Err(FalconDeserializationError::BadEncodingLength),
+        };
+
+        // parse header
+        let header = byte_array[0];
+
+        if header >> 4 != 0 {
+            return Err(FalconDeserializationError::InvalidHeaderFormat);
+        }
+
+        let l = n.ilog2();
+        if header != l as u8 {
+            return Err(FalconDeserializationError::InvalidLogN);
+        }
+
+        // parse h
+        let bit_buffer = BitVec::from_bytes(&byte_array[1..]);
+        let h = bit_buffer
+            .iter()
+            .chunks(14)
+            .into_iter()
+            .map(|ch| {
+                let mut int = 0;
+                for b in ch {
+                    int = (int << 1) | (b as i16);
+                }
+                int
+            })
+            .map(Felt::new)
+            .collect_vec();
+
+        Ok(PublicKey { h })
+    }
+
+    // Serialize the public key as a list of bytes.
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let header = self.h.len().ilog2() as u8;
+        let mut bit_buffer = BitVec::from_bytes(&[header]);
+
+        for hi in self.h.iter() {
+            for i in (0..14).rev() {
+                bit_buffer.push(hi.value() & (1 << i) != 0);
+            }
+        }
+
+        bit_buffer.to_bytes()
     }
 }
 
@@ -1487,6 +1540,38 @@ mod test {
     fn test_secret_key_serialization_fail() {
         let sk = SecretKey::generate(&FALCON_512);
         let mut serialized = sk.to_bytes();
+        let len = serialized.len();
+
+        // test every bit in header
+        for i in 0..8 {
+            serialized[0] ^= 1 << i;
+            assert!(SecretKey::from_bytes(&serialized).is_err());
+            serialized[0] ^= 1 << i;
+        }
+
+        // change length
+        let longer = [serialized, vec![0]].concat();
+        assert!(SecretKey::from_bytes(&longer).is_err());
+
+        let shorter = &longer[0..len - 1];
+        assert!(SecretKey::from_bytes(shorter).is_err());
+    }
+
+    #[test]
+    fn test_public_key_serialization() {
+        let pk = PublicKey::from_secret_key(&SecretKey::generate(&FALCON_512));
+        let serialized = pk.to_bytes();
+        let deserialized = PublicKey::from_bytes(&serialized).unwrap();
+        let reserialized = deserialized.to_bytes();
+
+        assert_eq!(pk, deserialized);
+        assert_eq!(serialized, reserialized);
+    }
+
+    #[test]
+    fn test_public_key_serialization_fail() {
+        let pk = PublicKey::from_secret_key(&SecretKey::generate(&FALCON_512));
+        let mut serialized = pk.to_bytes();
         let len = serialized.len();
 
         // test every bit in header

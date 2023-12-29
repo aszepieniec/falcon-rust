@@ -17,7 +17,7 @@ and the official [python implementation](https://github.com/tprest/falcon.py).
  - [x] signature generation
  - [x] signature verification
  - [x] derandomized algorithms
- - [ ] (de)serialization
+ - [x] (de)serialization
  - [ ] uncompressed signature format
  - [ ] signed-message interface
  - [ ] optimal algorithms (e.g. Karatsuba)
@@ -26,7 +26,6 @@ and the official [python implementation](https://github.com/tprest/falcon.py).
 
 ## To-do's
 
- - [ ] serialization
  - [ ] benchmarking suite
  - [ ] optimize representation of secret key, signature, public key
  - [ ] include usage example in readme
