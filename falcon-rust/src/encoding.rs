@@ -87,9 +87,10 @@ pub(crate) fn decompress(x: &[u8], bitlength: usize, n: usize) -> Option<Vec<i16
 
 #[cfg(test)]
 mod test {
+
     use crate::{
         encoding::{compress, decompress},
-        falcon::FALCON_512,
+        falcon::FalconVariant,
         field::Q,
     };
     use rand::thread_rng;
@@ -126,7 +127,7 @@ mod test {
                 let compressed = compress(&initial, slen * 8).unwrap();
                 let decompressed = decompress(
                     &compressed,
-                    (FALCON_512.sig_bytelen - SALT_LEN - HEAD_LEN) * 8,
+                    (FalconVariant::Falcon512.parameters().sig_bytelen - SALT_LEN - HEAD_LEN) * 8,
                     N,
                 )
                 .unwrap();

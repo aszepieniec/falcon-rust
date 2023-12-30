@@ -124,7 +124,7 @@ pub(crate) fn normalize_tree(tree: &mut LdlTree, sigma: f64) {
 pub(crate) fn ffsampling(
     t: &(Vec<Complex64>, Vec<Complex64>),
     tree: &LdlTree,
-    parameters: &falcon::SignatureScheme,
+    parameters: &falcon::FalconParameters,
     rng: &mut dyn RngCore,
 ) -> (Vec<Complex64>, Vec<Complex64>) {
     match tree {

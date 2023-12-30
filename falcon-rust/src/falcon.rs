@@ -16,7 +16,7 @@ use crate::{
 };
 
 #[derive(Copy, Clone, Debug)]
-pub struct SignatureScheme {
+pub struct FalconParameters {
     pub(crate) n: usize,
     pub(crate) sigma: f64,
     pub(crate) sigmin: f64,
@@ -24,21 +24,38 @@ pub struct SignatureScheme {
     pub(crate) sig_bytelen: usize,
 }
 
-pub const FALCON_512: SignatureScheme = SignatureScheme {
-    n: 512,
-    sigma: 165.7366171829776,
-    sigmin: 1.2778336969128337,
-    sig_bound: 34034726,
-    sig_bytelen: 666,
-};
+pub enum FalconVariant {
+    Falcon512,
+    Falcon1024,
+}
 
-pub const FALCON_1024: SignatureScheme = SignatureScheme {
-    n: 1024,
-    sigma: 168.38857144654395,
-    sigmin: 1.298280334344292,
-    sig_bound: 70265242,
-    sig_bytelen: 1280,
-};
+impl FalconVariant {
+    const fn from_n(n: usize) -> Self {
+        match n {
+            512 => Self::Falcon512,
+            1024 => Self::Falcon1024,
+            _ => unreachable!(),
+        }
+    }
+    pub(crate) const fn parameters(&self) -> FalconParameters {
+        match self {
+            FalconVariant::Falcon512 => FalconParameters {
+                n: 512,
+                sigma: 165.7366171829776,
+                sigmin: 1.2778336969128337,
+                sig_bound: 34034726,
+                sig_bytelen: 666,
+            },
+            FalconVariant::Falcon1024 => FalconParameters {
+                n: 1024,
+                sigma: 168.38857144654395,
+                sigmin: 1.298280334344292,
+                sig_bound: 70265242,
+                sig_bytelen: 1280,
+            },
+        }
+    }
+}
 
 /// Generate a polynomial of degree at most n-1 whose coefficients are
 /// distributed according to a discrete Gaussian with mu = 0 and
@@ -284,38 +301,39 @@ pub enum FalconDeserializationError {
     InvalidLogN,
     BadEncodingLength,
     BadFieldElementEncoding,
+    WrongVariant,
 }
 
 #[derive(Debug, Clone)]
-pub struct SecretKey {
+pub struct SecretKey<const N: usize> {
     /// b0_fft = [[g_fft, -f_fft], [G_fft, -F_fft]]
     b0_fft: [Vec<Complex64>; 4],
     tree: LdlTree,
 }
 
-impl SecretKey {
+impl<const N: usize> SecretKey<N> {
     /// Generate a secret key using randomness supplied by the operating system.
-    pub fn generate(scheme: &SignatureScheme) -> Self {
+    pub fn generate() -> Self {
         // According to the docs [1], `thread_rng` uses entropy supplied
         // by the operating system and ChaCha12 to extend it. So it is
         // cryptographically secure, afaict.
         // [1]: https://rust-random.github.io/rand/rand/rngs/struct.ThreadRng.html
-        Self::generate_from_seed(scheme, thread_rng().gen())
+        Self::generate_from_seed(thread_rng().gen())
     }
 
     /// Generate a secret key pseudorandomly by expanding a given seed.
-    pub fn generate_from_seed(params: &SignatureScheme, seed: [u8; 32]) -> Self {
+    pub fn generate_from_seed(seed: [u8; 32]) -> Self {
         // separate sk gen for testing purposes
-        let b0 = Self::gen_b0(params.n, seed);
-        Self::from_b0(params.sigma, b0)
+        let b0 = Self::gen_b0(seed);
+        Self::from_b0(b0)
     }
 
-    pub(crate) fn gen_b0(n: usize, seed: [u8; 32]) -> [Polynomial<i16>; 4] {
-        let (f, g, capital_f, capital_g) = ntru_gen(n, seed);
+    pub(crate) fn gen_b0(seed: [u8; 32]) -> [Polynomial<i16>; 4] {
+        let (f, g, capital_f, capital_g) = ntru_gen(N, seed);
         [g, -f, capital_g, -capital_f]
     }
 
-    pub(crate) fn from_b0(sigma: f64, b0: [Polynomial<i16>; 4]) -> SecretKey {
+    pub(crate) fn from_b0(b0: [Polynomial<i16>; 4]) -> Self {
         let b0_fft = b0
             .map(|v| v.coefficients)
             .map(|c| {
@@ -327,6 +345,7 @@ impl SecretKey {
 
         let g0_fft = gram(b0_fft.clone());
         let mut tree = ffldl(g0_fft);
+        let sigma = FalconVariant::from_n(N).parameters().sigma;
         normalize_tree(&mut tree, sigma);
 
         SecretKey { b0_fft, tree }
@@ -436,6 +455,11 @@ impl SecretKey {
             _ => return Err(FalconDeserializationError::InvalidLogN),
         };
 
+        // match against const variant generic parameter
+        if n != FalconVariant::from_n(N).parameters().n {
+            return Err(FalconDeserializationError::WrongVariant);
+        }
+
         // decode integer polynomials using BitVec as intermediate representation
 
         // f
@@ -490,25 +514,16 @@ impl SecretKey {
             .collect_vec();
         let capital_g = intt(&capital_g_ntt);
 
-        let sigma = match n {
-            1024 => FALCON_1024.sigma,
-            512 => FALCON_512.sigma,
-            _ => unreachable!(),
-        };
-
-        Ok(Self::from_b0(
-            sigma,
-            [
-                Polynomial::new(g.to_vec()).map(|f| f.balanced_value()),
-                -Polynomial::new(f.to_vec()).map(|f| f.balanced_value()),
-                Polynomial::new(capital_g.to_vec()).map(|f| f.balanced_value()),
-                -Polynomial::new(capital_f.to_vec()).map(|f| f.balanced_value()),
-            ],
-        ))
+        Ok(Self::from_b0([
+            Polynomial::new(g.to_vec()).map(|f| f.balanced_value()),
+            -Polynomial::new(f.to_vec()).map(|f| f.balanced_value()),
+            Polynomial::new(capital_g.to_vec()).map(|f| f.balanced_value()),
+            -Polynomial::new(capital_f.to_vec()).map(|f| f.balanced_value()),
+        ]))
     }
 }
 
-impl PartialEq for SecretKey {
+impl<const N: usize> PartialEq for SecretKey<N> {
     fn eq(&self, other: &Self) -> bool {
         let own_f = ifft(&self.b0_fft[1])
             .into_iter()
@@ -552,13 +567,13 @@ impl PartialEq for SecretKey {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct PublicKey {
+pub struct PublicKey<const N: usize> {
     h: Vec<Felt>,
 }
 
-impl PublicKey {
+impl<const N: usize> PublicKey<N> {
     /// Compute the public key that matches with this secret key.
-    pub fn from_secret_key(sk: &SecretKey) -> Self {
+    pub fn from_secret_key(sk: &SecretKey<N>) -> Self {
         let f = ifft(&sk.b0_fft[1])
             .iter()
             .map(|c| -Felt::new(c.re.round() as i16))
@@ -587,6 +602,11 @@ impl PublicKey {
             1793 => 1024,
             _ => return Err(FalconDeserializationError::BadEncodingLength),
         };
+
+        // match against variant generic type parameter
+        if n != N {
+            return Err(FalconDeserializationError::WrongVariant);
+        }
 
         // parse header
         let header = byte_array[0];
@@ -635,12 +655,12 @@ impl PublicKey {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Signature {
+pub struct Signature<const N: usize> {
     r: [u8; 40],
     s: Vec<u8>,
 }
 
-impl Signature {
+impl<const N: usize> Signature<N> {
     /// Serialize the signature to a vector of bytes.
     pub fn to_bytes(&self) -> Vec<u8> {
         // header
@@ -661,13 +681,18 @@ impl Signature {
     /// Deserialize a signature from a slice of bytes.
     pub fn from_bytes(byte_vector: &[u8]) -> Result<Self, FalconDeserializationError> {
         // check signature length; infer variant
-        let n = if byte_vector.len() == FALCON_512.sig_bytelen {
+        let n = if byte_vector.len() == FalconVariant::Falcon512.parameters().sig_bytelen {
             512
-        } else if byte_vector.len() == FALCON_1024.sig_bytelen {
+        } else if byte_vector.len() == FalconVariant::Falcon1024.parameters().sig_bytelen {
             1024
         } else {
             return Err(FalconDeserializationError::CannotInferFalconVariant);
         };
+
+        // match n against const type parameter
+        if n != N {
+            return Err(FalconDeserializationError::WrongVariant);
+        }
 
         // read fields
         let header = byte_vector[0];
@@ -692,146 +717,146 @@ impl Signature {
         }
 
         // tests pass; assemble object
-        Ok(Signature {
+        Ok(Signature::<N> {
             r: salt,
             s: signature_vector.to_vec(),
         })
     }
 }
 
-impl SignatureScheme {
-    // Generate a key pair pseudorandomly by expanding a seed.
-    pub fn keygen(&self, seed: [u8; 32]) -> (SecretKey, PublicKey) {
-        let sk = SecretKey::generate_from_seed(self, seed);
-        let pk = PublicKey::from_secret_key(&sk);
-        (sk, pk)
-    }
+// Generate a key pair pseudorandomly by expanding a seed.
+pub fn keygen<const N: usize>(seed: [u8; 32]) -> (SecretKey<N>, PublicKey<N>) {
+    let sk = SecretKey::generate_from_seed(seed);
+    let pk = PublicKey::from_secret_key(&sk);
+    (sk, pk)
+}
 
-    /// Sign a message with the secret key.
-    ///
-    /// Algorithm 10 of the specification [1, p.39].
-    ///
-    /// [1]: https://falcon-sign.info/falcon.pdf
-    pub fn sign(&self, m: &[u8], sk: &SecretKey) -> Signature {
-        let mut rng = thread_rng();
-        let mut r = [0u8; 40];
-        rng.fill_bytes(&mut r);
+/// Sign a message with the secret key.
+///
+/// Algorithm 10 of the specification [1, p.39].
+///
+/// [1]: https://falcon-sign.info/falcon.pdf
+pub fn sign<const N: usize>(m: &[u8], sk: &SecretKey<N>) -> Signature<N> {
+    let mut rng = thread_rng();
+    let mut r = [0u8; 40];
+    rng.fill_bytes(&mut r);
 
-        let bound = self.sig_bound;
-        let n = self.n;
+    let params = FalconVariant::from_n(N).parameters();
+    let bound = params.sig_bound;
+    let n = params.n;
 
-        let r_cat_m = [r.to_vec(), m.to_vec()].concat();
+    let r_cat_m = [r.to_vec(), m.to_vec()].concat();
 
-        let c = hash_to_point(&r_cat_m, n);
-        let one_over_q = 1.0 / (Q as f64);
-        let c_over_q_fft = fft(&c
-            .coefficients
-            .iter()
-            .map(|cc| Complex::new(one_over_q * cc.value() as f64, 0.0))
-            .collect_vec());
+    let c = hash_to_point(&r_cat_m, n);
+    let one_over_q = 1.0 / (Q as f64);
+    let c_over_q_fft = fft(&c
+        .coefficients
+        .iter()
+        .map(|cc| Complex::new(one_over_q * cc.value() as f64, 0.0))
+        .collect_vec());
 
-        // B = [[FFT(g), -FFT(f)], [FFT(G), -FFT(F)]]
-        let t0 = c_over_q_fft
-            .iter()
-            .zip(sk.b0_fft[3].iter())
-            .map(|(a, b)| a * b)
-            .collect_vec();
-        let t1 = c_over_q_fft
-            .iter()
-            .zip(sk.b0_fft[1].iter())
-            .map(|(a, b)| -a * b)
-            .collect_vec();
+    // B = [[FFT(g), -FFT(f)], [FFT(G), -FFT(F)]]
+    let t0 = c_over_q_fft
+        .iter()
+        .zip(sk.b0_fft[3].iter())
+        .map(|(a, b)| a * b)
+        .collect_vec();
+    let t1 = c_over_q_fft
+        .iter()
+        .zip(sk.b0_fft[1].iter())
+        .map(|(a, b)| -a * b)
+        .collect_vec();
 
-        let s = loop {
-            let bold_s = loop {
-                let z = ffsampling(&(t0.clone(), t1.clone()), &sk.tree, self, &mut rng);
-                let t0_min_z0 = t0.iter().zip(z.0).map(|(t, z)| t - z).collect_vec();
-                let t1_min_z1 = t1.iter().zip(z.1).map(|(t, z)| t - z).collect_vec();
+    let s = loop {
+        let bold_s = loop {
+            let z = ffsampling(&(t0.clone(), t1.clone()), &sk.tree, &params, &mut rng);
+            let t0_min_z0 = t0.iter().zip(z.0).map(|(t, z)| t - z).collect_vec();
+            let t1_min_z1 = t1.iter().zip(z.1).map(|(t, z)| t - z).collect_vec();
 
-                // s = (t-z) * B
-                let s0 = t0_min_z0
-                    .iter()
-                    .zip(
-                        sk.b0_fft[0]
-                            .iter()
-                            .zip(t1_min_z1.iter().zip(sk.b0_fft[2].iter())),
-                    )
-                    .map(|(a, (b, (c, d)))| a * b + c * d)
-                    .collect_vec();
-                let s1 = t0_min_z0
-                    .iter()
-                    .zip(
-                        sk.b0_fft[1]
-                            .iter()
-                            .zip(t1_min_z1.iter().zip(sk.b0_fft[3].iter())),
-                    )
-                    .map(|(a, (b, (c, d)))| a * b + c * d)
-                    .collect_vec();
+            // s = (t-z) * B
+            let s0 = t0_min_z0
+                .iter()
+                .zip(
+                    sk.b0_fft[0]
+                        .iter()
+                        .zip(t1_min_z1.iter().zip(sk.b0_fft[2].iter())),
+                )
+                .map(|(a, (b, (c, d)))| a * b + c * d)
+                .collect_vec();
+            let s1 = t0_min_z0
+                .iter()
+                .zip(
+                    sk.b0_fft[1]
+                        .iter()
+                        .zip(t1_min_z1.iter().zip(sk.b0_fft[3].iter())),
+                )
+                .map(|(a, (b, (c, d)))| a * b + c * d)
+                .collect_vec();
 
-                // compute the norm of (s0||s1) and note that they are in FFT representation
-                let length_squared: f64 = (s0.iter().map(|a| (a * a.conj()).re).sum::<f64>()
-                    + s1.iter().map(|a| (a * a.conj()).re).sum::<f64>())
-                    / (n as f64);
+            // compute the norm of (s0||s1) and note that they are in FFT representation
+            let length_squared: f64 = (s0.iter().map(|a| (a * a.conj()).re).sum::<f64>()
+                + s1.iter().map(|a| (a * a.conj()).re).sum::<f64>())
+                / (n as f64);
 
-                if length_squared > (bound as f64) {
-                    continue;
-                }
+            if length_squared > (bound as f64) {
+                continue;
+            }
 
-                break [s0, s1];
-            };
-            let s2: Vec<Complex64> = ifft(&bold_s[1]).to_vec();
-            let maybe_s = compress(
-                &s2.iter().map(|a| a.re.round() as i16).collect_vec(),
-                8 * (self.sig_bytelen - 41),
-            );
-
-            match maybe_s {
-                Some(s) => {
-                    break s;
-                }
-                None => {
-                    continue;
-                }
-            };
+            break [s0, s1];
         };
+        let s2: Vec<Complex64> = ifft(&bold_s[1]).to_vec();
+        let maybe_s = compress(
+            &s2.iter().map(|a| a.re.round() as i16).collect_vec(),
+            8 * (params.sig_bytelen - 41),
+        );
 
-        Signature { r, s }
-    }
-
-    /// Verify a signature. Algorithm 16 in the spec [1, p.45].
-    ///
-    /// [1]: https://falcon-sign.info/falcon.pdf
-    pub fn verify(&self, m: &[u8], sig: &Signature, pk: &PublicKey) -> bool {
-        let n = self.n;
-        let r_cat_m = [sig.r.to_vec(), m.to_vec()].concat();
-        let c = hash_to_point(&r_cat_m, n);
-
-        let s2 = match decompress(&sig.s, (self.sig_bytelen - 41) * 8, n) {
-            Some(success) => success,
+        match maybe_s {
+            Some(s) => {
+                break s;
+            }
             None => {
-                return false;
+                continue;
             }
         };
-        let s2_ntt = ntt(&s2.iter().map(|a| Felt::new(*a)).collect_vec());
-        let h_ntt = ntt(&pk.h);
-        let c_ntt = ntt(&c.coefficients);
+    };
 
-        // s1 = c - s2 * pk.h;
-        let s1_ntt = c_ntt
-            .iter()
-            .zip(s2_ntt.iter().zip(h_ntt.iter()))
-            .map(|(&a, (&b, &c))| a - b * c)
-            .collect_vec();
-        let s1 = intt(&s1_ntt);
+    Signature { r, s }
+}
 
-        let length_squared = s1
-            .iter()
-            .map(|i| i.balanced_value() as i64)
-            .map(|i| (i * i))
-            .sum::<i64>()
-            + s2.iter().map(|&i| i as i64).map(|i| (i * i)).sum::<i64>();
-        length_squared < self.sig_bound
-    }
+/// Verify a signature. Algorithm 16 in the spec [1, p.45].
+///
+/// [1]: https://falcon-sign.info/falcon.pdf
+pub fn verify<const N: usize>(m: &[u8], sig: &Signature<N>, pk: &PublicKey<N>) -> bool {
+    let n = N;
+    let params = FalconVariant::from_n(N).parameters();
+    let r_cat_m = [sig.r.to_vec(), m.to_vec()].concat();
+    let c = hash_to_point(&r_cat_m, n);
+
+    let s2 = match decompress(&sig.s, (params.sig_bytelen - 41) * 8, n) {
+        Some(success) => success,
+        None => {
+            return false;
+        }
+    };
+    let s2_ntt = ntt(&s2.iter().map(|a| Felt::new(*a)).collect_vec());
+    let h_ntt = ntt(&pk.h);
+    let c_ntt = ntt(&c.coefficients);
+
+    // s1 = c - s2 * pk.h;
+    let s1_ntt = c_ntt
+        .iter()
+        .zip(s2_ntt.iter().zip(h_ntt.iter()))
+        .map(|(&a, (&b, &c))| a - b * c)
+        .collect_vec();
+    let s1 = intt(&s1_ntt);
+
+    let length_squared = s1
+        .iter()
+        .map(|i| i.balanced_value() as i64)
+        .map(|i| (i * i))
+        .sum::<i64>()
+        + s2.iter().map(|&i| i as i64).map(|i| (i * i)).sum::<i64>();
+    length_squared < params.sig_bound
 }
 
 #[cfg(test)]
@@ -844,7 +869,7 @@ mod test {
 
     use crate::{
         encoding::compress,
-        falcon::{gram_schmidt_norm, Signature, FALCON_1024, FALCON_512},
+        falcon::{gram_schmidt_norm, keygen, sign, verify, FalconVariant, Signature},
         field::Felt,
         polynomial::{hash_to_point, Polynomial},
     };
@@ -858,13 +883,13 @@ mod test {
         rng.fill_bytes(&mut msg);
 
         println!("testing small scheme ...");
-        let small_scheme = FALCON_512;
+        const N: usize = 512;
         println!("-> keygen ...");
-        let (sk, pk) = small_scheme.keygen(rng.gen());
+        let (sk, pk) = keygen::<N>(rng.gen());
         println!("-> sign ...");
-        let sig = small_scheme.sign(&msg, &sk);
+        let sig = sign::<N>(&msg, &sk);
         println!("-> verify ...");
-        assert!(small_scheme.verify(&msg, &sig, &pk));
+        assert!(verify::<N>(&msg, &sig, &pk));
         println!("-> ok.");
     }
 
@@ -881,14 +906,14 @@ mod test {
         let mut msg = [0u8; 5];
         rng.fill_bytes(&mut msg);
         println!("testing big scheme ...");
-        let big_scheme = FALCON_1024;
+        const N: usize = 1024;
         println!("-> keygen ...");
-        let (sk, pk) = big_scheme.keygen(rng.gen());
+        let (sk, pk) = keygen::<N>(rng.gen());
         println!("-> sign ...");
-        let sig = big_scheme.sign(&msg, &sk);
+        let sig = sign::<N>(&msg, &sk);
         println!("-> verify ...");
-        assert!(big_scheme.verify(&msg, &sig, &pk));
-        println!("-> ok.\n");
+        assert!(verify::<N>(&msg, &sig, &pk));
+        println!("-> ok.");
     }
 
     #[test]
@@ -1004,7 +1029,7 @@ mod test {
             Polynomial::new(capital_g),
             Polynomial::new(capital_f.into_iter().map(|i| -i).collect_vec()),
         ];
-        let sk = SecretKey::from_b0(FALCON_512.sigma, b0);
+        let sk = SecretKey::<512>::from_b0(b0);
 
         let expected_signature_vector = vec![
             11, 201, 176, -24, -141, -151, -63, -323, 154, -363, 168, -173, -29, -184, -142, 419,
@@ -1042,7 +1067,7 @@ mod test {
             r: nonce.try_into().unwrap(),
             s: compress(
                 &expected_signature_vector,
-                (FALCON_512.sig_bytelen - 41) * 8,
+                (FalconVariant::from_n(512).parameters().sig_bytelen - 41) * 8,
             )
             .unwrap(),
         };
@@ -1052,7 +1077,7 @@ mod test {
         // let obtained_signature = SignatureScheme::new(FalconVariant::Falcon512).sign(&data, &sk);
 
         let pk = PublicKey::from_secret_key(&sk);
-        assert!(FALCON_512.verify(&data, &sig, &pk));
+        assert!(verify::<512>(&data, &sig, &pk));
     }
 
     #[test]
@@ -1319,7 +1344,7 @@ mod test {
             Polynomial::new(capital_g),
             Polynomial::new(capital_f.into_iter().map(|i| -i).collect_vec()),
         ];
-        let sk = SecretKey::from_b0(FALCON_512.sigma, b0);
+        let sk = SecretKey::<1024>::from_b0(b0);
 
         let signature_vector = vec![
             -65, 348, 265, 166, -45, 9, 28, 84, 68, 20, -184, 212, -363, -20, -176, -33, 210, 165,
@@ -1383,13 +1408,17 @@ mod test {
             -258, 55, -130, 190, -133, -34, 121, -293, -124, -130, -98, 20, -56, -9, 21, -266, -12,
             -59,
         ];
-        let sig = Signature {
+        let sig = Signature::<1024> {
             r: nonce.try_into().unwrap(),
-            s: compress(&signature_vector, (FALCON_1024.sig_bytelen - 41) * 8).unwrap(),
+            s: compress(
+                &signature_vector,
+                (FalconVariant::Falcon1024.parameters().sig_bytelen - 41) * 8,
+            )
+            .unwrap(),
         };
 
         let pk = PublicKey::from_secret_key(&sk);
-        assert!(FALCON_1024.verify(&data, &sig, &pk));
+        assert!(verify::<1024>(&data, &sig, &pk));
     }
 
     fn signature_vector(n: usize) -> Vec<i16> {
@@ -1501,9 +1530,13 @@ mod test {
         let n = 1024;
         let sigvec = signature_vector(n);
         let nonce = [0u8; 40];
-        let original_signature = Signature {
+        let original_signature = Signature::<1024> {
             r: nonce,
-            s: compress(&sigvec, (FALCON_1024.sig_bytelen - 41) * 8).unwrap(),
+            s: compress(
+                &sigvec,
+                (FalconVariant::Falcon1024.parameters().sig_bytelen - 41) * 8,
+            )
+            .unwrap(),
         };
 
         let serialized = original_signature.to_bytes();
@@ -1514,9 +1547,13 @@ mod test {
         let n = 512;
         let sigvec = signature_vector(n);
         let nonce = [0u8; 40];
-        let original_signature = Signature {
+        let original_signature = Signature::<512> {
             r: nonce,
-            s: compress(&sigvec, (FALCON_512.sig_bytelen - 41) * 8).unwrap(),
+            s: compress(
+                &sigvec,
+                (FalconVariant::Falcon512.parameters().sig_bytelen - 41) * 8,
+            )
+            .unwrap(),
         };
 
         let serialized = original_signature.to_bytes();
@@ -1532,31 +1569,35 @@ mod test {
         let n = 512;
         let sigvec = signature_vector(n);
         let nonce = [0u8; 40];
-        let original_signature = Signature {
+        let original_signature = Signature::<512> {
             r: nonce,
-            s: compress(&sigvec, (FALCON_512.sig_bytelen - 41) * 8).unwrap(),
+            s: compress(
+                &sigvec,
+                (FalconVariant::Falcon512.parameters().sig_bytelen - 41) * 8,
+            )
+            .unwrap(),
         };
         let mut serialized = original_signature.to_bytes();
 
         // try every byte of header
         for i in 0..8 {
             serialized[0] ^= 1 << i;
-            assert!(Signature::from_bytes(&serialized).is_err());
+            assert!(Signature::<512>::from_bytes(&serialized).is_err());
             serialized[0] ^= 1 << i;
         }
 
         // try change length
         let longer = [serialized.clone(), vec![0u8]].concat();
-        assert!(Signature::from_bytes(&longer).is_err());
+        assert!(Signature::<512>::from_bytes(&longer).is_err());
 
         let len = serialized.len();
         let shorter = serialized[0..(len - 1)].to_vec();
-        assert!(Signature::from_bytes(&shorter).is_err());
+        assert!(Signature::<512>::from_bytes(&shorter).is_err());
     }
 
     #[test]
     fn test_secret_key_serialization() {
-        let sk = SecretKey::generate(&FALCON_512);
+        let sk = SecretKey::<512>::generate();
         let serialized = sk.to_bytes();
         let deserialized = SecretKey::from_bytes(&serialized).unwrap();
         let reserialized = deserialized.to_bytes();
@@ -1567,28 +1608,28 @@ mod test {
 
     #[test]
     fn test_secret_key_serialization_fail() {
-        let sk = SecretKey::generate(&FALCON_512);
+        let sk = SecretKey::<512>::generate();
         let mut serialized = sk.to_bytes();
         let len = serialized.len();
 
         // test every bit in header
         for i in 0..8 {
             serialized[0] ^= 1 << i;
-            assert!(SecretKey::from_bytes(&serialized).is_err());
+            assert!(SecretKey::<512>::from_bytes(&serialized).is_err());
             serialized[0] ^= 1 << i;
         }
 
         // change length
         let longer = [serialized, vec![0]].concat();
-        assert!(SecretKey::from_bytes(&longer).is_err());
+        assert!(SecretKey::<512>::from_bytes(&longer).is_err());
 
         let shorter = &longer[0..len - 1];
-        assert!(SecretKey::from_bytes(shorter).is_err());
+        assert!(SecretKey::<512>::from_bytes(shorter).is_err());
     }
 
     #[test]
     fn test_public_key_serialization() {
-        let pk = PublicKey::from_secret_key(&SecretKey::generate(&FALCON_512));
+        let pk = PublicKey::from_secret_key(&SecretKey::<512>::generate());
         let serialized = pk.to_bytes();
         let deserialized = PublicKey::from_bytes(&serialized).unwrap();
         let reserialized = deserialized.to_bytes();
@@ -1599,44 +1640,58 @@ mod test {
 
     #[test]
     fn test_public_key_serialization_fail() {
-        let pk = PublicKey::from_secret_key(&SecretKey::generate(&FALCON_512));
+        let pk = PublicKey::from_secret_key(&SecretKey::<512>::generate());
         let mut serialized = pk.to_bytes();
         let len = serialized.len();
 
         // test every bit in header
         for i in 0..8 {
             serialized[0] ^= 1 << i;
-            assert!(SecretKey::from_bytes(&serialized).is_err());
+            assert!(SecretKey::<512>::from_bytes(&serialized).is_err());
             serialized[0] ^= 1 << i;
         }
 
         // change length
         let longer = [serialized, vec![0]].concat();
-        assert!(SecretKey::from_bytes(&longer).is_err());
+        assert!(SecretKey::<512>::from_bytes(&longer).is_err());
 
         let shorter = &longer[0..len - 1];
-        assert!(SecretKey::from_bytes(shorter).is_err());
+        assert!(SecretKey::<512>::from_bytes(shorter).is_err());
     }
 
     #[test]
     fn test_secret_key_field_element_serialization() {
         let mut rng = thread_rng();
-        for n in [512, 1024] {
-            for polynomial_index in [0, 1, 2] {
-                let width = SecretKey::field_element_width(n, polynomial_index);
-                for _ in 0..100000 {
-                    let int = rng.gen_range(-(1 << (width - 1))..(1 << (width - 1)));
-                    if int == -(1i16 << (width - 1)) {
-                        continue;
-                    }
-                    let felt = Felt::new(int);
-                    let ser = SecretKey::serialize_field_element(width, felt);
-                    let des = SecretKey::deserialize_field_element(&ser).unwrap();
-                    let res = SecretKey::serialize_field_element(width, des);
-
-                    assert_eq!(felt, des);
-                    assert_eq!(ser, res);
+        for polynomial_index in [0, 1, 2] {
+            let width = SecretKey::<512>::field_element_width(512, polynomial_index);
+            for _ in 0..100000 {
+                let int = rng.gen_range(-(1 << (width - 1))..(1 << (width - 1)));
+                if int == -(1i16 << (width - 1)) {
+                    continue;
                 }
+                let felt = Felt::new(int);
+                let ser = SecretKey::<512>::serialize_field_element(width, felt);
+                let des = SecretKey::<512>::deserialize_field_element(&ser).unwrap();
+                let res = SecretKey::<512>::serialize_field_element(width, des);
+
+                assert_eq!(felt, des);
+                assert_eq!(ser, res);
+            }
+        }
+        for polynomial_index in [0, 1, 2] {
+            let width = SecretKey::<1024>::field_element_width(1024, polynomial_index);
+            for _ in 0..100000 {
+                let int = rng.gen_range(-(1 << (width - 1))..(1 << (width - 1)));
+                if int == -(1i16 << (width - 1)) {
+                    continue;
+                }
+                let felt = Felt::new(int);
+                let ser = SecretKey::<1024>::serialize_field_element(width, felt);
+                let des = SecretKey::<1024>::deserialize_field_element(&ser).unwrap();
+                let res = SecretKey::<1024>::serialize_field_element(width, des);
+
+                assert_eq!(felt, des);
+                assert_eq!(ser, res);
             }
         }
     }

@@ -1,6 +1,8 @@
 pub(crate) mod common;
 pub(crate) mod encoding;
-pub mod falcon;
+pub(crate) mod falcon;
+pub mod falcon1024;
+pub mod falcon512;
 pub(crate) mod ffsampling;
 pub(crate) mod fft;
 pub(crate) mod fft_constants;
