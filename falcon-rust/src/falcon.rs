@@ -824,7 +824,7 @@ impl SignatureScheme {
 mod test {
     use itertools::Itertools;
     use num::{BigInt, FromPrimitive};
-    use rand::{thread_rng, Rng, RngCore};
+    use rand::{rngs::StdRng, thread_rng, Rng, RngCore, SeedableRng};
 
     use crate::{
         encoding::compress,
@@ -836,7 +836,7 @@ mod test {
     use super::{gen_poly, ntru_gen, ntru_solve, PublicKey, SecretKey};
 
     #[test]
-    fn test_operation() {
+    fn test_operation_falcon_512() {
         let mut rng = thread_rng();
         let mut msg = [0u8; 5];
         rng.fill_bytes(&mut msg);
@@ -850,7 +850,19 @@ mod test {
         println!("-> verify ...");
         assert!(small_scheme.verify(&msg, &sig, &pk));
         println!("-> ok.");
+    }
 
+    #[test]
+    fn test_stalling_operation_falcon_1024() {
+        let seed: [u8; 32] = [
+            119, 186, 1, 120, 0, 255, 165, 121, 56, 149, 105, 255, 53, 63, 192, 102, 231, 197, 233,
+            249, 212, 179, 1, 18, 33, 42, 137, 10, 172, 179, 168, 35,
+        ];
+        println!("seed: {:2?}", seed);
+        let mut rng: StdRng = SeedableRng::from_seed(seed);
+
+        let mut msg = [0u8; 5];
+        rng.fill_bytes(&mut msg);
         println!("testing big scheme ...");
         let big_scheme = FALCON_1024;
         println!("-> keygen ...");
@@ -859,7 +871,7 @@ mod test {
         let sig = big_scheme.sign(&msg, &sk);
         println!("-> verify ...");
         assert!(big_scheme.verify(&msg, &sig, &pk));
-        println!("-> ok.");
+        println!("-> ok.\n");
     }
 
     #[test]

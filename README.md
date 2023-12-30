@@ -34,6 +34,7 @@ and the official [python implementation](https://github.com/tprest/falcon.py).
  - [ ] negative tests
  - [ ] Montgomery representation for field elements
  - [ ] Karatsuba for big integer polynomial multiplication
+ - [ ] streaming (de)serialization
 
 ## Contributing
 
