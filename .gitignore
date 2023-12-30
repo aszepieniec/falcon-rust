@@ -1,1 +1,3 @@
 Cargo.lock
+target/*
+falcon-rust/target/*
