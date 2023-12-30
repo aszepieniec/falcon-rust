@@ -9,6 +9,8 @@ license = "MIT"
 
 [dependencies]
 falcon-rust = { path = "../falcon-rust/" }
+itertools = "0.12.0"
+pqcrypto-falcon = "0.3.0"
 rand = "0.8.5"
 
 [dev-dependencies]

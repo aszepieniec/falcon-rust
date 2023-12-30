@@ -229,7 +229,7 @@ fn babai_reduce(
 
         counter += 1;
         if counter > 10000 {
-            panic!("Should not have to do more than 10000 iterations!");
+            panic!("Should not have to do more than 10000 iterations! This probably indicates an infinite loop. Please file a bug report, for instance by opening an issue on https://github.com/aszepieniec/falcon-rust/. Debug information:\nf: {:?}\ng: {:?}\ncapital_f: {:?}\ncapital_g: {:?}", f.coefficients, g.coefficients, capital_f.coefficients, capital_g.coefficients);
         }
     }
 }
