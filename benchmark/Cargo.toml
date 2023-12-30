@@ -1,0 +1,19 @@
+[package]
+name = "benchmark"
+version = "0.1.0"
+edition = "2021"
+description = "Benchmarking suite for falcon-rust."
+license = "MIT"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+falcon-rust = { path = "../falcon-rust/" }
+rand = "0.8.5"
+
+[dev-dependencies]
+criterion = { version = "0.4.0", features = ["html_reports"] }
+
+[[bench]]
+name = "falcon_rust"
+harness = false

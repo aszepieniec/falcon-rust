@@ -26,7 +26,6 @@ and the official [python implementation](https://github.com/tprest/falcon.py).
 
 ## To-do's
 
- - [ ] benchmarking suite
  - [ ] optimize representation of secret key, signature, public key
  - [ ] include usage example in readme
  - [ ] make LdlTree straightforward

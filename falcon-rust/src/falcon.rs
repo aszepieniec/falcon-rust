@@ -124,8 +124,6 @@ fn ntru_gen(
                 capital_f.map(|i| i.try_into().unwrap()),
                 capital_g.map(|i| i.try_into().unwrap()),
             );
-        } else {
-            continue;
         }
     }
 }
@@ -653,7 +651,11 @@ impl Signature {
                         | (1 << 4) // fixed bit
                         | l;
 
-        [vec![header], self.r.to_vec(), self.s.to_vec()].concat()
+        vec![header]
+            .into_iter()
+            .chain(self.r)
+            .chain(self.s.iter().cloned())
+            .collect_vec()
     }
 
     /// Deserialize a signature from a slice of bytes.
