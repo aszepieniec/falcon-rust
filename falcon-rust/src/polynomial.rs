@@ -48,6 +48,43 @@ where
     }
 }
 
+impl<F: Mul<Output = F> + Div<Output = F> + Clone> Polynomial<F> {
+    pub fn hadamard_mul(&self, other: &Self) -> Self {
+        Polynomial::new(
+            self.coefficients
+                .iter()
+                .zip(other.coefficients.iter())
+                .map(|(a, b)| a.clone() * b.clone())
+                .collect_vec(),
+        )
+    }
+    pub fn hadamard_div(&self, other: &Self) -> Self {
+        Polynomial::new(
+            self.coefficients
+                .iter()
+                .zip(other.coefficients.iter())
+                .map(|(a, b)| a.clone() / b.clone())
+                .collect_vec(),
+        )
+    }
+}
+
+impl Polynomial<f64> {
+    pub fn fft(&self) -> Polynomial<Complex64> {
+        Polynomial::new(fft(&self
+            .coefficients
+            .iter()
+            .map(|&r| Complex64::new(r, 0.0))
+            .collect_vec()))
+    }
+}
+
+impl Polynomial<Complex64> {
+    pub fn ifft(&self) -> Polynomial<f64> {
+        Polynomial::new(ifft(&self.coefficients).iter().map(|c| c.re).collect_vec())
+    }
+}
+
 impl<F: Zero + PartialEq + Clone> Polynomial<F> {
     pub fn degree(&self) -> Option<usize> {
         if self.coefficients.is_empty() {

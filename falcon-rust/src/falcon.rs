@@ -1,5 +1,3 @@
-use std::str::FromStr;
-
 use bit_vec::BitVec;
 use itertools::Itertools;
 use num::{BigInt, FromPrimitive, One};
@@ -126,6 +124,8 @@ fn ntru_gen(
                 capital_f.map(|i| i.try_into().unwrap()),
                 capital_g.map(|i| i.try_into().unwrap()),
             );
+        } else {
+            continue;
         }
     }
 }
@@ -180,14 +180,15 @@ fn babai_reduce(
     let shift = (size as i64) - 53;
     let f_adjusted = f.map(|bi| i64::try_from(bi >> shift).unwrap() as f64);
     let g_adjusted = g.map(|bi| i64::try_from(bi >> shift).unwrap() as f64);
+    let f_adjusted_fft = f_adjusted.fft();
+    let g_adjusted_fft = g_adjusted.fft();
 
-    let f_star = f_adjusted.hermitian_adjoint();
-    let g_star = g_adjusted.hermitian_adjoint();
-    let ffgg = (f_adjusted.clone() * f_star.clone()).reduce_by_cyclotomic(n)
-        + (g_adjusted.clone() * g_star.clone()).reduce_by_cyclotomic(n);
+    let f_star_adjusted_fft = f_adjusted_fft.map(|c| c.conj());
+    let g_star_adjusted_fft = g_adjusted_fft.map(|c| c.conj());
+    let denominator_fft = f_adjusted_fft.hadamard_mul(&f_star_adjusted_fft)
+        + g_adjusted_fft.hadamard_mul(&g_star_adjusted_fft);
 
-    let approximate_denom_inv = ffgg.approximate_cyclotomic_ring_inverse(n);
-
+    let mut counter = 0;
     loop {
         let capital_size = [
             capital_f.map(bitsize).fold(0, |a, &b| u64::max(a, b)),
@@ -207,11 +208,15 @@ fn babai_reduce(
         let capital_g_adjusted =
             capital_g.map(|bi| i64::try_from(bi >> capital_shift).unwrap() as f64);
 
-        let capital_ffstar = (capital_f_adjusted.clone() * f_star.clone()).reduce_by_cyclotomic(n);
-        let capital_ggstar = (capital_g_adjusted.clone() * g_star.clone()).reduce_by_cyclotomic(n);
-        let quotient = ((capital_ffstar + capital_ggstar) * approximate_denom_inv.clone())
-            .reduce_by_cyclotomic(n);
+        let capital_f_adjusted_fft = capital_f_adjusted.fft();
+        let capital_g_adjusted_fft = capital_g_adjusted.fft();
+        let numerator_fft = capital_f_adjusted_fft.hadamard_mul(&f_star_adjusted_fft)
+            + capital_g_adjusted_fft.hadamard_mul(&g_star_adjusted_fft);
+        let quotient_fft = numerator_fft.hadamard_div(&denominator_fft);
+        let quotient = quotient_fft.ifft();
+
         let k = quotient.map(|f| Into::<BigInt>::into(f.round() as i64));
+
         if k.is_zero() {
             break;
         }
@@ -223,6 +228,11 @@ fn babai_reduce(
             .map(|bi| bi << (capital_size - size));
         *capital_f -= kf;
         *capital_g -= kg;
+
+        counter += 1;
+        if counter > 10000 {
+            panic!("Should not have to do more than 10000 iterations!");
+        }
     }
 }
 
@@ -858,10 +868,11 @@ mod test {
 
     #[test]
     fn test_stalling_operation_falcon_1024() {
-        let seed: [u8; 32] = [
-            119, 186, 1, 120, 0, 255, 165, 121, 56, 149, 105, 255, 53, 63, 192, 102, 231, 197, 233,
-            249, 212, 179, 1, 18, 33, 42, 137, 10, 172, 179, 168, 35,
-        ];
+        // let seed: [u8; 32] = [
+        //     119, 186, 1, 120, 0, 255, 165, 121, 56, 149, 105, 255, 53, 63, 192, 102, 231, 197, 233,
+        //     249, 212, 179, 1, 18, 33, 42, 137, 10, 172, 179, 168, 35,
+        // ];
+        let seed: [u8; 32] = thread_rng().gen();
         println!("seed: {:2?}", seed);
         let mut rng: StdRng = SeedableRng::from_seed(seed);
 
