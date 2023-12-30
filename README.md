@@ -8,8 +8,21 @@ standardization project and was [selected](https://csrc.nist.gov/Projects/post-q
 standardization. The final standard is still outstanding. We do anticipate slight changes
 between the standard and the submission, and these changes might break compatibility.
 
+Falcon comes in two variants. Falcon512 claims at least 108 bits of security, and
+Falcon1024 claims at least 252 bits of security, both against quantum computers.
+
 This implementation was written following the [specification](https://falcon-sign.info/falcon.pdf)
 and the official [python implementation](https://github.com/tprest/falcon.py).
+
+## Example
+
+```rust
+let mut rng = thread_rng();
+let mut msg : [u8; 5] = rng.gen();
+let (sk, pk) = falcon512::keygen(rng.gen());
+let sig = falcon512::sign(&msg, &sk);
+assert!(falcon512::verify(&msg, &sig, &pk));
+```
 
 ## Performance
 
@@ -33,9 +46,9 @@ better ones.
  - [x] signature verification
  - [x] derandomized algorithms
  - [x] (de)serialization
+ - [ ] optimal algorithms (e.g. Karatsuba)
  - [ ] uncompressed signature format
  - [ ] signed-message interface
- - [ ] optimal algorithms (e.g. Karatsuba)
  - [ ] hardware optimizations
  - [ ] message-recovery mode
  - [ ] compatible interface with [`pqcrypto-falcon`](https://crates.io/crates/pqcrypto-falcon)
@@ -43,9 +56,9 @@ better ones.
 
 ## To-do's
 
- - [ ] optimize representation of secret key, signature, public key
- - [ ] include usage example in readme
+ - [ ] NIST KATs
  - [ ] make LdlTree straightforward
+ - [ ] optimize representation of secret key, signature, public key
  - [ ] test interoperability against the reference implementation
  - [ ] negative tests
  - [ ] Montgomery representation for field elements
