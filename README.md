@@ -31,13 +31,11 @@ Performance is still inferior to the optimized C code accessible from rust via t
 
 |                      | Keygen      | Sign      | Verify    |
 |----------------------|-------------|-----------|-----------|
-|      falcon-rust 512 | 668.55 ms   | 736.07 µs | 149.55 µs |
-|     falcon-rust 1025 |   4.0982 s  | 1.4869 ms | 310.58 µs |
+|      falcon-rust 512 | 429.55 ms   | 695.92 µs | 151.20 µs |
+|     falcon-rust 1025 |   2.4075 s  | 1.4261 ms | 317.95 µs |
 |  pqcrypto-falcon 512 |   7.5356 ms | 253.44 µs | 48.065 µs |
 | pqcrypto-falcon 1024 |  21.454 ms  | 510.43 µs | 94.669 µs |
 
-Note that performance improvements may be expected as naïve algorithms are replaced by
-better ones.
 
 ## Features
 
@@ -46,7 +44,7 @@ better ones.
  - [x] signature verification
  - [x] derandomized algorithms
  - [x] (de)serialization
- - [ ] optimal algorithms (e.g. Karatsuba)
+ - [ ] better algorithms (e.g. Montgomery)
  - [ ] uncompressed signature format
  - [ ] signed-message interface
  - [ ] hardware optimizations
@@ -61,8 +59,8 @@ better ones.
  - [ ] optimize representation of secret key, signature, public key
  - [ ] test interoperability against the reference implementation
  - [ ] negative tests
+ - [ ] profile, and fix bottlenecks
  - [ ] Montgomery representation for field elements
- - [ ] Karatsuba for big integer polynomial multiplication
  - [ ] streaming (de)serialization
  - [ ] investigate secret-dependent time variability
 

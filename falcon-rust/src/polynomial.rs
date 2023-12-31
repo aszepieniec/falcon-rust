@@ -32,6 +32,7 @@ where
     /// In this structure, the Hermitian adjoint is given by
     ///
     /// $$ f*(X) = f_{[0]} + \sum_{i=1}^{n-1} f_{[i]} * X({n-i}) . $$
+    #[allow(dead_code)]
     pub fn hermitian_adjoint(&self) -> Polynomial<F> {
         let coefficients = [
             vec![self.coefficients[0].clone()],
@@ -48,7 +49,62 @@ where
     }
 }
 
-impl<F: Mul<Output = F> + Div<Output = F> + Clone> Polynomial<F> {
+fn vector_karatsuba<
+    F: Zero + AddAssign + Mul<Output = F> + Sub<Output = F> + Div<Output = F> + Clone,
+>(
+    left: &[F],
+    right: &[F],
+) -> Vec<F> {
+    let n = left.len();
+    if n <= 8 {
+        let mut product = vec![F::zero(); left.len() + right.len() - 1];
+        for (i, l) in left.iter().enumerate() {
+            for (j, r) in right.iter().enumerate() {
+                product[i + j] += l.clone() * r.clone();
+            }
+        }
+        return product;
+    }
+    let n_over_2 = n / 2;
+    let mut product = vec![F::zero(); 2 * n - 1];
+    let left_lo = &left[0..n_over_2];
+    let right_lo = &right[0..n_over_2];
+    let left_hi = &left[n_over_2..];
+    let right_hi = &right[n_over_2..];
+    let left_sum = left_lo
+        .iter()
+        .zip(left_hi)
+        .map(|(a, b)| a.clone() + b.clone())
+        .collect_vec();
+    let right_sum = right_lo
+        .iter()
+        .zip(right_hi)
+        .map(|(a, b)| a.clone() + b.clone())
+        .collect_vec();
+
+    let prod_lo = vector_karatsuba(left_lo, right_lo);
+    let prod_hi = vector_karatsuba(left_hi, right_hi);
+    let prod_mid = vector_karatsuba(&left_sum, &right_sum)
+        .iter()
+        .zip(prod_lo.iter().zip(prod_hi.iter()))
+        .map(|(s, (l, h))| s.clone() - (l.clone() + h.clone()))
+        .collect_vec();
+
+    for (i, l) in prod_lo.into_iter().enumerate() {
+        product[i] = l;
+    }
+    for (i, m) in prod_mid.into_iter().enumerate() {
+        product[i + n_over_2] += m;
+    }
+    for (i, h) in prod_hi.into_iter().enumerate() {
+        product[i + n] += h
+    }
+    product
+}
+
+impl<F: Mul<Output = F> + Sub<Output = F> + AddAssign + Zero + Div<Output = F> + Clone>
+    Polynomial<F>
+{
     pub fn hadamard_mul(&self, other: &Self) -> Self {
         Polynomial::new(
             self.coefficients
@@ -66,6 +122,11 @@ impl<F: Mul<Output = F> + Div<Output = F> + Clone> Polynomial<F> {
                 .map(|(a, b)| a.clone() / b.clone())
                 .collect_vec(),
         )
+    }
+
+    /// Multiply two polynomials using Karatsuba's divide-and-conquer algorithm.
+    pub fn karatsuba(&self, other: &Self) -> Self {
+        Polynomial::new(vector_karatsuba(&self.coefficients, &other.coefficients))
     }
 }
 
@@ -265,64 +326,8 @@ impl<
     }
 }
 
-impl Polynomial<f64> {
-    /// Compute a floating-point approximation of the multiplicative inverse of the
-    /// polynomial in the ring  F[ X ] / <X^n + 1>
-    pub fn approximate_cyclotomic_ring_inverse(&self, n: usize) -> Self {
-        let coefficients = [
-            self.coefficients.clone(),
-            vec![0.0; n - self.coefficients.len()],
-        ]
-        .concat()
-        .iter()
-        .map(|r| Complex64::new(*r, 0.0))
-        .collect_vec();
-        let fft_coefficients = fft(&coefficients);
-        let inverse_coefficients =
-            ifft(&fft_coefficients.into_iter().map(|c| 1.0 / c).collect_vec());
-        Self {
-            coefficients: inverse_coefficients.iter().map(|c| c.re).collect_vec(),
-        }
-    }
-
-    /// Use the FFT to compute approximately the division a / b of elements in the
-    /// cyclotomic ring F[X] / <X^n + 1>.
-    #[allow(dead_code)]
-    pub(crate) fn approximate_cyclotomic_ring_divide(&self, other: &Self, n: usize) -> Self {
-        let self_coefficients = [
-            self.coefficients.clone(),
-            vec![0.0; n - self.coefficients.len()],
-        ]
-        .concat()
-        .iter()
-        .map(|r| Complex64::new(*r, 0.0))
-        .collect_vec();
-        let other_coefficients = [
-            other.coefficients.clone(),
-            vec![0.0; n - other.coefficients.len()],
-        ]
-        .concat()
-        .iter()
-        .map(|r| Complex64::new(*r, 0.0))
-        .collect_vec();
-        let self_fft = fft(&self_coefficients);
-        let other_fft = fft(&other_coefficients);
-        let quotient_fft = self_fft
-            .into_iter()
-            .zip(other_fft)
-            .map(|(a, b)| a / b)
-            .collect_vec();
-        let quotient_coefficients = ifft(&quotient_fft);
-        Polynomial::new(
-            quotient_coefficients
-                .into_iter()
-                .map(|c| c.re)
-                .collect_vec(),
-        )
-    }
-}
-
 impl<F: Clone + Into<f64>> Polynomial<F> {
+    #[allow(dead_code)]
     pub(crate) fn l2_norm(&self) -> f64 {
         self.coefficients
             .iter()
@@ -330,6 +335,13 @@ impl<F: Clone + Into<f64>> Polynomial<F> {
             .map(|i| i * i)
             .sum::<f64>()
             .sqrt()
+    }
+    pub(crate) fn l2_norm_squared(&self) -> f64 {
+        self.coefficients
+            .iter()
+            .map(|i| Into::<f64>::into(i.clone()))
+            .map(|i| i * i)
+            .sum::<f64>()
     }
 }
 
@@ -468,7 +480,7 @@ impl<F: Neg<Output = F> + Clone> Neg for Polynomial<F> {
 
 impl<F> Mul for &Polynomial<F>
 where
-    F: Add + AddAssign + Mul<Output = F> + Zero + PartialEq + Clone,
+    F: Add + AddAssign + Mul<Output = F> + Sub<Output = F> + Zero + PartialEq + Clone,
 {
     type Output = Polynomial<F>;
 
@@ -629,7 +641,6 @@ mod test {
     use num_complex::Complex64;
     use rand::thread_rng;
     use rand::Rng;
-    use rand_distr::num_traits::One;
     use sha3::digest::ExtendableOutput;
     use sha3::digest::Update;
     use sha3::digest::XofReader;
@@ -729,18 +740,6 @@ mod test {
     }
 
     #[test]
-    fn test_approximate_cyclotomic_ring_inverse() {
-        let mut rng = thread_rng();
-        let n = 64;
-        let coefficients = (0..n).map(|_| rng.gen_range(-5..5) as f64).collect_vec();
-        let polynomial = Polynomial::new(coefficients);
-        let inverse = polynomial.approximate_cyclotomic_ring_inverse(n);
-        let product = polynomial * inverse;
-        let difference = product.reduce_by_cyclotomic(n) - Polynomial::<f64>::one();
-        assert!(difference.l2_norm() < f64::EPSILON * 100.0);
-    }
-
-    #[test]
     fn test_cyclotomic_multiplication() {
         let mut rng = thread_rng();
         let n = 64;
@@ -807,7 +806,7 @@ mod test {
     }
 
     #[test]
-    fn test_approximate_cyclotomic_ring_divide() {
+    fn test_karatsuba() {
         let mut rng = thread_rng();
         let n = 64;
         let coefficients_lhs = (0..n).map(|_| rng.gen_range(-5..5) as f64).collect_vec();
@@ -815,17 +814,9 @@ mod test {
         let coefficients_rhs = (0..n).map(|_| rng.gen_range(-5..5) as f64).collect_vec();
         let rhs = Polynomial::new(coefficients_rhs);
 
-        let inverse = rhs.approximate_cyclotomic_ring_inverse(n);
-        let product1 = (lhs.clone() * inverse).reduce_by_cyclotomic(n);
-
-        let product2 = lhs.approximate_cyclotomic_ring_divide(&rhs, n);
-
-        let difference = product1.clone() - product2.clone();
-        assert!(
-            difference.l2_norm() <= f64::EPSILON * 100.0,
-            "lhs*inverse: {:?}\nlhs/rhs: {:?}",
-            product1.coefficients,
-            product2.coefficients
-        );
+        let schoolbook = lhs.clone() * rhs.clone();
+        let karatsuba = lhs.karatsuba(&rhs);
+        let difference = schoolbook - karatsuba;
+        assert!(difference.l2_norm() < f64::EPSILON * 100.0);
     }
 }

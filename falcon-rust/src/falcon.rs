@@ -77,26 +77,33 @@ fn gen_poly(n: usize, rng: &mut dyn RngCore) -> Polynomial<i16> {
 /// Corresponds to line 9 in algorithm 5 of the spec [1, p.34]
 ///
 /// [1]: https://falcon-sign.info/falcon.pdf
-fn gram_schmidt_norm(f: &Polynomial<i16>, g: &Polynomial<i16>) -> f64 {
+fn gram_schmidt_norm_squared(f: &Polynomial<i16>, g: &Polynomial<i16>) -> f64 {
     let n = f.coefficients.len();
-    let norm_f = f.l2_norm();
-    let norm_g = g.l2_norm();
-    let sqnorm = norm_f * norm_f + norm_g * norm_g;
-    let gamma1 = f64::sqrt(sqnorm);
+    let norm_f_squared = f.l2_norm_squared();
+    let norm_g_squared = g.l2_norm_squared();
+    let gamma1 = norm_f_squared + norm_g_squared;
 
-    let f_adj = f.hermitian_adjoint();
-    let g_adj = g.hermitian_adjoint();
-    let ffgg = (f.clone() * f_adj.clone() + g.clone() * g_adj.clone()).reduce_by_cyclotomic(n);
-    let ffgg_float = ffgg.map(|c| *c as f64);
-    let ffgginv = ffgg_float.approximate_cyclotomic_ring_inverse(n);
-    let qf_over_ffgg =
-        (f_adj.map(|c| (*c as f64)) * (Q as f64) * ffgginv.clone()).reduce_by_cyclotomic(n);
-    let qg_over_ffgg = (g_adj.map(|c| (*c as f64)) * (Q as f64) * ffgginv).reduce_by_cyclotomic(n);
-    let norm_f_over_ffgg = qf_over_ffgg.l2_norm();
-    let norm_g_over_ffgg = qg_over_ffgg.l2_norm();
+    let f_fft = f.map(|i| *i as f64).fft();
+    let g_fft = g.map(|i| *i as f64).fft();
+    let f_adj_fft = f_fft.map(|c| c.conj());
+    let g_adj_fft = g_fft.map(|c| c.conj());
+    let ffgg_fft = f_fft.hadamard_mul(&f_adj_fft) + g_fft.hadamard_mul(&g_adj_fft);
+    let qf_over_ffgg_fft = f_adj_fft.map(|c| c * (Q as f64)).hadamard_div(&ffgg_fft);
+    let qg_over_ffgg_fft = g_adj_fft.map(|c| c * (Q as f64)).hadamard_div(&ffgg_fft);
+    let norm_f_over_ffgg_squared = qf_over_ffgg_fft
+        .coefficients
+        .iter()
+        .map(|c| (c * c.conj()).re)
+        .sum::<f64>()
+        / (n as f64);
+    let norm_g_over_ffgg_squared = qg_over_ffgg_fft
+        .coefficients
+        .iter()
+        .map(|c| (c * c.conj()).re)
+        .sum::<f64>()
+        / (n as f64);
 
-    let gamma2 =
-        f64::sqrt(norm_f_over_ffgg * norm_f_over_ffgg + norm_g_over_ffgg * norm_g_over_ffgg);
+    let gamma2 = norm_f_over_ffgg_squared + norm_g_over_ffgg_squared;
 
     f64::max(gamma1, gamma2)
 }
@@ -127,8 +134,8 @@ fn ntru_gen(
         if f_ntt.iter().any(|e| e.is_zero()) {
             continue;
         }
-        let gamma = gram_schmidt_norm(&f, &g);
-        if gamma * gamma > 1.3689f64 * (Q as f64) {
+        let gamma = gram_schmidt_norm_squared(&f, &g);
+        if gamma > 1.3689f64 * (Q as f64) {
             continue;
         }
 
@@ -237,10 +244,10 @@ fn babai_reduce(
         if k.is_zero() {
             break;
         }
-        let kf = (k.clone() * f.clone())
+        let kf = (k.clone().karatsuba(f))
             .reduce_by_cyclotomic(n)
             .map(|bi| bi << (capital_size - size));
-        let kg = (k.clone() * g.clone())
+        let kg = (k.clone().karatsuba(g))
             .reduce_by_cyclotomic(n)
             .map(|bi| bi << (capital_size - size));
         *capital_f -= kf;
@@ -298,8 +305,8 @@ fn ntru_solve(
     let f_minx = f.galois_adjoint();
     let g_minx = g.galois_adjoint();
 
-    let mut capital_f = (capital_f_prime_xsq * g_minx).reduce_by_cyclotomic(n);
-    let mut capital_g = (capital_g_prime_xsq * f_minx).reduce_by_cyclotomic(n);
+    let mut capital_f = (capital_f_prime_xsq.karatsuba(&g_minx)).reduce_by_cyclotomic(n);
+    let mut capital_g = (capital_g_prime_xsq.karatsuba(&f_minx)).reduce_by_cyclotomic(n);
 
     match babai_reduce(f, g, &mut capital_f, &mut capital_g) {
         Ok(_) => Some((capital_f, capital_g)),
@@ -892,7 +899,7 @@ mod test {
 
     use crate::{
         encoding::compress,
-        falcon::{gram_schmidt_norm, keygen, sign, verify, FalconVariant, Signature},
+        falcon::{gram_schmidt_norm_squared, keygen, sign, verify, FalconVariant, Signature},
         field::Felt,
         polynomial::{hash_to_point, Polynomial},
     };
@@ -1846,13 +1853,12 @@ mod test {
         let n = 512;
         let f = (0..n).map(|i| i % 5).collect_vec();
         let g = (0..n).map(|i| (i % 7) - 4).collect_vec();
-        let norm = gram_schmidt_norm(&Polynomial::new(f), &Polynomial::new(g));
-        let difference = (norm * norm) - 5992556.183229722;
+        let norm_squared = gram_schmidt_norm_squared(&Polynomial::new(f), &Polynomial::new(g));
+        let difference = norm_squared - 5992556.183229722;
         assert!(
             difference * difference < 0.00001,
-            "norm was {} with square {} =/= 5992556.183229722",
-            norm,
-            norm * norm
+            "norm squared was {} =/= 5992556.183229722",
+            norm_squared,
         );
     }
 
