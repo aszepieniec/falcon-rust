@@ -44,12 +44,11 @@ Performance is still inferior to the optimized C code accessible from rust via t
  - [x] signature verification
  - [x] derandomized algorithms
  - [x] (de)serialization
- - [ ] better algorithms (e.g. Montgomery)
+ - [ ] better algorithms (e.g. Montgomery, RNS)
  - [ ] uncompressed signature format
  - [ ] signed-message interface
  - [ ] hardware optimizations
  - [ ] message-recovery mode
- - [ ] compatible interface with [`pqcrypto-falcon`](https://crates.io/crates/pqcrypto-falcon)
  - [ ] constant-time (?)
 
 ## To-do's
@@ -61,6 +60,7 @@ Performance is still inferior to the optimized C code accessible from rust via t
  - [ ] negative tests
  - [ ] profile, and fix bottlenecks
  - [ ] Montgomery representation for field elements
+ - [ ] Residue number system (RNS) for big integer arithmetic
  - [ ] streaming (de)serialization
  - [ ] investigate secret-dependent time variability
 
