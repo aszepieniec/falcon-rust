@@ -290,8 +290,8 @@ fn ntru_solve(
             return None;
         }
         return Some((
-            (Polynomial::new(vec![-v * BigInt::from_i32(Q).unwrap()])),
-            Polynomial::new(vec![u * BigInt::from_i32(Q).unwrap()]),
+            (Polynomial::new(vec![-v * BigInt::from_u32(Q).unwrap()])),
+            Polynomial::new(vec![u * BigInt::from_u32(Q).unwrap()]),
         ));
     }
 

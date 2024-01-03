@@ -18,26 +18,31 @@ use crate::ntt_constants::PHI64_ROOTS_ZQ;
 use crate::ntt_constants::PHI8_ROOTS_ZQ;
 
 /// q is the integer modulus which is used in Falcon.
-pub(crate) const Q: i32 = 12 * 1024 + 1;
+pub(crate) const Q: u32 = 12 * 1024 + 1;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct Felt(i16);
+pub(crate) struct Felt(u32);
 
 impl Felt {
     pub const fn new(value: i16) -> Self {
-        let b = (value < 0) as i16;
-        Self((value % (Q as i16)) + (b * (Q as i16)))
+        let z = if value >= 0 {
+            (value as u32) % Q
+        } else {
+            Q + ((-value as u32) % Q)
+        };
+        Felt((z << 16) % Q)
     }
 
     pub fn value(&self) -> i16 {
-        self.0
+        (*self * Felt(1)).0 as i16
     }
 
     pub fn balanced_value(&self) -> i16 {
-        if self.0 > ((Q as i16) / 2) {
-            self.0 - (Q as i16)
+        let value = self.value();
+        if value > ((Q as i16) / 2) {
+            value - (Q as i16)
         } else {
-            self.0
+            value
         }
     }
 
@@ -67,9 +72,13 @@ impl Felt {
     }
 }
 
+#[allow(clippy::suspicious_arithmetic_impl)]
 impl Add for Felt {
     fn add(self, rhs: Self) -> Self::Output {
-        Felt((self.0 + rhs.0) % (Q as i16))
+        let (s, _) = self.0.overflowing_add(rhs.0);
+        let (d, n) = s.overflowing_sub(Q);
+        let (r, _) = d.overflowing_add(Q * (n as u32));
+        Felt(r)
     }
 
     type Output = Self;
@@ -85,7 +94,7 @@ impl Sub for Felt {
     type Output = Self;
 
     fn sub(self, rhs: Self) -> Self::Output {
-        Felt(((Q - (rhs.0 as i32) + (self.0 as i32)) % Q) as i16)
+        self + -rhs
     }
 }
 
@@ -99,13 +108,20 @@ impl Neg for Felt {
     type Output = Felt;
 
     fn neg(self) -> Self::Output {
-        Felt((Q as i16 - self.0) % (Q as i16))
+        let is_zero = self.0 == 0;
+        let (r, _) = Q.overflowing_sub(self.0);
+        Felt(r * (is_zero as u32))
     }
 }
 
 impl Mul for Felt {
     fn mul(self, rhs: Self) -> Self::Output {
-        Felt((((self.0 as i32) * (rhs.0 as i32)) % Q) as i16)
+        const Q0I: u32 = 53249;
+        let z = self.0 * rhs.0;
+        let w = ((z * Q0I) & 0xFFFF) * Q;
+        let (z, n) = ((z + w) >> 16).overflowing_sub(Q);
+        let (r, _) = z.overflowing_add(Q * (n as u32));
+        Felt(r)
     }
 
     type Output = Self;
@@ -134,13 +150,13 @@ impl One for Felt {
 
 impl Distribution<Felt> for Standard {
     fn sample<R: rand::Rng + ?Sized>(&self, rng: &mut R) -> Felt {
-        Felt((((rng.next_u32() >> 1) as i32) % Q) as i16)
+        Felt((rng.next_u32() >> 1) % Q)
     }
 }
 
 impl Display for Felt {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_fmt(format_args!("{}", self.0 % Q as i16))
+        f.write_fmt(format_args!("{}", self.value()))
     }
 }
 
@@ -12470,9 +12486,34 @@ const INV_MOD_Q: [Felt; 12289] = [
 #[cfg(test)]
 mod test {
     use itertools::Itertools;
-    use rand::{thread_rng, Rng};
+    use rand::{thread_rng, Rng, RngCore};
 
-    use crate::field::Felt;
+    use crate::field::{Felt, Q};
+
+    #[test]
+    fn test_add() {
+        let mut rng = thread_rng();
+        let a_value = (rng.next_u32() % 0x0fff) as i16;
+        let b_value = (rng.next_u32() % 0x0fff) as i16;
+        let a = Felt::new(a_value);
+        let b = Felt::new(b_value);
+        assert_eq!(
+            a + b,
+            Felt::new(a.value() + b.value()),
+            "a: {a_value}, b: {b_value}, c: {}",
+            ((a_value + b_value) as u32) % Q
+        );
+    }
+
+    #[test]
+    fn test_mul() {
+        let mut rng = thread_rng();
+        let a_value = (rng.next_u32() % 0xffff) as i16;
+        let b_value = (rng.next_u32() % 0xffff) as i16;
+        let a = Felt::new(a_value);
+        let b = Felt::new(b_value);
+        assert_eq!(a * b, Felt::new(a_value * b_value));
+    }
 
     #[test]
     fn test_batch_inverse() {
