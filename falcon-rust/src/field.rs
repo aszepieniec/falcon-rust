@@ -25,16 +25,16 @@ pub(crate) struct Felt(u32);
 
 impl Felt {
     pub const fn new(value: i16) -> Self {
-        let z = if value >= 0 {
-            (value as u32) % Q
-        } else {
-            Q + ((-value as u32) % Q)
-        };
-        Felt((z << 16) % Q)
+        let z = value >= 0;
+        let y = z as i16;
+        let x = y - ((!z) as i16);
+        let r = x * ((x * value) % (Q as i16));
+        let w = (r + (Q as i16) * (1 - y)) as u32;
+        Felt((w << 16) % Q)
     }
 
     pub fn value(&self) -> i16 {
-        (*self * Felt(1)).0 as i16
+        ((self.0 * 2304) % Q) as i16
     }
 
     pub fn balanced_value(&self) -> i16 {
@@ -69,6 +69,19 @@ impl Felt {
             }
         }
         rp
+    }
+
+    fn montymul(&self, other: &Felt) -> Felt {
+        const Q0I: u32 = 12287;
+        let rarb = self.0 * other.0;
+        let (rarb_qinv_ofl, _) = rarb.overflowing_mul(Q0I);
+        let rab_mod_r = rarb_qinv_ofl & 0xffff;
+        let q_rab_mod_r = rab_mod_r * Q;
+        let rarb_plus_q_rab_mod_r = rarb + q_rab_mod_r;
+        let rarb_plus_q_rab_mod_r_div_r = rarb_plus_q_rab_mod_r >> 16;
+        let (z, b) = rarb_plus_q_rab_mod_r_div_r.overflowing_sub(Q);
+        let (y, _) = z.overflowing_add(Q * (b as u32));
+        Felt(y)
     }
 }
 
@@ -116,12 +129,7 @@ impl Neg for Felt {
 
 impl Mul for Felt {
     fn mul(self, rhs: Self) -> Self::Output {
-        const Q0I: u32 = 53249;
-        let z = self.0 * rhs.0;
-        let w = ((z * Q0I) & 0xFFFF) * Q;
-        let (z, n) = ((z + w) >> 16).overflowing_sub(Q);
-        let (r, _) = z.overflowing_add(Q * (n as u32));
-        Felt(r)
+        self.montymul(&rhs)
     }
 
     type Output = Self;
@@ -12491,6 +12499,24 @@ mod test {
     use crate::field::{Felt, Q};
 
     #[test]
+    fn test_value() {
+        let mut rng = thread_rng();
+        for _ in 0..1000 {
+            let mut value = (rng.next_u32() & 0x3fff) as i16;
+            if rng.next_u32() % 2 == 1 {
+                value *= -1;
+            }
+            let felt = Felt::new(value);
+            assert_eq!(
+                0,
+                (felt.value() - value) % (Q as i16),
+                "value: {value} but got {}",
+                felt.value()
+            );
+        }
+    }
+
+    #[test]
     fn test_add() {
         let mut rng = thread_rng();
         let a_value = (rng.next_u32() % 0x0fff) as i16;
@@ -12508,11 +12534,20 @@ mod test {
     #[test]
     fn test_mul() {
         let mut rng = thread_rng();
-        let a_value = (rng.next_u32() % 0xffff) as i16;
-        let b_value = (rng.next_u32() % 0xffff) as i16;
-        let a = Felt::new(a_value);
-        let b = Felt::new(b_value);
-        assert_eq!(a * b, Felt::new(a_value * b_value));
+        for _ in 0..1000 {
+            let a_value = (rng.next_u32() % 0x3fff) as i16;
+            let b_value = (rng.next_u32() % 0x3fff) as i16;
+            let product = (((a_value as u32) * (b_value as u32)) % Q) as i16;
+            let a = Felt::new(a_value);
+            let b = Felt::new(b_value);
+            assert_eq!(
+                a * b,
+                Felt::new(product),
+                "{} =/= {}",
+                a * b,
+                Felt::new(product)
+            );
+        }
     }
 
     #[test]
