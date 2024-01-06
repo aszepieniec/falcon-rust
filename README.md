@@ -32,7 +32,7 @@ Performance is still inferior to the optimized C code accessible from rust via t
 |                      | Keygen      | Sign      | Verify    |
 |----------------------|-------------|-----------|-----------|
 |      falcon-rust 512 | 429.55 ms   | 695.92 µs | 151.20 µs |
-|     falcon-rust 1025 |   2.4075 s  | 1.4261 ms | 317.95 µs |
+|     falcon-rust 1024 |   2.4075 **s**  | 1.4261 **ms** | 317.95 µs |
 |  pqcrypto-falcon 512 |   7.5356 ms | 253.44 µs | 48.065 µs |
 | pqcrypto-falcon 1024 |  21.454 ms  | 510.43 µs | 94.669 µs |
 
