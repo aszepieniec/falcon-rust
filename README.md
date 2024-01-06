@@ -44,7 +44,7 @@ Performance is still inferior to the optimized C code accessible from rust via t
  - [x] signature verification
  - [x] derandomized algorithms
  - [x] (de)serialization
- - [ ] better algorithms (e.g. Montgomery, RNS)
+ - [ ] better algorithms (e.g. RNS)
  - [ ] uncompressed signature format
  - [ ] signed-message interface
  - [ ] hardware optimizations
