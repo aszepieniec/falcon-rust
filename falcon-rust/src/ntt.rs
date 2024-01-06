@@ -38,12 +38,7 @@ fn split_ntt(f_ntt: &[Felt]) -> (Vec<Felt>, Vec<Felt>) {
     (f0_ntt, f1_ntt)
 }
 
-/// Merge two or three polynomials into a single polynomial f.
-///
-/// Args:
-///     f_list_ntt: a list of polynomials
-///
-/// Format: NTT
+/// Merge two polynomials into a single polynomial f in the NTT domain.
 fn merge_ntt(f0_ntt: &[Felt], f1_ntt: &[Felt]) -> Vec<Felt> {
     let n = f0_ntt.len() * 2;
     let w = roots_dict_zq(n);
@@ -98,7 +93,40 @@ mod test {
     use crate::{
         field::Felt,
         ntt::{intt, ntt},
+        polynomial::Polynomial,
     };
+
+    #[test]
+    fn test_ntru_equation() {
+        let mut rng = thread_rng();
+        let n = 2;
+        let f = (0..n).map(|_| rng.gen::<Felt>()).collect_vec();
+        let g = (0..n).map(|_| rng.gen::<Felt>()).collect_vec();
+        // for capital f: we don't care about shortness so sample at random
+        let capital_f = (0..n).map(|_| rng.gen::<Felt>()).collect_vec();
+
+        // compute capital_g from f, g, capital_f
+        let f_ntt = ntt(&f);
+        let g_ntt = ntt(&g);
+        let capital_f_ntt = ntt(&capital_f);
+        let capital_g_ntt = g_ntt
+            .into_iter()
+            .zip(capital_f_ntt)
+            .zip(f_ntt)
+            .map(|((g, cap_f), f)| g * cap_f / f)
+            .collect_vec();
+        let capital_g = intt(&capital_g_ntt);
+        // todo: batch-inverse f_ntt
+
+        assert_eq!(
+            Polynomial::new(capital_g.clone())
+                .karatsuba(&Polynomial::new(f.clone()))
+                .reduce_by_cyclotomic(n),
+            Polynomial::new(g.clone())
+                .karatsuba(&Polynomial::new(capital_f.clone()))
+                .reduce_by_cyclotomic(n)
+        );
+    }
 
     #[test]
     fn test_ntt_linearity() {

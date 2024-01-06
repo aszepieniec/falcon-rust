@@ -381,6 +381,7 @@ impl<const N: usize> SecretKey<N> {
         SecretKey { b0_fft, tree }
     }
 
+    /// Determine how many bits to use for each field element of a given polynomial.
     fn field_element_width(n: usize, polynomial_index: usize) -> usize {
         if polynomial_index == 2 {
             8
@@ -540,9 +541,12 @@ impl<const N: usize> SecretKey<N> {
             .into_iter()
             .zip(capital_f_ntt)
             .zip(f_ntt)
-            .map(|((g, cf), f)| g * cf / f)
+            .map(|((g, cap_f), f)| g * cap_f / f)
             .collect_vec();
         let capital_g = intt(&capital_g_ntt);
+        // todo: batch-inverse f_ntt
+
+        // capital_g * f - g * capital_f = Q (mod X^n + 1)
 
         Ok(Self::from_b0([
             Polynomial::new(g.to_vec()).map(|f| f.balanced_value()),

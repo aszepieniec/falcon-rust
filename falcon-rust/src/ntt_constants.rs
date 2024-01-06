@@ -3,7 +3,7 @@
 
 use crate::field::Felt;
 
-// For each table of rootsFelt(), the following holds:
+// For each table of roots, the following holds:
 // - The second half of the roots are the conjugates of the first
 // half:
 // - The root at index (2 * i + 1) is the negation of the root at
