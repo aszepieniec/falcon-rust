@@ -615,7 +615,7 @@ where
 /// Hash a string to a random polynomial in ZZ[ X ] mod <Phi(X), q>.
 /// Algorithm 3, "HashToPoint" in the spec (page 31).
 pub(crate) fn hash_to_point(string: &[u8], n: usize) -> Polynomial<Felt> {
-    const K: u32 = (1u32 << 16) / (Q as u32);
+    const K: u32 = (1u32 << 16) / Q;
 
     let mut hasher = Shake256::default();
     hasher.update(string);
@@ -626,8 +626,8 @@ pub(crate) fn hash_to_point(string: &[u8], n: usize) -> Polynomial<Felt> {
         let mut randomness = [0u8; 2];
         reader.read(&mut randomness);
         // Arabic endianness but so be it
-        let t = ((randomness[0] as i32) << 8) | (randomness[1] as i32);
-        if (t as u32) < K * (Q as u32) {
+        let t = ((randomness[0] as u32) << 8) | (randomness[1] as u32);
+        if t < K * Q {
             coefficients.push(Felt::new((t % Q) as i16));
         }
     }

@@ -8,7 +8,7 @@ repository = "https://github.com/aszepieniec/falcon-rust"
 documentation = "https://github.com/aszepieniec/falcon-rust"
 homepage = "https://github.com/aszepieniec/falcon-rust"
 readme = "../README.md"
-keywords = ["falcon", "signature scheme", "post-quantum"]
+keywords = ["falcon", "signature", "post-quantum"]
 categories = ["cryptography"]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
