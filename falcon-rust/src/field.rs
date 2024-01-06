@@ -25,25 +25,22 @@ pub(crate) struct Felt(u32);
 
 impl Felt {
     pub const fn new(value: i16) -> Self {
-        let z = value >= 0;
-        let y = z as i16;
-        let x = y - ((!z) as i16);
-        let r = x * ((x * value) % (Q as i16));
-        let w = (r + (Q as i16) * (1 - y)) as u32;
-        Felt((w << 16) % Q)
+        let gtz_bool = value >= 0;
+        let gtz_int = gtz_bool as i16;
+        let gtz_sign = gtz_int - ((!gtz_bool) as i16);
+        let reduced = gtz_sign * ((gtz_sign * value) % (Q as i16));
+        let canonical_representative = (reduced + (Q as i16) * (1 - gtz_int)) as u32;
+        Felt(canonical_representative)
     }
 
     pub const fn value(&self) -> i16 {
-        ((self.0 * 2304) % Q) as i16
+        self.0 as i16
     }
 
     pub fn balanced_value(&self) -> i16 {
         let value = self.value();
-        if value > ((Q as i16) / 2) {
-            value - (Q as i16)
-        } else {
-            value
-        }
+        let g = (value > ((Q as i16) / 2)) as i16;
+        value - (Q as i16) * g
     }
 
     pub const fn inverse_or_zero(&self) -> Self {
@@ -69,19 +66,6 @@ impl Felt {
             }
         }
         rp
-    }
-
-    fn montymul(&self, other: &Felt) -> Felt {
-        const Q0I: u32 = 12287;
-        let rarb = self.0 * other.0;
-        let (rarb_qinv_ofl, _) = rarb.overflowing_mul(Q0I);
-        let rab_mod_r = rarb_qinv_ofl & 0xffff;
-        let q_rab_mod_r = rab_mod_r * Q;
-        let rarb_plus_q_rab_mod_r = rarb + q_rab_mod_r;
-        let rarb_plus_q_rab_mod_r_div_r = rarb_plus_q_rab_mod_r >> 16;
-        let (z, b) = rarb_plus_q_rab_mod_r_div_r.overflowing_sub(Q);
-        let (y, _) = z.overflowing_add(Q * (b as u32));
-        Felt(y)
     }
 }
 
@@ -129,7 +113,7 @@ impl Neg for Felt {
 
 impl Mul for Felt {
     fn mul(self, rhs: Self) -> Self::Output {
-        self.montymul(&rhs)
+        Felt((self.0 * rhs.0) % Q)
     }
 
     type Output = Self;
