@@ -535,13 +535,14 @@ impl<const N: usize> SecretKey<N> {
 
         // compute capital_g from f, g, capital_f
         let f_ntt = ntt(&f);
+        let f_inv_ntt = Felt::batch_inverse_or_zero(&f_ntt);
         let g_ntt = ntt(&g);
         let capital_f_ntt = ntt(&capital_f);
         let capital_g_ntt = g_ntt
             .into_iter()
             .zip(capital_f_ntt)
-            .zip(f_ntt)
-            .map(|((g, cap_f), f)| g * cap_f / f)
+            .zip(f_inv_ntt)
+            .map(|((g, cap_f), f_inv)| g * cap_f * f_inv)
             .collect_vec();
         let capital_g = intt(&capital_g_ntt);
         // todo: batch-inverse f_ntt
