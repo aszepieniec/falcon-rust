@@ -10,6 +10,9 @@ use bit_vec::BitVec;
 /// - the sign is encoded on 1 bit
 /// - the 7 lower bits are encoded naively (binary)
 /// - the high bits are encoded in unary encoding
+///
+/// This method can fail, in which case it returns None. The signature
+/// generation algorithm knows this and will re-run the loop.
 pub(crate) fn compress(v: &[i16], slen: usize) -> Option<Vec<u8>> {
     let mut bitvector: BitVec = BitVec::with_capacity(slen);
     for coeff in v {

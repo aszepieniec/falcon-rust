@@ -799,9 +799,10 @@ mod test {
         let difference = hermitian_adjoint.clone() - conjugate_polynomial.clone();
         assert!(
             difference.l2_norm() <= f64::EPSILON * 100.0,
-            "hermitian_adjoint: {:?}\nconjugate: {:?}",
+            "hermitian_adjoint: {:?}\nconjugate: {:?}\ndifference: {}",
             hermitian_adjoint.coefficients,
-            conjugate_polynomial.coefficients
+            conjugate_polynomial.coefficients,
+            difference.l2_norm(),
         );
     }
 
