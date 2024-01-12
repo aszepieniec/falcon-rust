@@ -29,17 +29,21 @@ where
     /// Get a primitive nth (with n a power of 2) root of unity.
     fn primitive_root_of_unity(n: usize) -> Self;
 
-    /// Compute the integer whose bit expansion is the reverse of the argument.
-    fn bitreverse(i: usize, n: usize) -> usize {
-        let mut j = 0;
+    /// Compute the integer whose n-bit binary expansion is the reverse of
+    /// that of the argument.
+    fn bitreverse(arg: usize, n: usize) -> usize {
+        assert!(n > 0);
+        assert_eq!(n & (n - 1), 0);
+        let mut rev = 0;
         let mut m = n >> 1;
         let mut k = 1;
         while m > 0 {
-            j |= (i & m) * k;
+            rev |= (((arg & m) != 0) as usize) * k;
+            println!("rev: {rev}");
             k <<= 1;
             m >>= 1;
         }
-        j
+        rev
     }
 
     /// Compute the n powers of the nth root of unity psi, and put them in

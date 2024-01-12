@@ -312,4 +312,20 @@ mod test {
             assert_eq!(root, Felt::one());
         }
     }
+
+    #[test]
+    fn test_bitreverse() {
+        let test_vectors = [
+            vec![(0, 0), (1, 1)],
+            vec![(2, 1), (3, 3), (0, 0)],
+            vec![(4, 1), (5, 5), (6, 3)],
+        ];
+        for (i, vector) in test_vectors.into_iter().enumerate() {
+            let n = 1 << (i + 1);
+            for (a, b) in vector.into_iter() {
+                assert_eq!(Felt::bitreverse(a, n), b);
+                assert_eq!(Felt::bitreverse(b, n), a);
+            }
+        }
+    }
 }
