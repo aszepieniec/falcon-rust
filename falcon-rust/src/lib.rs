@@ -55,6 +55,7 @@
 //! ```
 
 pub(crate) mod common;
+pub(crate) mod cyclotomic_fourier;
 pub(crate) mod encoding;
 pub(crate) mod falcon;
 pub mod falcon1024;
@@ -63,6 +64,7 @@ pub(crate) mod ffsampling;
 pub(crate) mod fft;
 pub(crate) mod fft_constants;
 pub(crate) mod field;
+pub(crate) mod inverse;
 pub(crate) mod ntt;
 pub(crate) mod ntt_constants;
 pub(crate) mod polynomial;

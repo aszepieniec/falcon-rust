@@ -1,6 +1,7 @@
 use num::{One, Zero};
 use num_complex::Complex64;
 use sha3::{digest::*, Shake256};
+use std::default::Default;
 use std::fmt::Debug;
 use std::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 
@@ -637,6 +638,8 @@ pub(crate) fn hash_to_point(string: &[u8], n: usize) -> Polynomial<Felt> {
 
 #[cfg(test)]
 mod test {
+    use std::default::Default;
+
     use itertools::Itertools;
     use num_complex::Complex64;
     use rand::thread_rng;

@@ -10,6 +10,7 @@ use crate::{
     ffsampling::{ffldl, ffsampling, gram, normalize_tree, LdlTree},
     fft::{fft, ifft},
     field::{Felt, Q},
+    inverse::Inverse,
     ntt::{intt, ntt},
     polynomial::{hash_to_point, Polynomial},
     samplerz::sampler_z,

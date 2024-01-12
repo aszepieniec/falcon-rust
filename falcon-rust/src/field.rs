@@ -6,6 +6,8 @@ use rand_distr::{
     Distribution, Standard,
 };
 
+use crate::cyclotomic_fourier::CyclotomicFourier;
+use crate::inverse::Inverse;
 use crate::ntt_constants::PHI1024_ROOTS_ZQ;
 use crate::ntt_constants::PHI128_ROOTS_ZQ;
 use crate::ntt_constants::PHI16_ROOTS_ZQ;
@@ -46,51 +48,11 @@ impl Felt {
     pub const fn multiply(&self, other: Self) -> Self {
         Felt((self.0 * other.0) % Q)
     }
+}
 
-    pub const fn inverse_or_zero(&self) -> Self {
-        // q-2 = 0b10 11 11 11  11 11 11
-        let two = self.multiply(*self);
-        let three = two.multiply(*self);
-        let six = three.multiply(three);
-        let twelve = six.multiply(six);
-        let fifteen = twelve.multiply(three);
-        let thirty = fifteen.multiply(fifteen);
-        let sixty = thirty.multiply(thirty);
-        let sixty_three = sixty.multiply(three);
-
-        let sixty_three_sq = sixty_three.multiply(sixty_three);
-        let sixty_three_qu = sixty_three_sq.multiply(sixty_three_sq);
-        let sixty_three_oc = sixty_three_qu.multiply(sixty_three_qu);
-        let sixty_three_hx = sixty_three_oc.multiply(sixty_three_oc);
-        let sixty_three_tt = sixty_three_hx.multiply(sixty_three_hx);
-        let sixty_three_sf = sixty_three_tt.multiply(sixty_three_tt);
-
-        let all_ones = sixty_three_sf.multiply(sixty_three);
-        let two_e_twelve = all_ones.multiply(*self);
-        let two_e_thirteen = two_e_twelve.multiply(two_e_twelve);
-
-        two_e_thirteen.multiply(all_ones)
-    }
-
-    pub fn batch_inverse_or_zero(batch: &[Self]) -> Vec<Self> {
-        let mut acc = Felt::one();
-        let mut rp: Vec<Felt> = Vec::with_capacity(batch.len());
-        for batch_item in batch {
-            if !batch_item.is_zero() {
-                rp.push(acc);
-                acc = *batch_item * acc;
-            } else {
-                rp.push(Felt::zero());
-            }
-        }
-        let mut inv = acc.inverse_or_zero();
-        for i in (0..batch.len()).rev() {
-            if !batch[i].is_zero() {
-                rp[i] *= inv;
-                inv *= batch[i];
-            }
-        }
-        rp
+impl From<usize> for Felt {
+    fn from(value: usize) -> Self {
+        Felt::new(value as i16)
     }
 }
 
@@ -194,6 +156,33 @@ pub(crate) const fn roots_dict_zq(n: usize) -> &'static [Felt] {
     }
 }
 
+impl Inverse for Felt {
+    fn inverse_or_zero(self) -> Self {
+        // q-2 = 0b10 11 11 11  11 11 11
+        let two = self.multiply(self);
+        let three = two.multiply(self);
+        let six = three.multiply(three);
+        let twelve = six.multiply(six);
+        let fifteen = twelve.multiply(three);
+        let thirty = fifteen.multiply(fifteen);
+        let sixty = thirty.multiply(thirty);
+        let sixty_three = sixty.multiply(three);
+
+        let sixty_three_sq = sixty_three.multiply(sixty_three);
+        let sixty_three_qu = sixty_three_sq.multiply(sixty_three_sq);
+        let sixty_three_oc = sixty_three_qu.multiply(sixty_three_qu);
+        let sixty_three_hx = sixty_three_oc.multiply(sixty_three_oc);
+        let sixty_three_tt = sixty_three_hx.multiply(sixty_three_hx);
+        let sixty_three_sf = sixty_three_tt.multiply(sixty_three_tt);
+
+        let all_ones = sixty_three_sf.multiply(sixty_three);
+        let two_e_twelve = all_ones.multiply(self);
+        let two_e_thirteen = two_e_twelve.multiply(two_e_twelve);
+
+        two_e_thirteen.multiply(all_ones)
+    }
+}
+
 #[allow(clippy::suspicious_arithmetic_impl)]
 impl Div for Felt {
     type Output = Felt;
@@ -207,12 +196,31 @@ impl Div for Felt {
     }
 }
 
+impl CyclotomicFourier for Felt {
+    fn primitive_root_of_unity(n: usize) -> Self {
+        let log2n = n.ilog2();
+        assert!(log2n <= 12);
+        // and 1331 is a twelfth root of unity
+        let mut a = Felt::new(1331);
+        let num_squarings = 12 - n.ilog2();
+        for _ in 0..num_squarings {
+            a *= a;
+        }
+        a
+    }
+}
+
 #[cfg(test)]
 mod test {
     use itertools::Itertools;
+    use num::One;
     use rand::{thread_rng, Rng, RngCore};
 
-    use crate::field::{Felt, Q};
+    use crate::{
+        cyclotomic_fourier::CyclotomicFourier,
+        field::{Felt, Q},
+        inverse::Inverse,
+    };
 
     #[test]
     fn test_value() {
@@ -290,5 +298,18 @@ mod test {
 
         assert_eq!(a * b * a, a);
         assert_eq!(a * b * b, b);
+    }
+
+    #[test]
+    fn test_primitive_nth_root_of_unity() {
+        for log2n in 0..=12 {
+            let n = 1 << log2n;
+            let mut root = Felt::primitive_root_of_unity(n);
+            for i in 0..log2n {
+                assert_ne!(root, Felt::one(), "log2n: {log2n} and i: {i}");
+                root *= root;
+            }
+            assert_eq!(root, Felt::one());
+        }
     }
 }

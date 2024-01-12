@@ -3,6 +3,7 @@ use rand_distr::num_traits::Zero;
 use crate::{
     common::{merge, split},
     field::{roots_dict_zq, Felt},
+    inverse::Inverse,
 };
 
 /// This file contains an implementation of the NTT.
