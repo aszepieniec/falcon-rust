@@ -328,4 +328,45 @@ mod test {
             }
         }
     }
+
+    #[test]
+    fn test_ntt() {
+        let n = 32;
+        let mut rng = thread_rng();
+        let mut a = (0..n)
+            .map(|_| rng.next_u32() as i16)
+            .map(Felt::new)
+            .collect_vec();
+        let mut b = a.clone();
+        assert_eq!(a, b);
+
+        let psi = Felt::primitive_root_of_unity(n);
+        let psi_rev = Felt::bitreversed_powers(psi, n);
+        let psi_inv = Felt::inverse_or_zero(psi);
+        let psi_inv_rev = Felt::bitreversed_powers(psi_inv, n);
+        let ninv = Felt::inverse_or_zero(Felt::new(n as i16));
+        Felt::fft(&mut a, &psi_rev);
+        Felt::ifft(&mut a, &psi_inv_rev, ninv);
+        assert_eq!(a, b);
+
+        let x = Felt::new(rng.next_u32() as i16);
+        let y = Felt::new(rng.next_u32() as i16);
+        let mut c = a
+            .iter()
+            .zip(b.iter())
+            .map(|(&l, &r)| x * l + y * r)
+            .collect_vec();
+
+        Felt::fft(&mut a, &psi_rev);
+        Felt::fft(&mut b, &psi_rev);
+        Felt::fft(&mut c, &psi_rev);
+
+        let c_alt = a
+            .iter()
+            .zip(b.iter())
+            .map(|(&l, &r)| x * l + y * r)
+            .collect_vec();
+
+        assert_eq!(c, c_alt);
+    }
 }

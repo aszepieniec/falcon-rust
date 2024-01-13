@@ -39,7 +39,6 @@ where
         let mut k = 1;
         while m > 0 {
             rev |= (((arg & m) != 0) as usize) * k;
-            println!("rev: {rev}");
             k <<= 1;
             m >>= 1;
         }
@@ -47,7 +46,7 @@ where
     }
 
     /// Compute the n powers of the nth root of unity psi, and put them in
-    /// bit-reversed order/
+    /// bit-reversed order.
     fn bitreversed_powers(psi: Self, n: usize) -> Vec<Self> {
         let mut array = vec![Self::from(0); n];
         let mut alpha = Self::from(1);
@@ -67,12 +66,25 @@ where
     /// Compute the evaluations of the polynomial on the roots of the
     /// polynomial X^n + 1 using a fast Fourier transform. Algorithm 1
     /// from https://eprint.iacr.org/2016/504.pdf.
-    fn fft(a: &mut [Self]) {
+    ///
+    /// Arguments:
+    ///
+    ///  - a : &mut [Self]
+    ///    (a reference to) a mutable array of field elements which is to
+    ///    be transformed under the FFT. The transformation happens in-
+    ///    place.
+    ///
+    ///  - psi_rev: &[Self]
+    ///    (a reference to) an array of powers of psi, from 0 to n-1,
+    ///    but ordered by bit-reversed index. You can use
+    ///    `Self::bitreversed_powers(psi, n)` for this purpose, but this
+    ///    trait implementation is not const. For the performance benefit
+    ///    you want a precompiled array, which you can get if you can get
+    ///    by implementing the same method and marking it "const".
+    fn fft(a: &mut [Self], psi_rev: &[Self]) {
         let n = a.len();
         let mut t = n;
         let mut m = 1;
-        let psi = Self::primitive_root_of_unity(n);
-        let psi_rev = Self::bitreversed_powers(psi, n);
         while m < n {
             t >>= 1;
             for i in 0..m {
@@ -93,12 +105,26 @@ where
     /// Compute the coefficients of the polynomial with the given evaluations
     /// on the roots of X^n + 1 using an inverse fast Fourier transform.
     /// Algorithm 2 from https://eprint.iacr.org/2016/504.pdf.
-    fn ifft(a: &mut [Self]) {
+    ///
+    /// Arguments:
+    ///
+    ///  - a : &mut [Self]
+    ///    (a reference to) a mutable array of field elements which is to
+    ///    be transformed under the IFFT. The transformation happens in-
+    ///    place.
+    ///
+    ///  - psi_rev: &[Self]
+    ///    (a reference to) an array of powers of psi^-1, from 0 to n-1,
+    ///    but ordered by bit-reversed index. You can use
+    ///    `Self::bitreversed_powers(Self::inverse_or_zero(psi), n)` for
+    ///    this purpose, but this trait implementation is not const. For
+    ///    the performance benefit you want a precompiled array, which you
+    ///    can get if you can get by implementing the same methods and marking
+    ///    them "const".
+    fn ifft(a: &mut [Self], psi_inv_rev: &[Self], ninv: Self) {
         let n = a.len();
         let mut t = 1;
         let mut m = n;
-        let psi_inv = Self::inverse_or_zero(Self::primitive_root_of_unity(n));
-        let psi_inv_rev = Self::bitreversed_powers(psi_inv, n);
         while m > 1 {
             let h = m / 2;
             let mut j1 = 0;
@@ -116,7 +142,6 @@ where
             t <<= 1;
             m >>= 1;
         }
-        let ninv = Self::inverse_or_zero(Self::from(n));
         for ai in a.iter_mut() {
             *ai *= ninv;
         }
