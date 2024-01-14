@@ -6,7 +6,9 @@ use num_complex::Complex64;
 
 use crate::{cyclotomic_fourier::CyclotomicFourier, polynomial::Polynomial};
 
-pub trait FftVector {
+/// Implements Cyclotomic FFT without bitreversing the outputs, and using
+/// precomputed powers of the 2nth primitive root of unity.
+pub trait FastFft {
     type Field: Add + Mul + AddAssign + MulAssign + Neg + Sub + SubAssign + One + Zero;
     fn fft(&mut self);
     fn ifft(&mut self);
@@ -2088,7 +2090,7 @@ const COMPLEX_BITREVERSED_POWERS_1024: [Complex64; 1024] = [
     Complex64::new(-0.9999952938095762, 0.003067956762965977),
 ];
 
-impl FftVector for Polynomial<Complex64> {
+impl FastFft for Polynomial<Complex64> {
     type Field = Complex64;
     fn fft(&mut self) {
         let n = self.coefficients.len();
@@ -2141,7 +2143,7 @@ mod test {
 
     use crate::polynomial::Polynomial;
 
-    use super::FftVector;
+    use super::FastFft;
 
     #[test]
     fn test_fft() {
