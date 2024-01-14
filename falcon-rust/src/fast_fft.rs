@@ -287,7 +287,6 @@ const COMPLEX_BITREVERSED_POWERS_128: [Complex64; 128] = [
     Complex64::new(0.024541228522912264, 0.9996988186962042),
     Complex64::new(-0.9996988186962042, 0.024541228522912326),
 ];
-#[allow(dead_code)]
 #[allow(clippy::approx_constant)]
 const COMPLEX_BITREVERSED_POWERS_256: [Complex64; 256] = [
     Complex64::new(1.0, 0.0),
@@ -2103,6 +2102,7 @@ impl FastFft for Polynomial<Complex64> {
             32 => &COMPLEX_BITREVERSED_POWERS_32,
             64 => &COMPLEX_BITREVERSED_POWERS_64,
             128 => &COMPLEX_BITREVERSED_POWERS_128,
+            256 => &COMPLEX_BITREVERSED_POWERS_256,
             512 => &COMPLEX_BITREVERSED_POWERS_512,
             1024 => &COMPLEX_BITREVERSED_POWERS_1024,
             _ => panic!("unsupported: n = {n} not a power of 2 or larger than 1024"),
@@ -2121,6 +2121,7 @@ impl FastFft for Polynomial<Complex64> {
             32 => &COMPLEX_BITREVERSED_POWERS_32,
             64 => &COMPLEX_BITREVERSED_POWERS_64,
             128 => &COMPLEX_BITREVERSED_POWERS_128,
+            256 => &COMPLEX_BITREVERSED_POWERS_256,
             512 => &COMPLEX_BITREVERSED_POWERS_512,
             1024 => &COMPLEX_BITREVERSED_POWERS_1024,
             _ => panic!("unsupported: n = {n} not a power of 2 or larger than 1024"),

@@ -7,6 +7,7 @@ use rand_distr::num_traits::Zero;
 
 use crate::{
     encoding::{compress, decompress},
+    fast_fft::FastFft,
     ffsampling::{ffldl, ffsampling, gram, normalize_tree, LdlTree},
     fft::{fft, ifft},
     field::{Felt, Q},
@@ -203,15 +204,17 @@ fn babai_reduce(
     .max()
     .unwrap();
     let shift = (size as i64) - 53;
-    let f_adjusted = f.map(|bi| i64::try_from(bi >> shift).unwrap() as f64);
-    let g_adjusted = g.map(|bi| i64::try_from(bi >> shift).unwrap() as f64);
-    let f_adjusted_fft = f_adjusted.fft();
-    let g_adjusted_fft = g_adjusted.fft();
+    let mut f_adjusted =
+        f.map(|bi| Complex64::new(i64::try_from(bi >> shift).unwrap() as f64, 0.0));
+    let mut g_adjusted =
+        g.map(|bi| Complex64::new(i64::try_from(bi >> shift).unwrap() as f64, 0.0));
+    f_adjusted.fft();
+    g_adjusted.fft();
 
-    let f_star_adjusted_fft = f_adjusted_fft.map(|c| c.conj());
-    let g_star_adjusted_fft = g_adjusted_fft.map(|c| c.conj());
-    let denominator_fft = f_adjusted_fft.hadamard_mul(&f_star_adjusted_fft)
-        + g_adjusted_fft.hadamard_mul(&g_star_adjusted_fft);
+    let f_star_adjusted = f_adjusted.map(|c| c.conj());
+    let g_star_adjusted = g_adjusted.map(|c| c.conj());
+    let denominator_fft =
+        f_adjusted.hadamard_mul(&f_star_adjusted) + g_adjusted.hadamard_mul(&g_star_adjusted);
 
     let mut counter = 0;
     loop {
@@ -228,19 +231,22 @@ fn babai_reduce(
             break;
         }
         let capital_shift = (capital_size as i64) - 53;
-        let capital_f_adjusted =
-            capital_f.map(|bi| i64::try_from(bi >> capital_shift).unwrap() as f64);
-        let capital_g_adjusted =
-            capital_g.map(|bi| i64::try_from(bi >> capital_shift).unwrap() as f64);
+        let mut capital_f_adjusted = capital_f
+            .map(|bi| Complex64::new(i64::try_from(bi >> capital_shift).unwrap() as f64, 0.0));
+        let mut capital_g_adjusted = capital_g
+            .map(|bi| Complex64::new(i64::try_from(bi >> capital_shift).unwrap() as f64, 0.0));
 
-        let capital_f_adjusted_fft = capital_f_adjusted.fft();
-        let capital_g_adjusted_fft = capital_g_adjusted.fft();
-        let numerator_fft = capital_f_adjusted_fft.hadamard_mul(&f_star_adjusted_fft)
-            + capital_g_adjusted_fft.hadamard_mul(&g_star_adjusted_fft);
-        let quotient_fft = numerator_fft.hadamard_div(&denominator_fft);
-        let quotient = quotient_fft.ifft();
+        // let capital_f_adjusted_fft = capital_f_adjusted.fft();
+        // let capital_g_adjusted_fft = capital_g_adjusted.fft();
+        capital_f_adjusted.fft();
+        capital_g_adjusted.fft();
 
-        let k = quotient.map(|f| Into::<BigInt>::into(f.round() as i64));
+        let numerator = capital_f_adjusted.hadamard_mul(&f_star_adjusted)
+            + capital_g_adjusted.hadamard_mul(&g_star_adjusted);
+        let mut quotient = numerator.hadamard_div(&denominator_fft);
+        quotient.ifft();
+
+        let k = quotient.map(|f| Into::<BigInt>::into(f.re.round() as i64));
 
         if k.is_zero() {
             break;

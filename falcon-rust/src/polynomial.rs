@@ -141,12 +141,6 @@ impl Polynomial<f64> {
     }
 }
 
-impl Polynomial<Complex64> {
-    pub fn ifft(&self) -> Polynomial<f64> {
-        Polynomial::new(ifft(&self.coefficients).iter().map(|c| c.re).collect_vec())
-    }
-}
-
 impl<F: Zero + PartialEq + Clone> Polynomial<F> {
     pub fn degree(&self) -> Option<usize> {
         if self.coefficients.is_empty() {
