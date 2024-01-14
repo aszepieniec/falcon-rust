@@ -1,6 +1,7 @@
 use std::ops::MulAssign;
 
 use num::{One, Zero};
+use num_complex::Complex64;
 
 pub(crate) trait Inverse: Copy + Zero + MulAssign + One {
     /// Get the inverse of a, or zero if it is zero.
@@ -27,5 +28,28 @@ pub(crate) trait Inverse: Copy + Zero + MulAssign + One {
             }
         }
         rp
+    }
+}
+
+impl Inverse for Complex64 {
+    fn inverse_or_zero(self) -> Self {
+        let modulus = self.re * self.re + self.im * self.im;
+        Complex64::new(self.re / modulus, -self.im / modulus)
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use rand::{thread_rng, RngCore};
+
+    #[test]
+    fn test_complex_inverse() {
+        let mut rng = thread_rng();
+        let c = Complex64::new(rng.next_u32() as f64, rng.next_u32() as f64);
+        let i = c.inverse_or_zero();
+        let diff = c * i - Complex64::one();
+        let norm = diff.re * diff.re + diff.im * diff.im;
+        assert!(norm < f64::EPSILON * 100.0, "norm: {norm}");
     }
 }

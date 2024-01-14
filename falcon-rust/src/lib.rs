@@ -63,6 +63,7 @@ pub mod falcon512;
 pub(crate) mod ffsampling;
 pub(crate) mod fft;
 pub(crate) mod fft_constants;
+pub(crate) mod fft_vector;
 pub(crate) mod field;
 pub(crate) mod inverse;
 pub(crate) mod ntt;

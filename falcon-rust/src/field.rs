@@ -220,7 +220,9 @@ mod test {
         cyclotomic_fourier::CyclotomicFourier,
         field::{Felt, Q},
         inverse::Inverse,
+        polynomial::Polynomial,
     };
+    use num::Zero;
 
     #[test]
     fn test_value() {
@@ -323,8 +325,8 @@ mod test {
         for (i, vector) in test_vectors.into_iter().enumerate() {
             let n = 1 << (i + 1);
             for (a, b) in vector.into_iter() {
-                assert_eq!(Felt::bitreverse(a, n), b);
-                assert_eq!(Felt::bitreverse(b, n), a);
+                assert_eq!(Felt::bitreverse_index(a, n), b);
+                assert_eq!(Felt::bitreverse_index(b, n), a);
             }
         }
     }
@@ -340,10 +342,8 @@ mod test {
         let mut b = a.clone();
         assert_eq!(a, b);
 
-        let psi = Felt::primitive_root_of_unity(n);
-        let psi_rev = Felt::bitreversed_powers(psi, n);
-        let psi_inv = Felt::inverse_or_zero(psi);
-        let psi_inv_rev = Felt::bitreversed_powers(psi_inv, n);
+        let psi_rev = Felt::bitreversed_powers(n);
+        let psi_inv_rev = Felt::bitreversed_powers_inverse(n);
         let ninv = Felt::inverse_or_zero(Felt::new(n as i16));
         Felt::fft(&mut a, &psi_rev);
         Felt::ifft(&mut a, &psi_inv_rev, ninv);
@@ -368,5 +368,34 @@ mod test {
             .collect_vec();
 
         assert_eq!(c, c_alt);
+    }
+
+    #[test]
+    fn test_multiply_reduce() {
+        let n = 32;
+        let mut rng = thread_rng();
+        let mut a = (0..n)
+            .map(|_| Felt::new(rng.gen_range(-20..20)))
+            .collect_vec();
+        let mut b = (0..n)
+            .map(|_| Felt::new(rng.gen_range(-20..20)))
+            .collect_vec();
+
+        let c = (Polynomial::new(a.clone()) * Polynomial::new(b.clone()))
+            .reduce_by_cyclotomic(n)
+            .coefficients;
+
+        let psi_rev = Felt::bitreversed_powers(n);
+        Felt::fft(&mut a, &psi_rev);
+        Felt::fft(&mut b, &psi_rev);
+        let mut d = a.iter().zip(b.iter()).map(|(&l, &r)| l * r).collect_vec();
+        let psi_inv_rev = Felt::bitreversed_powers_inverse(n);
+        let ninv = Felt::new(n as i16).inverse_or_zero();
+        Felt::ifft(&mut d, &psi_inv_rev, ninv);
+
+        let diff =
+            |u: &[Felt], v: &[Felt]| u.iter().zip(v.iter()).map(|(&l, &r)| l - r).collect_vec();
+
+        assert_eq!(diff(&c, &d), vec![Felt::zero(); n]);
     }
 }

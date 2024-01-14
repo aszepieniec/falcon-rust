@@ -1,6 +1,10 @@
-use std::ops::{Add, Mul, MulAssign, Sub};
+use std::{
+    f64::consts::PI,
+    ops::{Add, Mul, MulAssign, Sub},
+};
 
 use num::{One, Zero};
+use num_complex::Complex64;
 
 use crate::inverse::Inverse;
 
@@ -14,12 +18,11 @@ where
         + Sub<Output = Self>
         + Mul<Output = Self>
         + MulAssign
-        + Inverse
-        + From<usize>,
+        + Inverse,
 {
     /// Get the inverse of 2^n.
     fn power_of_two_inverse(n: usize) -> Self {
-        let mut a = Self::from(2);
+        let mut a = Self::one() + Self::one();
         for _ in 0..n {
             a *= a;
         }
@@ -31,7 +34,7 @@ where
 
     /// Compute the integer whose n-bit binary expansion is the reverse of
     /// that of the argument.
-    fn bitreverse(arg: usize, n: usize) -> usize {
+    fn bitreverse_index(arg: usize, n: usize) -> usize {
         assert!(n > 0);
         assert_eq!(n & (n - 1), 0);
         let mut rev = 0;
@@ -45,22 +48,44 @@ where
         rev
     }
 
-    /// Compute the n powers of the nth root of unity psi, and put them in
+    /// Compute the first n powers of the 2nth root of unity, and put them in
     /// bit-reversed order.
-    fn bitreversed_powers(psi: Self, n: usize) -> Vec<Self> {
-        let mut array = vec![Self::from(0); n];
-        let mut alpha = Self::from(1);
+    fn bitreversed_powers(n: usize) -> Vec<Self> {
+        let psi = Self::primitive_root_of_unity(2 * n);
+        let mut array = vec![Self::zero(); n];
+        let mut alpha = Self::one();
         for a in array.iter_mut() {
             *a = alpha;
             alpha *= psi;
         }
+        Self::bitreverse_array(&mut array);
+        array
+    }
+
+    /// Compute the first n powers of the 2nth root of unity, invert them, and
+    /// put them in bit-reversed order.
+    fn bitreversed_powers_inverse(n: usize) -> Vec<Self> {
+        let psi = Self::primitive_root_of_unity(2 * n).inverse_or_zero();
+        let mut array = vec![Self::zero(); n];
+        let mut alpha = Self::one();
+        for a in array.iter_mut() {
+            *a = alpha;
+            alpha *= psi;
+        }
+        Self::bitreverse_array(&mut array);
+        array
+    }
+
+    /// Reorder the given elements in the array by reversing the binary
+    /// expansions of their indices.
+    fn bitreverse_array<T>(array: &mut [T]) {
+        let n = array.len();
         for i in 0..n {
-            let j = Self::bitreverse(i, n);
+            let j = Self::bitreverse_index(i, n);
             if i < j {
                 array.swap(i, j);
             }
         }
-        array
     }
 
     /// Compute the evaluations of the polynomial on the roots of the
@@ -145,5 +170,158 @@ where
         for ai in a.iter_mut() {
             *ai *= ninv;
         }
+    }
+}
+
+impl CyclotomicFourier for Complex64 {
+    fn primitive_root_of_unity(n: usize) -> Self {
+        let angle = 2. * PI / (n as f64);
+        Complex64::new(f64::cos(angle), f64::sin(angle))
+    }
+
+    /// Custom implementation of CyclotomicFourier::bitreversed_powers for
+    /// better precision.
+    fn bitreversed_powers(n: usize) -> Vec<Self> {
+        let mut array = vec![Self::zero(); n];
+        let half_circle = PI;
+        for (i, a) in array.iter_mut().enumerate() {
+            let angle = (i as f64) * half_circle / (n as f64);
+            *a = Self::new(f64::cos(angle), f64::sin(angle));
+        }
+        Self::bitreverse_array(&mut array);
+        array
+    }
+
+    /// Custom implementation of CyclotomicFourier::bitreversed_powers_inverse
+    /// for better precision.
+    fn bitreversed_powers_inverse(n: usize) -> Vec<Self> {
+        let mut array = vec![Self::zero(); n];
+        let half_circle = PI;
+        for (i, a) in array.iter_mut().enumerate() {
+            let angle = (i as f64) * half_circle / (n as f64);
+            *a = Self::new(f64::cos(angle), -f64::sin(angle));
+        }
+        Self::bitreverse_array(&mut array);
+        array
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use crate::inverse::Inverse;
+    use crate::{cyclotomic_fourier::CyclotomicFourier, polynomial::Polynomial};
+    use itertools::Itertools;
+    use num::One;
+    use num_complex::Complex64;
+    use rand::{thread_rng, Rng, RngCore};
+
+    #[test]
+    fn test_primitive_nth_root_of_unity() {
+        for log2n in 0..12 {
+            let n = 1 << log2n;
+            let mut z = Complex64::primitive_root_of_unity(n);
+            for _ in 0..log2n {
+                assert!((z - Complex64::one()).norm() > f32::EPSILON as f64);
+                z *= z;
+            }
+            assert!((z - Complex64::one()).norm() < f32::EPSILON as f64);
+        }
+    }
+
+    #[test]
+    fn test_fft() {
+        let n = 32;
+        let mut rng = thread_rng();
+        let mut a = (0..n)
+            .map(|_| Complex64::new(rng.gen_range(0..2) as f64, rng.gen_range(0..2) as f64))
+            .collect_vec();
+        let mut b = a.clone();
+        let diff = |u: &[Complex64], v: &[Complex64]| {
+            u.iter()
+                .zip(v.iter())
+                .map(|(l, r)| l - r)
+                .map(|c| c * c.conj())
+                .sum::<Complex64>()
+                .re
+        };
+        assert!(diff(&a, &b) < 100.0 * f64::EPSILON);
+
+        let psi_rev = Complex64::bitreversed_powers(2 * n);
+        let psi_inv_rev = Complex64::bitreversed_powers_inverse(2 * n);
+        let ninv = Complex64::inverse_or_zero(Complex64::new(n as f64, 0.0));
+        Complex64::fft(&mut a, &psi_rev);
+        Complex64::ifft(&mut a, &psi_inv_rev, ninv);
+        assert!(
+            diff(&a, &b) < f32::EPSILON as f64,
+            "a: {:?}\nb: {:?}\nnorm: {}",
+            a,
+            b,
+            diff(&a, &b)
+        );
+
+        let x = Complex64::new(rng.next_u32() as f64, rng.next_u32() as f64);
+        let y = Complex64::new(rng.next_u32() as f64, rng.next_u32() as f64);
+        let mut c = a
+            .iter()
+            .zip(b.iter())
+            .map(|(&l, &r)| x * l + y * r)
+            .collect_vec();
+
+        Complex64::fft(&mut a, &psi_rev);
+        Complex64::fft(&mut b, &psi_rev);
+        Complex64::fft(&mut c, &psi_rev);
+
+        let c_alt = a
+            .iter()
+            .zip(b.iter())
+            .map(|(&l, &r)| x * l + y * r)
+            .collect_vec();
+
+        assert!(
+            diff(&c, &c_alt) < f32::EPSILON as f64,
+            "norm of difference: {}",
+            diff(&c, &c_alt)
+        );
+    }
+
+    #[test]
+    fn test_multiply_reduce() {
+        let n = 32;
+        let mut rng = thread_rng();
+        let mut a = (0..n)
+            .map(|_| Complex64::new(rng.gen_range(0..2) as f64, 0.0))
+            .collect_vec();
+        let mut b = (0..n)
+            .map(|_| Complex64::new(rng.gen_range(0..2) as f64, 0.0))
+            .collect_vec();
+
+        let c = (Polynomial::new(a.clone()) * Polynomial::new(b.clone()))
+            .reduce_by_cyclotomic(n)
+            .coefficients;
+
+        let psi_rev = Complex64::bitreversed_powers(n);
+        Complex64::fft(&mut a, &psi_rev);
+        Complex64::fft(&mut b, &psi_rev);
+        let mut d = a.iter().zip(b.iter()).map(|(l, r)| l * r).collect_vec();
+        let psi_inv_rev = Complex64::bitreversed_powers_inverse(n);
+        let ninv = Complex64::new(1.0 / (n as f64), 0.0);
+        Complex64::ifft(&mut d, &psi_inv_rev, ninv);
+
+        let diff = |u: &[Complex64], v: &[Complex64]| {
+            u.iter()
+                .zip(v.iter())
+                .map(|(l, r)| l - r)
+                .map(|c| c * c.conj())
+                .sum::<Complex64>()
+                .re
+        };
+
+        assert!(
+            diff(&c, &d) < f32::EPSILON as f64,
+            "lhs: {:?}\nrhs: {:?}\nnorm: {}",
+            c,
+            d,
+            diff(&c, &d)
+        );
     }
 }
