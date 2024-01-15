@@ -8,10 +8,22 @@ use crate::{cyclotomic_fourier::CyclotomicFourier, polynomial::Polynomial};
 
 /// Implements Cyclotomic FFT without bitreversing the outputs, and using
 /// precomputed powers of the 2nth primitive root of unity.
-pub trait FastFft {
+pub trait FastFft: Sized + Clone {
     type Field: Add + Mul + AddAssign + MulAssign + Neg + Sub + SubAssign + One + Zero;
-    fn fft(&mut self);
-    fn ifft(&mut self);
+    fn fft_inplace(&mut self);
+
+    fn fft(&self) -> Self {
+        let mut a = self.clone();
+        a.fft_inplace();
+        a
+    }
+
+    fn ifft_inplace(&mut self);
+    fn ifft(&self) -> Self {
+        let mut a = self.clone();
+        a.ifft_inplace();
+        a
+    }
 }
 
 const COMPLEX_BITREVERSED_POWERS_1: [Complex64; 1] = [Complex64::new(1.0, 0.0)];
@@ -2091,7 +2103,7 @@ const COMPLEX_BITREVERSED_POWERS_1024: [Complex64; 1024] = [
 
 impl FastFft for Polynomial<Complex64> {
     type Field = Complex64;
-    fn fft(&mut self) {
+    fn fft_inplace(&mut self) {
         let n = self.coefficients.len();
         let psi_rev: &[Complex64] = match n {
             1 => &COMPLEX_BITREVERSED_POWERS_1,
@@ -2110,7 +2122,7 @@ impl FastFft for Polynomial<Complex64> {
         Complex64::fft(&mut self.coefficients, psi_rev);
     }
 
-    fn ifft(&mut self) {
+    fn ifft_inplace(&mut self) {
         let n = self.coefficients.len();
         let psi_rev: &[Complex64] = match n {
             1 => &COMPLEX_BITREVERSED_POWERS_1,
@@ -2156,7 +2168,7 @@ mod test {
         // let mut a = vec![Complex64::zero(), Complex64::one()];
         let mut b = crate::fft::fft(&a);
         let mut a_fft = Polynomial::new(a);
-        a_fft.fft();
+        a_fft.fft_inplace();
         a = a_fft.coefficients;
 
         // a and b should be the same but in different orders

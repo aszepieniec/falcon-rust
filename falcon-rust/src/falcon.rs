@@ -204,12 +204,12 @@ fn babai_reduce(
     .max()
     .unwrap();
     let shift = (size as i64) - 53;
-    let mut f_adjusted =
-        f.map(|bi| Complex64::new(i64::try_from(bi >> shift).unwrap() as f64, 0.0));
-    let mut g_adjusted =
-        g.map(|bi| Complex64::new(i64::try_from(bi >> shift).unwrap() as f64, 0.0));
-    f_adjusted.fft();
-    g_adjusted.fft();
+    let f_adjusted = f
+        .map(|bi| Complex64::new(i64::try_from(bi >> shift).unwrap() as f64, 0.0))
+        .fft();
+    let g_adjusted = g
+        .map(|bi| Complex64::new(i64::try_from(bi >> shift).unwrap() as f64, 0.0))
+        .fft();
 
     let f_star_adjusted = f_adjusted.map(|c| c.conj());
     let g_star_adjusted = g_adjusted.map(|c| c.conj());
@@ -231,20 +231,16 @@ fn babai_reduce(
             break;
         }
         let capital_shift = (capital_size as i64) - 53;
-        let mut capital_f_adjusted = capital_f
-            .map(|bi| Complex64::new(i64::try_from(bi >> capital_shift).unwrap() as f64, 0.0));
-        let mut capital_g_adjusted = capital_g
-            .map(|bi| Complex64::new(i64::try_from(bi >> capital_shift).unwrap() as f64, 0.0));
-
-        // let capital_f_adjusted_fft = capital_f_adjusted.fft();
-        // let capital_g_adjusted_fft = capital_g_adjusted.fft();
-        capital_f_adjusted.fft();
-        capital_g_adjusted.fft();
+        let capital_f_adjusted = capital_f
+            .map(|bi| Complex64::new(i64::try_from(bi >> capital_shift).unwrap() as f64, 0.0))
+            .fft();
+        let capital_g_adjusted = capital_g
+            .map(|bi| Complex64::new(i64::try_from(bi >> capital_shift).unwrap() as f64, 0.0))
+            .fft();
 
         let numerator = capital_f_adjusted.hadamard_mul(&f_star_adjusted)
             + capital_g_adjusted.hadamard_mul(&g_star_adjusted);
-        let mut quotient = numerator.hadamard_div(&denominator_fft);
-        quotient.ifft();
+        let quotient = numerator.hadamard_div(&denominator_fft).ifft();
 
         let k = quotient.map(|f| Into::<BigInt>::into(f.re.round() as i64));
 
