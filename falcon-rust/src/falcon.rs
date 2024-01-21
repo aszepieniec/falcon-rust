@@ -85,13 +85,18 @@ fn gram_schmidt_norm_squared(f: &Polynomial<i16>, g: &Polynomial<i16>) -> f64 {
     let norm_g_squared = g.l2_norm_squared();
     let gamma1 = norm_f_squared + norm_g_squared;
 
-    let f_fft = f.map(|i| *i as f64).fft();
-    let g_fft = g.map(|i| *i as f64).fft();
+    let f_fft = f.map(|i| Complex64::new(*i as f64, 0.0)).fft();
+    let g_fft = g.map(|i| Complex64::new(*i as f64, 0.0)).fft();
     let f_adj_fft = f_fft.map(|c| c.conj());
     let g_adj_fft = g_fft.map(|c| c.conj());
     let ffgg_fft = f_fft.hadamard_mul(&f_adj_fft) + g_fft.hadamard_mul(&g_adj_fft);
-    let qf_over_ffgg_fft = f_adj_fft.map(|c| c * (Q as f64)).hadamard_div(&ffgg_fft);
-    let qg_over_ffgg_fft = g_adj_fft.map(|c| c * (Q as f64)).hadamard_div(&ffgg_fft);
+    let ffgg_fft_inverse = ffgg_fft.hadamard_inv();
+    let qf_over_ffgg_fft = f_adj_fft
+        .map(|c| c * (Q as f64))
+        .hadamard_mul(&ffgg_fft_inverse);
+    let qg_over_ffgg_fft = g_adj_fft
+        .map(|c| c * (Q as f64))
+        .hadamard_mul(&ffgg_fft_inverse);
     let norm_f_over_ffgg_squared = qf_over_ffgg_fft
         .coefficients
         .iter()
@@ -606,30 +611,28 @@ impl<const N: usize> PartialEq for SecretKey<N> {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct PublicKey<const N: usize> {
-    h: Vec<Felt>,
+    h: Polynomial<Felt>,
 }
 
 impl<const N: usize> PublicKey<N> {
     /// Compute the public key that matches with this secret key.
     pub fn from_secret_key(sk: &SecretKey<N>) -> Self {
-        let f = ifft(&sk.b0_fft[1])
-            .iter()
-            .map(|c| -Felt::new(c.re.round() as i16))
-            .collect_vec();
-        let f_ntt = ntt(&f);
-        let g = ifft(&sk.b0_fft[0])
-            .iter()
-            .map(|c| Felt::new(c.re.round() as i16))
-            .collect_vec();
-        let g_ntt = ntt(&g);
-        let f_inv = Felt::batch_inverse_or_zero(&f_ntt);
-        let h_ntt = g_ntt
-            .clone()
-            .into_iter()
-            .zip_eq(f_inv)
-            .map(|(a, b)| a * b)
-            .collect_vec();
-        let h = intt(&h_ntt);
+        let f = Polynomial::new(
+            ifft(&sk.b0_fft[1])
+                .iter()
+                .map(|c| -Felt::new(c.re.round() as i16))
+                .collect_vec(),
+        );
+        let f_ntt = f.fft();
+        let g = Polynomial::new(
+            ifft(&sk.b0_fft[0])
+                .iter()
+                .map(|c| Felt::new(c.re.round() as i16))
+                .collect_vec(),
+        );
+        let g_ntt = g.fft();
+        let h_ntt = g_ntt.hadamard_div(&f_ntt);
+        let h = h_ntt.ifft();
         Self { h }
     }
 
@@ -660,29 +663,31 @@ impl<const N: usize> PublicKey<N> {
 
         // parse h
         let bit_buffer = BitVec::from_bytes(&byte_array[1..]);
-        let h = bit_buffer
-            .iter()
-            .chunks(14)
-            .into_iter()
-            .map(|ch| {
-                let mut int = 0;
-                for b in ch {
-                    int = (int << 1) | (b as i16);
-                }
-                int
-            })
-            .map(Felt::new)
-            .collect_vec();
+        let h = Polynomial::new(
+            bit_buffer
+                .iter()
+                .chunks(14)
+                .into_iter()
+                .map(|ch| {
+                    let mut int = 0;
+                    for b in ch {
+                        int = (int << 1) | (b as i16);
+                    }
+                    int
+                })
+                .map(Felt::new)
+                .collect_vec(),
+        );
 
         Ok(PublicKey { h })
     }
 
     // Serialize the public key as a list of bytes.
     pub fn to_bytes(&self) -> Vec<u8> {
-        let header = self.h.len().ilog2() as u8;
+        let header = self.h.coefficients.len().ilog2() as u8;
         let mut bit_buffer = BitVec::from_bytes(&[header]);
 
-        for hi in self.h.iter() {
+        for hi in self.h.coefficients.iter() {
             for i in (0..14).rev() {
                 bit_buffer.push(hi.value() & (1 << i) != 0);
             }
@@ -876,19 +881,16 @@ pub fn verify<const N: usize>(m: &[u8], sig: &Signature<N>, pk: &PublicKey<N>) -
             return false;
         }
     };
-    let s2_ntt = ntt(&s2.iter().map(|a| Felt::new(*a)).collect_vec());
-    let h_ntt = ntt(&pk.h);
-    let c_ntt = ntt(&c.coefficients);
+    let s2_ntt = Polynomial::new(s2.iter().map(|a| Felt::new(*a)).collect_vec()).fft();
+    let h_ntt = pk.h.fft();
+    let c_ntt = c.fft();
 
     // s1 = c - s2 * pk.h;
-    let s1_ntt = c_ntt
-        .iter()
-        .zip(s2_ntt.iter().zip(h_ntt.iter()))
-        .map(|(&a, (&b, &c))| a - b * c)
-        .collect_vec();
-    let s1 = intt(&s1_ntt);
+    let s1_ntt = c_ntt - s2_ntt.hadamard_mul(&h_ntt);
+    let s1 = s1_ntt.ifft();
 
     let length_squared = s1
+        .coefficients
         .iter()
         .map(|i| i.balanced_value() as i64)
         .map(|i| (i * i))

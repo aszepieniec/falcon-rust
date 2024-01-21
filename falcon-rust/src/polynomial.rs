@@ -1,5 +1,4 @@
 use num::{One, Zero};
-use num_complex::Complex64;
 use sha3::{digest::*, Shake256};
 use std::default::Default;
 use std::fmt::Debug;
@@ -7,8 +6,8 @@ use std::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 
 use itertools::Itertools;
 
-use crate::fft::{fft, ifft};
 use crate::field::{Felt, Q};
+use crate::inverse::Inverse;
 
 #[derive(Debug, Clone)]
 pub(crate) struct Polynomial<F> {
@@ -103,41 +102,42 @@ fn vector_karatsuba<
     product
 }
 
-impl<F: Mul<Output = F> + Sub<Output = F> + AddAssign + Zero + Div<Output = F> + Clone>
-    Polynomial<F>
+impl<
+        F: Mul<Output = F> + Sub<Output = F> + AddAssign + Zero + Div<Output = F> + Inverse + Clone,
+    > Polynomial<F>
 {
     pub fn hadamard_mul(&self, other: &Self) -> Self {
         Polynomial::new(
             self.coefficients
                 .iter()
                 .zip(other.coefficients.iter())
-                .map(|(a, b)| a.clone() * b.clone())
+                .map(|(a, b)| *a * *b)
                 .collect_vec(),
         )
     }
     pub fn hadamard_div(&self, other: &Self) -> Self {
+        let other_coefficients_inverse = F::batch_inverse_or_zero(&other.coefficients);
         Polynomial::new(
             self.coefficients
                 .iter()
-                .zip(other.coefficients.iter())
-                .map(|(a, b)| a.clone() / b.clone())
+                .zip(other_coefficients_inverse.iter())
+                .map(|(a, b)| *a * *b)
                 .collect_vec(),
         )
     }
 
-    /// Multiply two polynomials using Karatsuba's divide-and-conquer algorithm.
-    pub fn karatsuba(&self, other: &Self) -> Self {
-        Polynomial::new(vector_karatsuba(&self.coefficients, &other.coefficients))
+    pub fn hadamard_inv(&self) -> Self {
+        let coefficients_inverse = F::batch_inverse_or_zero(&self.coefficients);
+        Polynomial::new(coefficients_inverse)
     }
 }
 
-impl Polynomial<f64> {
-    pub fn fft(&self) -> Polynomial<Complex64> {
-        Polynomial::new(fft(&self
-            .coefficients
-            .iter()
-            .map(|&r| Complex64::new(r, 0.0))
-            .collect_vec()))
+impl<F: Mul<Output = F> + Sub<Output = F> + AddAssign + Zero + Div<Output = F> + Clone>
+    Polynomial<F>
+{
+    /// Multiply two polynomials using Karatsuba's divide-and-conquer algorithm.
+    pub fn karatsuba(&self, other: &Self) -> Self {
+        Polynomial::new(vector_karatsuba(&self.coefficients, &other.coefficients))
     }
 }
 
