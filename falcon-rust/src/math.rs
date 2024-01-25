@@ -130,10 +130,10 @@ fn xgcd(a: &BigInt, b: &BigInt) -> (BigInt, BigInt, BigInt) {
     (old_r, old_s, old_t)
 }
 
-/// Solve the NTRU equation. Given $f, g \in \mathbb{Z}[X]$, find $F, G \in \mathbb{Z}[X]$
+/// Solve the NTRU equation. Given f, g in ZZ[X], find F, G in ZZ[X].
 /// such that
 ///
-/// $$    f G - g F = q \mod \langle X^n + 1 \rangle $$
+///    f G - g F = q  mod (X^n + 1)
 ///
 /// Algorithm 6 of the specification [1, p.35].
 ///

@@ -73,7 +73,8 @@ pub(crate) enum LdlTree {
 }
 
 /// Compute the LDL Tree of G. Corresponds to Algorithm 9 of the
-/// specification [1, p.37]
+/// specification [1, p.37]. The argument is a 2x2 matrix of
+/// polynomials, given in FFT form.
 ///
 /// [1]: https://falcon-sign.info/falcon.pdf
 pub(crate) fn ffldl(g: [Vec<Complex64>; 4]) -> LdlTree {
@@ -139,6 +140,7 @@ pub(crate) fn ffsampling(
                     .zip(t.1.iter().zip(z1.iter().zip(ell.iter())))
                     .map(|(t0_, (t1_, (z1_, l_)))| t0_ + (t1_ - z1_) * l_)
                     .collect_vec();
+
             let bold_t0 = split_fft(&t0_prime);
             let bold_z0 = ffsampling(&bold_t0, left, parameters, rng);
             let z0 = merge_fft(&bold_z0.0, &bold_z0.1);

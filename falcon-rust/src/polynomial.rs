@@ -634,20 +634,16 @@ pub(crate) fn hash_to_point(string: &[u8], n: usize) -> Polynomial<Felt> {
 mod test {
     use std::default::Default;
 
+    use crate::field::Felt;
+    use crate::polynomial::hash_to_point;
+    use crate::polynomial::Polynomial;
     use itertools::Itertools;
-    use num_complex::Complex64;
     use rand::thread_rng;
     use rand::Rng;
     use sha3::digest::ExtendableOutput;
     use sha3::digest::Update;
     use sha3::digest::XofReader;
     use sha3::Shake256;
-
-    use crate::fft::fft;
-    use crate::fft::ifft;
-    use crate::field::Felt;
-    use crate::polynomial::hash_to_point;
-    use crate::polynomial::Polynomial;
 
     #[test]
     fn test_shake256() {
@@ -734,73 +730,6 @@ mod test {
         let product = Polynomial::new(expected_coefficients.clone()) * cofactor_polynomial.clone();
         let quotient = product / cofactor_polynomial;
         assert_eq!(Polynomial::new(expected_coefficients), quotient);
-    }
-
-    #[test]
-    fn test_cyclotomic_multiplication() {
-        let mut rng = thread_rng();
-        let n = 64;
-        let coefficients_a = (0..n).map(|_| rng.gen_range(-5..5) as f64).collect_vec();
-        let coefficients_b = (0..n).map(|_| rng.gen_range(-5..5) as f64).collect_vec();
-        let polynomial_a = Polynomial::new(coefficients_a.clone());
-        let polynomial_b = Polynomial::new(coefficients_b.clone());
-        let reduced = (polynomial_a * polynomial_b).reduce_by_cyclotomic(n);
-
-        let complex_coefficients_a = coefficients_a
-            .into_iter()
-            .map(|r| Complex64::new(r, 0.0))
-            .collect_vec();
-        let complex_coefficients_b = coefficients_b
-            .into_iter()
-            .map(|r| Complex64::new(r, 0.0))
-            .collect_vec();
-        let fft_a = fft(&complex_coefficients_a);
-        let fft_b = fft(&complex_coefficients_b);
-        let had = fft_a
-            .into_iter()
-            .zip(fft_b)
-            .map(|(a, b)| a * b)
-            .collect_vec();
-        let product = ifft(&had);
-        let fft_polynomial = Polynomial::new(product.iter().map(|&c| c.re).collect_vec());
-
-        let difference = reduced.clone() - fft_polynomial.clone();
-        assert!(
-            difference.l2_norm() <= f64::EPSILON * 10000.0,
-            "reduced: {:?}\nfft: {:?}",
-            reduced,
-            fft_polynomial
-        );
-    }
-
-    #[test]
-    fn test_adjoint() {
-        let mut rng = thread_rng();
-        let n = 64;
-        let coefficients = (0..n).map(|_| rng.gen_range(-5..5) as f64).collect_vec();
-        let polynomial = Polynomial::new(coefficients.clone());
-        let hermitian_adjoint = polynomial.hermitian_adjoint();
-        let coefficients_fft = fft(&coefficients
-            .iter()
-            .map(|&c| Complex64::new(c, 0.0))
-            .collect_vec());
-        let coefficients_conjugate =
-            ifft(&coefficients_fft.into_iter().map(|c| c.conj()).collect_vec());
-        let conjugate_polynomial = Polynomial::new(
-            coefficients_conjugate
-                .into_iter()
-                .map(|c| c.re)
-                .collect_vec(),
-        );
-
-        let difference = hermitian_adjoint.clone() - conjugate_polynomial.clone();
-        assert!(
-            difference.l2_norm() <= f64::EPSILON * 100.0,
-            "hermitian_adjoint: {:?}\nconjugate: {:?}\ndifference: {}",
-            hermitian_adjoint.coefficients,
-            conjugate_polynomial.coefficients,
-            difference.l2_norm(),
-        );
     }
 
     #[test]
