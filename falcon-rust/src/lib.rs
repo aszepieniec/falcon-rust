@@ -10,7 +10,8 @@
 //! Falcon1024 claims at least 252 bits of security, both against quantum computers.
 //!
 //! This implementation was written following the [specification]
-//! and the official [python implementation].
+//! and using the [python implementation] as a guide, although later versions diverge from this
+//! reference point.
 //!
 //! [Falcon]: https://falcon-sign.info/
 //! [NIST PQC]: https://csrc.nist.gov/projects/post-quantum-cryptography
@@ -66,6 +67,7 @@ pub(crate) mod fft;
 pub(crate) mod fft_constants;
 pub(crate) mod field;
 pub(crate) mod inverse;
+pub(crate) mod math;
 pub(crate) mod ntt;
 pub(crate) mod ntt_constants;
 pub(crate) mod polynomial;
