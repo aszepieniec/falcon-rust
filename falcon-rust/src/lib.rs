@@ -68,7 +68,5 @@ pub(crate) mod fft_constants;
 pub(crate) mod field;
 pub(crate) mod inverse;
 pub(crate) mod math;
-pub(crate) mod ntt;
-pub(crate) mod ntt_constants;
 pub(crate) mod polynomial;
 pub(crate) mod samplerz;

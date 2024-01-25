@@ -8,16 +8,6 @@ use rand_distr::{
 
 use crate::cyclotomic_fourier::CyclotomicFourier;
 use crate::inverse::Inverse;
-use crate::ntt_constants::PHI1024_ROOTS_ZQ;
-use crate::ntt_constants::PHI128_ROOTS_ZQ;
-use crate::ntt_constants::PHI16_ROOTS_ZQ;
-use crate::ntt_constants::PHI2048_ROOTS_ZQ;
-use crate::ntt_constants::PHI256_ROOTS_ZQ;
-use crate::ntt_constants::PHI32_ROOTS_ZQ;
-use crate::ntt_constants::PHI4_ROOTS_ZQ;
-use crate::ntt_constants::PHI512_ROOTS_ZQ;
-use crate::ntt_constants::PHI64_ROOTS_ZQ;
-use crate::ntt_constants::PHI8_ROOTS_ZQ;
 
 /// q is the integer modulus which is used in Falcon.
 pub(crate) const Q: u32 = 12 * 1024 + 1;
@@ -136,23 +126,6 @@ impl Distribution<Felt> for Standard {
 impl Display for Felt {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_fmt(format_args!("{}", self.value()))
-    }
-}
-
-/// A dictionary of all the roots.
-pub(crate) const fn roots_dict_zq(n: usize) -> &'static [Felt] {
-    match n {
-        2usize => &PHI4_ROOTS_ZQ,
-        4usize => &PHI8_ROOTS_ZQ,
-        8usize => &PHI16_ROOTS_ZQ,
-        16usize => &PHI32_ROOTS_ZQ,
-        32usize => &PHI64_ROOTS_ZQ,
-        64usize => &PHI128_ROOTS_ZQ,
-        128usize => &PHI256_ROOTS_ZQ,
-        256usize => &PHI512_ROOTS_ZQ,
-        512usize => &PHI1024_ROOTS_ZQ,
-        1024usize => &PHI2048_ROOTS_ZQ,
-        _ => panic!("n must be a power of two smaller than 2048"),
     }
 }
 

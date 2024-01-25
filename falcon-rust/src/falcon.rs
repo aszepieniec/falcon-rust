@@ -9,9 +9,7 @@ use crate::{
     ffsampling::{ffldl, ffsampling, gram, normalize_tree, LdlTree},
     fft::{fft, ifft},
     field::{Felt, Q},
-    inverse::Inverse,
     math::ntru_gen,
-    ntt::{intt, ntt},
     polynomial::{hash_to_point, Polynomial},
 };
 
@@ -70,8 +68,8 @@ pub enum FalconDeserializationError {
 
 #[derive(Debug, Clone)]
 pub struct SecretKey<const N: usize> {
-    /// b0_fft = [[g_fft, -f_fft], [G_fft, -F_fft]]
-    b0_fft: [Vec<Complex64>; 4],
+    /// b0 = [[g, -f], [G, -F]]
+    b0: [Polynomial<i16>; 4],
     tree: LdlTree,
 }
 
@@ -98,21 +96,25 @@ impl<const N: usize> SecretKey<N> {
     }
 
     pub(crate) fn from_b0(b0: [Polynomial<i16>; 4]) -> Self {
-        let b0_fft = b0
-            .map(|v| v.coefficients)
+        let b0_fft: [Vec<Complex64>; 4] = b0
+            .iter()
             .map(|c| {
-                c.iter()
+                c.coefficients
+                    .iter()
                     .map(|cc| Complex64::new(*cc as f64, 0.0))
                     .collect_vec()
             })
-            .map(|c| fft(&c));
+            .map(|c| fft(&c))
+            .collect_vec()
+            .try_into()
+            .unwrap();
 
         let g0_fft = gram(b0_fft.clone());
         let mut tree = ffldl(g0_fft);
         let sigma = FalconVariant::from_n(N).parameters().sigma;
         normalize_tree(&mut tree, sigma);
 
-        SecretKey { b0_fft, tree }
+        SecretKey { b0, tree }
     }
 
     /// Determine how many bits to use for each field element of a given polynomial.
@@ -155,41 +157,32 @@ impl<const N: usize> SecretKey<N> {
     /// Serialize the secret key to a vector of bytes.
     pub fn to_bytes(&self) -> Vec<u8> {
         // header
-        let n = self.b0_fft[0].len();
+        let n = self.b0[0].coefficients.len();
         let l = n.checked_ilog2().unwrap() as u8;
         let header: u8 = (5 << 4) // fixed bits
                         | l;
 
-        let f = ifft(&self.b0_fft[1])
-            .into_iter()
-            .map(|c| Felt::new(-c.re.round() as i16))
-            .collect_vec();
-        let g = ifft(&self.b0_fft[0])
-            .into_iter()
-            .map(|c| Felt::new(c.re.round() as i16))
-            .collect_vec();
-        let capital_f = ifft(&self.b0_fft[3])
-            .into_iter()
-            .map(|c| Felt::new(-c.re.round() as i16))
-            .collect_vec();
+        let f = &self.b0[1];
+        let g = &self.b0[0];
+        let capital_f = &self.b0[3];
 
         let mut bits = BitVec::from_bytes(&[header]);
         // f
         let width = Self::field_element_width(n, 0);
-        for fi in f.into_iter() {
-            let mut substring = Self::serialize_field_element(width, fi);
+        for &fi in f.coefficients.iter() {
+            let mut substring = Self::serialize_field_element(width, Felt::new(-fi));
             bits.append(&mut substring);
         }
         // g
         let width = Self::field_element_width(n, 1);
-        for fi in g.into_iter() {
-            let mut substring = Self::serialize_field_element(width, fi);
+        for &fi in g.coefficients.iter() {
+            let mut substring = Self::serialize_field_element(width, Felt::new(fi));
             bits.append(&mut substring);
         }
         // capital_f
         let width = Self::field_element_width(n, 2);
-        for fi in capital_f.into_iter() {
-            let mut substring = Self::serialize_field_element(width, fi);
+        for &fi in capital_f.coefficients.iter() {
+            let mut substring = Self::serialize_field_element(width, Felt::new(-fi));
             bits.append(&mut substring);
         }
 
@@ -229,104 +222,77 @@ impl<const N: usize> SecretKey<N> {
 
         // f
         let width_f = Self::field_element_width(n, 0);
-        let f = bit_buffer
-            .iter()
-            .take(n * width_f)
-            .chunks(width_f)
-            .into_iter()
-            .map(BitVec::from_iter)
-            .map(|subs| Self::deserialize_field_element(&subs))
-            .collect::<Result<Vec<Felt>, _>>()?;
+        let f = Polynomial::new(
+            bit_buffer
+                .iter()
+                .take(n * width_f)
+                .chunks(width_f)
+                .into_iter()
+                .map(BitVec::from_iter)
+                .map(|subs| Self::deserialize_field_element(&subs))
+                .collect::<Result<Vec<Felt>, _>>()?,
+        );
 
         // g
         let width_g = Self::field_element_width(n, 1);
-        let g = bit_buffer
-            .iter()
-            .skip(n * width_f)
-            .take(n * width_g)
-            .chunks(width_g)
-            .into_iter()
-            .map(BitVec::from_iter)
-            .map(|subs| Self::deserialize_field_element(&subs))
-            .collect::<Result<Vec<Felt>, _>>()?;
+        let g = Polynomial::new(
+            bit_buffer
+                .iter()
+                .skip(n * width_f)
+                .take(n * width_g)
+                .chunks(width_g)
+                .into_iter()
+                .map(BitVec::from_iter)
+                .map(|subs| Self::deserialize_field_element(&subs))
+                .collect::<Result<Vec<Felt>, _>>()?,
+        );
 
         // capital_f
         let width_capital_f = Self::field_element_width(n, 2);
-        let capital_f = bit_buffer
-            .iter()
-            .skip(n * width_g + n * width_f)
-            .take(n * width_capital_f)
-            .chunks(width_capital_f)
-            .into_iter()
-            .map(BitVec::from_iter)
-            .map(|subs| Self::deserialize_field_element(&subs))
-            .collect::<Result<Vec<Felt>, _>>()?;
+        let capital_f = Polynomial::new(
+            bit_buffer
+                .iter()
+                .skip(n * width_g + n * width_f)
+                .take(n * width_capital_f)
+                .chunks(width_capital_f)
+                .into_iter()
+                .map(BitVec::from_iter)
+                .map(|subs| Self::deserialize_field_element(&subs))
+                .collect::<Result<Vec<Felt>, _>>()?,
+        );
 
         // all bits in the bit buffer should have been read at this point
         if bit_buffer.len() != n * width_f + n * width_g + n * width_capital_f {
             return Err(FalconDeserializationError::BadEncodingLength);
         }
 
-        // compute capital_g from f, g, capital_f
-        let f_ntt = ntt(&f);
-        let f_inv_ntt = Felt::batch_inverse_or_zero(&f_ntt);
-        let g_ntt = ntt(&g);
-        let capital_f_ntt = ntt(&capital_f);
-        let capital_g_ntt = g_ntt
-            .into_iter()
-            .zip(capital_f_ntt)
-            .zip(f_inv_ntt)
-            .map(|((g, cap_f), f_inv)| g * cap_f * f_inv)
-            .collect_vec();
-        let capital_g = intt(&capital_g_ntt);
-        // todo: batch-inverse f_ntt
-
         // capital_g * f - g * capital_f = Q (mod X^n + 1)
+        let capital_g = g
+            .fft()
+            .hadamard_div(&f.fft())
+            .hadamard_mul(&capital_f.fft())
+            .ifft();
 
         Ok(Self::from_b0([
-            Polynomial::new(g.to_vec()).map(|f| f.balanced_value()),
-            -Polynomial::new(f.to_vec()).map(|f| f.balanced_value()),
-            Polynomial::new(capital_g.to_vec()).map(|f| f.balanced_value()),
-            -Polynomial::new(capital_f.to_vec()).map(|f| f.balanced_value()),
+            g.map(|f| f.balanced_value()),
+            -f.map(|f| f.balanced_value()),
+            capital_g.map(|f| f.balanced_value()),
+            -capital_f.map(|f| f.balanced_value()),
         ]))
     }
 }
 
 impl<const N: usize> PartialEq for SecretKey<N> {
     fn eq(&self, other: &Self) -> bool {
-        let own_f = ifft(&self.b0_fft[1])
-            .into_iter()
-            .map(|c| Felt::new(-c.re.round() as i16))
-            .collect_vec();
-        let own_g = ifft(&self.b0_fft[0])
-            .into_iter()
-            .map(|c| Felt::new(c.re.round() as i16))
-            .collect_vec();
-        let own_capital_f = ifft(&self.b0_fft[3])
-            .into_iter()
-            .map(|c| Felt::new(-c.re.round() as i16))
-            .collect_vec();
-        let own_capital_g = ifft(&self.b0_fft[2])
-            .into_iter()
-            .map(|c| Felt::new(-c.re.round() as i16))
-            .collect_vec();
+        let own_f = &self.b0[1];
+        let own_g = &self.b0[0];
+        let own_capital_f = &self.b0[3];
+        let own_capital_g = &self.b0[2];
 
-        let other_f = ifft(&other.b0_fft[1])
-            .into_iter()
-            .map(|c| Felt::new(-c.re.round() as i16))
-            .collect_vec();
-        let other_g = ifft(&other.b0_fft[0])
-            .into_iter()
-            .map(|c| Felt::new(c.re.round() as i16))
-            .collect_vec();
-        let other_capital_f = ifft(&other.b0_fft[3])
-            .into_iter()
-            .map(|c| Felt::new(-c.re.round() as i16))
-            .collect_vec();
-        let other_capital_g = ifft(&other.b0_fft[2])
-            .into_iter()
-            .map(|c| Felt::new(-c.re.round() as i16))
-            .collect_vec();
+        let other_f = &other.b0[1];
+        let other_g = &other.b0[0];
+        let other_capital_f = &other.b0[3];
+        let other_capital_g = &other.b0[2];
 
         own_f == other_f
             && own_g == other_g
@@ -334,6 +300,8 @@ impl<const N: usize> PartialEq for SecretKey<N> {
             && own_capital_g == other_capital_g
     }
 }
+
+impl<const N: usize> Eq for SecretKey<N> {}
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct PublicKey<const N: usize> {
@@ -343,19 +311,9 @@ pub struct PublicKey<const N: usize> {
 impl<const N: usize> PublicKey<N> {
     /// Compute the public key that matches with this secret key.
     pub fn from_secret_key(sk: &SecretKey<N>) -> Self {
-        let f = Polynomial::new(
-            ifft(&sk.b0_fft[1])
-                .iter()
-                .map(|c| -Felt::new(c.re.round() as i16))
-                .collect_vec(),
-        );
+        let f = sk.b0[1].map(|&c| -Felt::new(c));
         let f_ntt = f.fft();
-        let g = Polynomial::new(
-            ifft(&sk.b0_fft[0])
-                .iter()
-                .map(|c| Felt::new(c.re.round() as i16))
-                .collect_vec(),
-        );
+        let g = sk.b0[0].map(|&c| Felt::new(c));
         let g_ntt = g.fft();
         let h_ntt = g_ntt.hadamard_div(&f_ntt);
         let h = h_ntt.ifft();
@@ -525,14 +483,34 @@ pub fn sign<const N: usize>(m: &[u8], sk: &SecretKey<N>) -> Signature<N> {
         .collect_vec());
 
     // B = [[FFT(g), -FFT(f)], [FFT(G), -FFT(F)]]
+    let capital_f_fft = fft(&sk.b0[3]
+        .coefficients
+        .iter()
+        .map(|&i| Complex64::new(-i as f64, 0.0))
+        .collect_vec());
+    let f_fft = fft(&sk.b0[1]
+        .coefficients
+        .iter()
+        .map(|&i| Complex64::new(-i as f64, 0.0))
+        .collect_vec());
+    let capital_g_fft = fft(&sk.b0[2]
+        .coefficients
+        .iter()
+        .map(|&i| Complex64::new(i as f64, 0.0))
+        .collect_vec());
+    let g_fft = fft(&sk.b0[0]
+        .coefficients
+        .iter()
+        .map(|&i| Complex64::new(i as f64, 0.0))
+        .collect_vec());
     let t0 = c_over_q_fft
         .iter()
-        .zip(sk.b0_fft[3].iter())
+        .zip(capital_f_fft.iter())
         .map(|(a, b)| a * b)
         .collect_vec();
     let t1 = c_over_q_fft
         .iter()
-        .zip(sk.b0_fft[1].iter())
+        .zip(f_fft.iter())
         .map(|(a, b)| -a * b)
         .collect_vec();
 
@@ -545,20 +523,12 @@ pub fn sign<const N: usize>(m: &[u8], sk: &SecretKey<N>) -> Signature<N> {
             // s = (t-z) * B
             let s0 = t0_min_z0
                 .iter()
-                .zip(
-                    sk.b0_fft[0]
-                        .iter()
-                        .zip(t1_min_z1.iter().zip(sk.b0_fft[2].iter())),
-                )
+                .zip(g_fft.iter().zip(t1_min_z1.iter().zip(capital_g_fft.iter())))
                 .map(|(a, (b, (c, d)))| a * b + c * d)
                 .collect_vec();
             let s1 = t0_min_z0
                 .iter()
-                .zip(
-                    sk.b0_fft[1]
-                        .iter()
-                        .zip(t1_min_z1.iter().zip(sk.b0_fft[3].iter())),
-                )
+                .zip(f_fft.iter().zip(t1_min_z1.iter().zip(capital_f_fft.iter())))
                 .map(|(a, (b, (c, d)))| a * b + c * d)
                 .collect_vec();
 

@@ -6,7 +6,6 @@ use rand::{rngs::StdRng, RngCore, SeedableRng};
 use crate::{
     fast_fft::FastFft,
     field::{Felt, Q},
-    ntt::ntt,
     polynomial::Polynomial,
     samplerz::sampler_z,
 };
@@ -200,13 +199,8 @@ pub(crate) fn ntru_gen(
     loop {
         let f = gen_poly(n, &mut rng);
         let g = gen_poly(n, &mut rng);
-        let f_ntt = ntt(&f
-            .coefficients
-            .iter()
-            .cloned()
-            .map(Felt::new)
-            .collect::<Vec<_>>());
-        if f_ntt.iter().any(|e| e.is_zero()) {
+        let f_ntt = f.map(|&i| Felt::new(i)).fft();
+        if f_ntt.coefficients.iter().any(|e| e.is_zero()) {
             continue;
         }
         let gamma = gram_schmidt_norm_squared(&f, &g);
