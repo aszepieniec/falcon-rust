@@ -77,9 +77,9 @@ pub(crate) enum LdlTree {
 /// polynomials, given in FFT form.
 ///
 /// [1]: https://falcon-sign.info/falcon.pdf
-pub(crate) fn ffldl(g: [Vec<Complex64>; 4]) -> LdlTree {
-    let n = g[0].len();
-    let (l, d) = ldl(g);
+pub(crate) fn ffldl(gram_matrix: [Vec<Complex64>; 4]) -> LdlTree {
+    let n = gram_matrix[0].len();
+    let (l, d) = ldl(gram_matrix);
 
     if n > 2 {
         let (d00, d01) = split_fft(&d[0]);

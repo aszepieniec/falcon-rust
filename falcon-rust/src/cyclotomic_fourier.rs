@@ -101,7 +101,8 @@ where
     ///
     ///  - psi_rev: &[Self]
     ///    (a reference to) an array of powers of psi, from 0 to n-1,
-    ///    but ordered by bit-reversed index. You can use
+    ///    but ordered by bit-reversed index. Here psi is a primitive root
+    ///    of order 2n. You can use
     ///    `Self::bitreversed_powers(psi, n)` for this purpose, but this
     ///    trait implementation is not const. For the performance benefit
     ///    you want a precompiled array, which you can get if you can get
@@ -138,9 +139,10 @@ where
     ///    be transformed under the IFFT. The transformation happens in-
     ///    place.
     ///
-    ///  - psi_rev: &[Self]
+    ///  - psi_inv_rev: &[Self]
     ///    (a reference to) an array of powers of psi^-1, from 0 to n-1,
-    ///    but ordered by bit-reversed index. You can use
+    ///    but ordered by bit-reversed index. Here psi is a primitive root of
+    ///    order 2n. You can use
     ///    `Self::bitreversed_powers(Self::inverse_or_zero(psi), n)` for
     ///    this purpose, but this trait implementation is not const. For
     ///    the performance benefit you want a precompiled array, which you
@@ -170,6 +172,31 @@ where
         for ai in a.iter_mut() {
             *ai *= ninv;
         }
+    }
+
+    fn split_fft(f: &[Self], psi_inv_rev: &[Self]) -> (Vec<Self>, Vec<Self>) {
+        let n_over_2 = f.len() / 2;
+        let mut f0 = vec![Self::zero(); n_over_2];
+        let mut f1 = vec![Self::zero(); n_over_2];
+        let two_inv = (Self::one() + Self::one()).inverse_or_zero();
+        for i in 0..n_over_2 {
+            let two_i = i * 2;
+            let two_zeta_inv = two_inv * psi_inv_rev[n_over_2 + i];
+            f0[i] = two_inv * (f[two_i] + f[two_i + 1]);
+            f1[i] = two_zeta_inv * (f[two_i] - f[two_i + 1]);
+        }
+        (f0, f1)
+    }
+
+    fn merge_fft(f0: &[Self], f1: &[Self], psi_rev: &[Self]) -> Vec<Self> {
+        let n_over_2 = f0.len();
+        let mut f = vec![Self::zero(); 2 * n_over_2];
+        for i in 0..n_over_2 {
+            let two_i = i * 2;
+            f[two_i] = f0[i] + psi_rev[n_over_2 + i] * f1[i];
+            f[two_i + 1] = f0[i] - psi_rev[n_over_2 + i] * f1[i];
+        }
+        f
     }
 }
 
@@ -215,6 +242,15 @@ mod test {
     use num_complex::Complex64;
     use rand::{thread_rng, Rng, RngCore};
 
+    fn diff(u: &[Complex64], v: &[Complex64]) -> f64 {
+        u.iter()
+            .zip(v.iter())
+            .map(|(l, r)| l - r)
+            .map(|c| c * c.conj())
+            .sum::<Complex64>()
+            .re
+    }
+
     #[test]
     fn test_primitive_nth_root_of_unity() {
         for log2n in 0..12 {
@@ -236,14 +272,7 @@ mod test {
             .map(|_| Complex64::new(rng.gen_range(0..2) as f64, rng.gen_range(0..2) as f64))
             .collect_vec();
         let mut b = a.clone();
-        let diff = |u: &[Complex64], v: &[Complex64]| {
-            u.iter()
-                .zip(v.iter())
-                .map(|(l, r)| l - r)
-                .map(|c| c * c.conj())
-                .sum::<Complex64>()
-                .re
-        };
+
         assert!(diff(&a, &b) < 100.0 * f64::EPSILON);
 
         let psi_rev = Complex64::bitreversed_powers(2 * n);
@@ -307,21 +336,85 @@ mod test {
         let ninv = Complex64::new(1.0 / (n as f64), 0.0);
         Complex64::ifft(&mut d, &psi_inv_rev, ninv);
 
-        let diff = |u: &[Complex64], v: &[Complex64]| {
-            u.iter()
-                .zip(v.iter())
-                .map(|(l, r)| l - r)
-                .map(|c| c * c.conj())
-                .sum::<Complex64>()
-                .re
-        };
-
         assert!(
             diff(&c, &d) < f32::EPSILON as f64,
             "lhs: {:?}\nrhs: {:?}\nnorm: {}",
             c,
             d,
             diff(&c, &d)
+        );
+    }
+
+    #[test]
+    fn test_split_fft() {
+        let n = 32;
+        let mut rng = thread_rng();
+        let mut a = (0..n)
+            .map(|_| Complex64::new(rng.gen_range(0..2) as f64, 0.0))
+            .collect_vec();
+
+        let mut e = a.chunks(2).map(|ch| ch[0]).collect_vec();
+        let mut o = a.chunks(2).map(|ch| ch[1]).collect_vec();
+
+        Complex64::fft(&mut a, &Complex64::bitreversed_powers(n));
+        let (f0, f1) = Complex64::split_fft(&a, &Complex64::bitreversed_powers_inverse(n));
+
+        Complex64::fft(&mut e, &Complex64::bitreversed_powers(n));
+        Complex64::fft(&mut o, &Complex64::bitreversed_powers(n));
+
+        assert!(
+            diff(&e, &f0) <= 100.0 * f64::EPSILON,
+            "diff: {}",
+            diff(&e, &f0)
+        );
+
+        assert!(
+            diff(&o, &f1) <= 100.0 * f64::EPSILON,
+            "diff: {}",
+            diff(&o, &f1)
+        );
+    }
+
+    #[test]
+    fn test_merge_fft() {
+        let n = 16;
+        let mut rng = thread_rng();
+        let mut e = (0..n)
+            .map(|_| Complex64::new(rng.gen_range(-50..50) as f64, 0.0))
+            .collect_vec();
+        // let mut e = (0..n).map(|_| Complex64::new(0.0, 0.0)).collect_vec();
+        let mut o = (0..n)
+            .map(|_| Complex64::new(rng.gen_range(-50..50) as f64, 0.0))
+            .collect_vec();
+
+        let mut ab = Complex64::merge_fft(&e, &o, &Complex64::bitreversed_powers(2 * n));
+        Complex64::ifft(
+            &mut ab,
+            &Complex64::bitreversed_powers_inverse(2 * n),
+            Complex64::new(1.0 / (2.0 * n as f64), 0.0),
+        );
+
+        Complex64::ifft(
+            &mut e,
+            &Complex64::bitreversed_powers_inverse(n),
+            Complex64::new(1.0 / (n as f64), 0.0),
+        );
+        Complex64::ifft(
+            &mut o,
+            &Complex64::bitreversed_powers_inverse(n),
+            Complex64::new(1.0 / (n as f64), 0.0),
+        );
+
+        let f = e
+            .into_iter()
+            .zip(o)
+            .flat_map(|(ee, oo)| vec![ee, oo])
+            .collect_vec();
+
+        assert!(
+            diff(&f, &ab) <= 100.0 * f64::EPSILON,
+            "diff: {}",
+            diff(&f, &ab)
         );
     }
 }
