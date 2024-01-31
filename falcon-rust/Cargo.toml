@@ -1,6 +1,6 @@
 [package]
 name = "falcon-rust"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2021"
 description = "A rust implementation of the Falcon post-quantum digital signature scheme."
 license = "MIT"

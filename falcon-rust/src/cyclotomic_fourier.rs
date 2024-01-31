@@ -190,7 +190,8 @@ where
 
     fn merge_fft(f0: &[Self], f1: &[Self], psi_rev: &[Self]) -> Vec<Self> {
         let n_over_2 = f0.len();
-        let mut f = vec![Self::zero(); 2 * n_over_2];
+        let n = 2 * n_over_2;
+        let mut f = vec![Self::zero(); n];
         for i in 0..n_over_2 {
             let two_i = i * 2;
             f[two_i] = f0[i] + psi_rev[n_over_2 + i] * f1[i];
@@ -377,12 +378,11 @@ mod test {
 
     #[test]
     fn test_merge_fft() {
-        let n = 16;
+        let n = 32;
         let mut rng = thread_rng();
         let mut e = (0..n)
             .map(|_| Complex64::new(rng.gen_range(-50..50) as f64, 0.0))
             .collect_vec();
-        // let mut e = (0..n).map(|_| Complex64::new(0.0, 0.0)).collect_vec();
         let mut o = (0..n)
             .map(|_| Complex64::new(rng.gen_range(-50..50) as f64, 0.0))
             .collect_vec();

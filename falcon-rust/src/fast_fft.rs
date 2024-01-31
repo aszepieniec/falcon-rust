@@ -11,12 +11,14 @@ use crate::{cyclotomic_fourier::CyclotomicFourier, field::Felt, polynomial::Poly
 pub trait FastFft: Sized + Clone {
     type Field: Add + Mul + AddAssign + MulAssign + Neg + Sub + SubAssign + One + Zero;
     fn fft_inplace(&mut self);
-
     fn fft(&self) -> Self {
         let mut a = self.clone();
         a.fft_inplace();
         a
     }
+
+    fn merge_fft(a: &Self, b: &Self) -> Self;
+    fn split_fft(&self) -> (Self, Self);
 
     fn ifft_inplace(&mut self);
     fn ifft(&self) -> Self {
@@ -2144,6 +2146,51 @@ impl FastFft for Polynomial<Complex64> {
             .collect_vec();
         let ninv = Complex64::new(1.0 / (n as f64), 0.0);
         Complex64::ifft(&mut self.coefficients, &psi_inv_rev, ninv);
+    }
+
+    fn merge_fft(a: &Self, b: &Self) -> Self {
+        let n = a.coefficients.len();
+        let psi_rev: &[Complex64] = match 2 * n {
+            1 => &COMPLEX_BITREVERSED_POWERS_1,
+            2 => &COMPLEX_BITREVERSED_POWERS_2,
+            4 => &COMPLEX_BITREVERSED_POWERS_4,
+            8 => &COMPLEX_BITREVERSED_POWERS_8,
+            16 => &COMPLEX_BITREVERSED_POWERS_16,
+            32 => &COMPLEX_BITREVERSED_POWERS_32,
+            64 => &COMPLEX_BITREVERSED_POWERS_64,
+            128 => &COMPLEX_BITREVERSED_POWERS_128,
+            256 => &COMPLEX_BITREVERSED_POWERS_256,
+            512 => &COMPLEX_BITREVERSED_POWERS_512,
+            1024 => &COMPLEX_BITREVERSED_POWERS_1024,
+            _ => panic!("unsupported: n = {n} not a power of 2 or larger than 1024"),
+        };
+        Self {
+            coefficients: Self::Field::merge_fft(&a.coefficients, &b.coefficients, psi_rev),
+        }
+    }
+
+    fn split_fft(&self) -> (Self, Self) {
+        let n = self.coefficients.len();
+        let psi_rev: &[Complex64] = match n {
+            1 => &COMPLEX_BITREVERSED_POWERS_1,
+            2 => &COMPLEX_BITREVERSED_POWERS_2,
+            4 => &COMPLEX_BITREVERSED_POWERS_4,
+            8 => &COMPLEX_BITREVERSED_POWERS_8,
+            16 => &COMPLEX_BITREVERSED_POWERS_16,
+            32 => &COMPLEX_BITREVERSED_POWERS_32,
+            64 => &COMPLEX_BITREVERSED_POWERS_64,
+            128 => &COMPLEX_BITREVERSED_POWERS_128,
+            256 => &COMPLEX_BITREVERSED_POWERS_256,
+            512 => &COMPLEX_BITREVERSED_POWERS_512,
+            1024 => &COMPLEX_BITREVERSED_POWERS_1024,
+            _ => panic!("unsupported: n = {n} not a power of 2 or larger than 1024"),
+        };
+        let psi_inv_rev = psi_rev
+            .iter()
+            .map(|c| Complex64::new(c.re, -c.im))
+            .collect_vec();
+        let (a, b) = Self::Field::split_fft(&self.coefficients, &psi_inv_rev);
+        (Self { coefficients: a }, Self { coefficients: b })
     }
 }
 
@@ -6341,65 +6388,45 @@ impl FastFft for Polynomial<Felt> {
         };
         Felt::ifft(&mut self.coefficients, psi_inv_rev, ninv);
     }
-}
 
-#[cfg(test)]
-mod test {
-    use itertools::Itertools;
-
-    use num_complex::Complex64;
-    use rand::{thread_rng, Rng};
-
-    use crate::{field::Felt, inverse::Inverse, polynomial::Polynomial};
-
-    use super::FastFft;
-
-    #[test]
-    fn print_felt_ninv() {
-        for log2n in 0..=10 {
-            let n = 1 << log2n;
-            let ninv = Felt::new(n as i16).inverse_or_zero();
-            println!(
-                "const FELT_NINV_{} : Felt = Felt::new({});",
-                n,
-                ninv.value()
-            );
+    fn merge_fft(a: &Self, b: &Self) -> Self {
+        let n = a.coefficients.len();
+        let psi_rev: &[Felt] = match n {
+            1 => &FELT_BITREVERSED_POWERS_1,
+            2 => &FELT_BITREVERSED_POWERS_2,
+            4 => &FELT_BITREVERSED_POWERS_4,
+            8 => &FELT_BITREVERSED_POWERS_8,
+            16 => &FELT_BITREVERSED_POWERS_16,
+            32 => &FELT_BITREVERSED_POWERS_32,
+            64 => &FELT_BITREVERSED_POWERS_64,
+            128 => &FELT_BITREVERSED_POWERS_128,
+            256 => &FELT_BITREVERSED_POWERS_256,
+            512 => &FELT_BITREVERSED_POWERS_512,
+            1024 => &FELT_BITREVERSED_POWERS_1024,
+            _ => panic!("vector length is not power of 2 or larger than 1024"),
+        };
+        Self {
+            coefficients: Self::Field::merge_fft(&a.coefficients, &b.coefficients, psi_rev),
         }
     }
 
-    #[test]
-    fn test_fft() {
-        let n = 32;
-        let mut rng = thread_rng();
-        let mut a = (0..n)
-            .map(|_| Complex64::new(rng.gen_range(0..2) as f64, rng.gen_range(0..2) as f64))
-            .collect_vec();
-        // let mut a = vec![Complex64::zero(), Complex64::one()];
-        let mut b = crate::fft::fft(&a);
-        let mut a_fft = Polynomial::new(a);
-        a_fft.fft_inplace();
-        a = a_fft.coefficients;
-
-        // a and b should be the same but in different orders
-        // so check their sums of 2^nth roots instead (more stable)
-
-        let mut sums_a = vec![];
-        let mut sums_b = vec![];
-        for _ in 0..n {
-            sums_a.push(a.iter().cloned().sum::<Complex64>());
-            sums_b.push(b.iter().cloned().sum::<Complex64>());
-
-            a.iter_mut().for_each(|e| {
-                e.sqrt();
-            });
-            b.iter_mut().for_each(|e| {
-                e.sqrt();
-            });
-        }
-
-        assert!(sums_a
-            .into_iter()
-            .zip(sums_b.into_iter())
-            .all(|(sum_a, sum_b)| (sum_a - sum_b).norm() < 100.0 * f32::EPSILON as f64));
+    fn split_fft(&self) -> (Self, Self) {
+        let n = self.coefficients.len();
+        let psi_inv_rev: &[Felt] = match n {
+            1 => &FELT_BITREVERSED_POWERS_INVERSE_1,
+            2 => &FELT_BITREVERSED_POWERS_INVERSE_2,
+            4 => &FELT_BITREVERSED_POWERS_INVERSE_4,
+            8 => &FELT_BITREVERSED_POWERS_INVERSE_8,
+            16 => &FELT_BITREVERSED_POWERS_INVERSE_16,
+            32 => &FELT_BITREVERSED_POWERS_INVERSE_32,
+            64 => &FELT_BITREVERSED_POWERS_INVERSE_64,
+            128 => &FELT_BITREVERSED_POWERS_INVERSE_128,
+            256 => &FELT_BITREVERSED_POWERS_INVERSE_256,
+            512 => &FELT_BITREVERSED_POWERS_INVERSE_512,
+            1024 => &FELT_BITREVERSED_POWERS_INVERSE_1024,
+            _ => panic!("vector length is not power of 2 or larger than 1024"),
+        };
+        let (a, b) = Self::Field::split_fft(&self.coefficients, psi_inv_rev);
+        (Self { coefficients: a }, Self { coefficients: b })
     }
 }

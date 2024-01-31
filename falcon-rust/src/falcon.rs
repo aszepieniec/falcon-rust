@@ -7,7 +7,6 @@ use crate::{
     encoding::{compress, decompress},
     fast_fft::FastFft,
     ffsampling::{ffldl, ffsampling, gram, normalize_tree, LdlTree},
-    fft::{fft, ifft},
     field::{Felt, Q},
     math::ntru_gen,
     polynomial::{hash_to_point, Polynomial},
@@ -96,20 +95,11 @@ impl<const N: usize> SecretKey<N> {
     }
 
     pub(crate) fn from_b0(b0: [Polynomial<i16>; 4]) -> Self {
-        let b0_fft: [Vec<Complex64>; 4] = b0
-            .iter()
-            .map(|c| {
-                c.coefficients
-                    .iter()
-                    .map(|cc| Complex64::new(*cc as f64, 0.0))
-                    .collect_vec()
-            })
-            .map(|c| fft(&c))
-            .collect_vec()
-            .try_into()
-            .unwrap();
+        let b0_fft = b0
+            .clone()
+            .map(|c| c.map(|cc| Complex64::new(*cc as f64, 0.0)).fft());
 
-        let g0_fft = gram(b0_fft.clone());
+        let g0_fft = gram(b0_fft);
         let mut tree = ffldl(g0_fft);
         let sigma = FalconVariant::from_n(N).parameters().sigma;
         normalize_tree(&mut tree, sigma);
@@ -476,65 +466,38 @@ pub fn sign<const N: usize>(m: &[u8], sk: &SecretKey<N>) -> Signature<N> {
 
     let c = hash_to_point(&r_cat_m, n);
     let one_over_q = 1.0 / (Q as f64);
-    let c_over_q_fft = fft(&c
-        .coefficients
-        .iter()
+    let c_over_q_fft = c
         .map(|cc| Complex::new(one_over_q * cc.value() as f64, 0.0))
-        .collect_vec());
+        .fft();
 
     // B = [[FFT(g), -FFT(f)], [FFT(G), -FFT(F)]]
-    let capital_f_fft = fft(&sk.b0[3]
-        .coefficients
-        .iter()
-        .map(|&i| Complex64::new(-i as f64, 0.0))
-        .collect_vec());
-    let f_fft = fft(&sk.b0[1]
-        .coefficients
-        .iter()
-        .map(|&i| Complex64::new(-i as f64, 0.0))
-        .collect_vec());
-    let capital_g_fft = fft(&sk.b0[2]
-        .coefficients
-        .iter()
-        .map(|&i| Complex64::new(i as f64, 0.0))
-        .collect_vec());
-    let g_fft = fft(&sk.b0[0]
-        .coefficients
-        .iter()
-        .map(|&i| Complex64::new(i as f64, 0.0))
-        .collect_vec());
-    let t0 = c_over_q_fft
-        .iter()
-        .zip(capital_f_fft.iter())
-        .map(|(a, b)| a * b)
-        .collect_vec();
-    let t1 = c_over_q_fft
-        .iter()
-        .zip(f_fft.iter())
-        .map(|(a, b)| -a * b)
-        .collect_vec();
+    let capital_f_fft = sk.b0[3].map(|&i| Complex64::new(-i as f64, 0.0)).fft();
+    let f_fft = sk.b0[1].map(|&i| Complex64::new(-i as f64, 0.0)).fft();
+    let capital_g_fft = sk.b0[2].map(|&i| Complex64::new(i as f64, 0.0)).fft();
+    let g_fft = sk.b0[0].map(|&i| Complex64::new(i as f64, 0.0)).fft();
+    let t0 = c_over_q_fft.hadamard_mul(&capital_f_fft);
+    let t1 = -c_over_q_fft.hadamard_mul(&f_fft);
 
     let s = loop {
         let bold_s = loop {
             let z = ffsampling(&(t0.clone(), t1.clone()), &sk.tree, &params, &mut rng);
-            let t0_min_z0 = t0.iter().zip(z.0).map(|(t, z)| t - z).collect_vec();
-            let t1_min_z1 = t1.iter().zip(z.1).map(|(t, z)| t - z).collect_vec();
+            let t0_min_z0 = t0.clone() - z.0;
+            let t1_min_z1 = t1.clone() - z.1;
 
             // s = (t-z) * B
-            let s0 = t0_min_z0
-                .iter()
-                .zip(g_fft.iter().zip(t1_min_z1.iter().zip(capital_g_fft.iter())))
-                .map(|(a, (b, (c, d)))| a * b + c * d)
-                .collect_vec();
-            let s1 = t0_min_z0
-                .iter()
-                .zip(f_fft.iter().zip(t1_min_z1.iter().zip(capital_f_fft.iter())))
-                .map(|(a, (b, (c, d)))| a * b + c * d)
-                .collect_vec();
+            let s0 = t0_min_z0.hadamard_mul(&g_fft) + t1_min_z1.hadamard_mul(&capital_g_fft);
+            let s1 = t0_min_z0.hadamard_mul(&f_fft) + t1_min_z1.hadamard_mul(&capital_f_fft);
 
             // compute the norm of (s0||s1) and note that they are in FFT representation
-            let length_squared: f64 = (s0.iter().map(|a| (a * a.conj()).re).sum::<f64>()
-                + s1.iter().map(|a| (a * a.conj()).re).sum::<f64>())
+            let length_squared: f64 = (s0
+                .coefficients
+                .iter()
+                .map(|a| (a * a.conj()).re)
+                .sum::<f64>()
+                + s1.coefficients
+                    .iter()
+                    .map(|a| (a * a.conj()).re)
+                    .sum::<f64>())
                 / (n as f64);
 
             if length_squared > (bound as f64) {
@@ -543,9 +506,12 @@ pub fn sign<const N: usize>(m: &[u8], sk: &SecretKey<N>) -> Signature<N> {
 
             break [s0, s1];
         };
-        let s2: Vec<Complex64> = ifft(&bold_s[1]).to_vec();
+        let s2 = bold_s[1].ifft();
         let maybe_s = compress(
-            &s2.iter().map(|a| a.re.round() as i16).collect_vec(),
+            &s2.coefficients
+                .iter()
+                .map(|a| a.re.round() as i16)
+                .collect_vec(),
             8 * (params.sig_bytelen - 41),
         );
 

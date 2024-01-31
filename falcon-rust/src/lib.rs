@@ -21,7 +21,7 @@
 //!
 //! # Usage
 //!
-//! First, `falcon-rust = "0.1.1"` to your `Cargo.toml` file.
+//! First, `falcon-rust = "0.1.2"` to your `Cargo.toml` file.
 //!
 //! Then to use the interface:
 //! ```
@@ -55,7 +55,6 @@
 //! falcon512::Signature::from_bytes(&sig_buffer);
 //! ```
 
-pub(crate) mod common;
 pub(crate) mod cyclotomic_fourier;
 pub(crate) mod encoding;
 pub(crate) mod falcon;
@@ -63,8 +62,6 @@ pub mod falcon1024;
 pub mod falcon512;
 pub(crate) mod fast_fft;
 pub(crate) mod ffsampling;
-pub(crate) mod fft;
-pub(crate) mod fft_constants;
 pub(crate) mod field;
 pub(crate) mod inverse;
 pub(crate) mod math;
