@@ -40,6 +40,61 @@ pub(crate) fn compress(v: &[i16], slen: usize) -> Option<Vec<u8>> {
     Some(bitvector.to_bytes())
 }
 
+pub(crate) fn compress_fast(v: &[i16], slen: usize) -> Option<Vec<u8>> {
+    // let mut bitvector: BitVec = BitVec::with_capacity(slen);
+    let mut bitvector: BitVec = BitVec::from_elem(slen, false);
+    let mut ctr = 0;
+    const MAX_BITS_PER_INT: usize = 17;
+    const MIN_BITS_PER_INT: usize = 9;
+    for coeff in v {
+        if slen - ctr > MAX_BITS_PER_INT {
+            // encode sign
+            bitvector.set(ctr, *coeff < 0);
+            ctr += 1;
+
+            // encode low bits
+            let s = (*coeff).abs();
+            for i in (0..7).rev() {
+                bitvector.set(ctr + i, ((s >> i) & 1) != 0);
+            }
+            ctr += 7;
+
+            // encode high bits
+            for i in 0..(s >> 7) {
+                bitvector.set(ctr + i as usize, false);
+                ctr += 1;
+            }
+            bitvector.push(true);
+            ctr += 1;
+        } else if slen - ctr > MIN_BITS_PER_INT {
+            // encode sign
+            bitvector.set(ctr, *coeff < 0);
+            ctr += 1;
+
+            // encode low bits
+            let s = (*coeff).abs();
+            for i in (0..7).rev() {
+                bitvector.set(ctr + i, ((s >> i) & 1) != 0);
+            }
+            ctr += 7;
+
+            // encode high bits
+            for i in 0..(s >> 7) {
+                bitvector.set(ctr + i as usize, false);
+                ctr += 1;
+                if ctr == slen {
+                    return None;
+                }
+            }
+            bitvector.push(true);
+            ctr += 1;
+        } else {
+            return None;
+        }
+    }
+    Some(bitvector.to_bytes())
+}
+
 /// Take as input an encoding x, and a length n, and return a list of
 /// integers v of length n such that x encode v. If such a list does
 /// not exist, the encoding is invalid and we output None.
@@ -159,4 +214,7 @@ mod test {
             }
         }
     }
+
+    #[test]
+    fn test_compress_equiv() {}
 }
