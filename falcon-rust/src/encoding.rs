@@ -1,19 +1,13 @@
 use bit_vec::BitVec;
+use itertools::Itertools;
+use num::Integer;
 
 /// Compression and decompression routines for signatures.
 
-/// Take as input a list of integers v and a bytelength slen, and
-/// return a bytestring of length slen that encode/compress v.
-/// If this is not possible, return False.
-///
-/// For each coefficient of v:
-/// - the sign is encoded on 1 bit
-/// - the 7 lower bits are encoded naively (binary)
-/// - the high bits are encoded in unary encoding
-///
-/// This method can fail, in which case it returns None. The signature
-/// generation algorithm knows this and will re-run the loop.
-pub(crate) fn compress(v: &[i16], slen: usize) -> Option<Vec<u8>> {
+/// This is a deprecated compress routine used now only for testing
+/// compatibility with the new, faster implementation (below).
+#[allow(dead_code)]
+pub(crate) fn compress_slow(v: &[i16], slen: usize) -> Option<Vec<u8>> {
     let mut bitvector: BitVec = BitVec::with_capacity(slen);
     for coeff in v {
         // encode sign
@@ -40,64 +34,80 @@ pub(crate) fn compress(v: &[i16], slen: usize) -> Option<Vec<u8>> {
     Some(bitvector.to_bytes())
 }
 
-pub(crate) fn compress_fast(v: &[i16], slen: usize) -> Option<Vec<u8>> {
-    // let mut bitvector: BitVec = BitVec::with_capacity(slen);
-    let mut bitvector: BitVec = BitVec::from_elem(slen, false);
-    let mut ctr = 0;
-    const MAX_BITS_PER_INT: usize = 17;
-    const MIN_BITS_PER_INT: usize = 9;
-    for coeff in v {
-        if slen - ctr > MAX_BITS_PER_INT {
-            // encode sign
-            bitvector.set(ctr, *coeff < 0);
-            ctr += 1;
+/// Take as input a list of integers v and a bytelength slen, and
+/// return a bytestring of length slen that encode/compress v.
+/// If this is not possible, return False.
+///
+/// For each coefficient of v:
+/// - the sign is encoded on 1 bit
+/// - the 7 lower bits are encoded naively (binary)
+/// - the high bits are encoded in unary encoding
+///
+/// This method can fail, in which case it returns None. The signature
+/// generation algorithm knows this and will re-run the loop.
+///
+/// Algorithm 17 p. 47 of the specification [1].
+///
+/// [1]: https://falcon-sign.info/falcon.pdf
+pub(crate) fn compress(v: &[i16], slen: usize) -> Option<Vec<u8>> {
+    // encode each coefficient separately; join later
+    let lengths_and_coefficients = v.iter().map(|c| compress_coefficient(*c)).collect_vec();
+    if lengths_and_coefficients
+        .iter()
+        .map(|(l, _c)| *l)
+        .sum::<usize>()
+        > slen
+    {
+        return None;
+    }
 
-            // encode low bits
-            let s = (*coeff).abs();
-            for i in (0..7).rev() {
-                bitvector.set(ctr + i, ((s >> i) & 1) != 0);
-            }
-            ctr += 7;
+    // join all but one coefficients assuming enough space
+    let mut bytes = vec![0u8; slen / 8];
+    let mut counter = 0;
+    for (length, coefficient) in lengths_and_coefficients.iter().take(v.len() - 1) {
+        let (cdiv8, cmod8) = counter.div_mod_floor(&8);
+        bytes[cdiv8] |= coefficient >> cmod8;
+        bytes[cdiv8 + 1] |= ((*coefficient as u16) << (8 - cmod8)) as u8;
+        let (cldiv8, clmod8) = (counter + length - 1).div_mod_floor(&8);
+        bytes[cldiv8] |= 128u8 >> clmod8;
+        bytes[cldiv8 + 1] |= (128u16 << (8 - clmod8)) as u8;
+        counter += length;
+    }
 
-            // encode high bits
-            for i in 0..(s >> 7) {
-                bitvector.set(ctr + i as usize, false);
-                ctr += 1;
-            }
-            bitvector.push(true);
-            ctr += 1;
-        } else if slen - ctr > MIN_BITS_PER_INT {
-            // encode sign
-            bitvector.set(ctr, *coeff < 0);
-            ctr += 1;
-
-            // encode low bits
-            let s = (*coeff).abs();
-            for i in (0..7).rev() {
-                bitvector.set(ctr + i, ((s >> i) & 1) != 0);
-            }
-            ctr += 7;
-
-            // encode high bits
-            for i in 0..(s >> 7) {
-                bitvector.set(ctr + i as usize, false);
-                ctr += 1;
-                if ctr == slen {
-                    return None;
-                }
-            }
-            bitvector.push(true);
-            ctr += 1;
-        } else {
+    // treat last coefficient special
+    let (length, coefficient) = lengths_and_coefficients.last().unwrap();
+    {
+        let (cdiv8, cmod8) = counter.div_mod_floor(&8);
+        bytes[cdiv8] |= coefficient >> cmod8;
+        bytes[cdiv8 + 1] |= ((*coefficient as u16) << (8 - cmod8)) as u8;
+        let (cldiv8, clmod8) = (counter + length - 1).div_mod_floor(&8);
+        bytes[cldiv8] |= 128u8 >> clmod8;
+        if cldiv8 + 1 < slen / 8 {
+            bytes[cldiv8 + 1] |= (128u16 << (8 - clmod8)) as u8;
+        } else if (128u16 << (8 - clmod8)) as u8 != 0 {
             return None;
         }
+        counter += length;
     }
-    Some(bitvector.to_bytes())
+    Some(bytes)
+}
+
+/// Helper function for compress; isolate attention to one coefficient.
+fn compress_coefficient(coeff: i16) -> (usize, u8) {
+    let sign = (coeff < 0) as u8;
+    let abs = coeff.unsigned_abs();
+    let low = abs as u8 & 127;
+    let high = abs >> 7;
+    (1 + 7 + high as usize + 1, ((sign << 7) | low))
 }
 
 /// Take as input an encoding x, and a length n, and return a list of
 /// integers v of length n such that x encode v. If such a list does
 /// not exist, the encoding is invalid and we output None.
+///
+/// Algorithm 18 p. 48 of the specification [1].
+///
+/// [1]: https://falcon-sign.info/falcon.pdf
 pub(crate) fn decompress(x: &[u8], bitlength: usize, n: usize) -> Option<Vec<i16>> {
     if x.len() * 8 != bitlength {
         return None;
@@ -147,10 +157,11 @@ pub(crate) fn decompress(x: &[u8], bitlength: usize, n: usize) -> Option<Vec<i16
 mod test {
 
     use crate::{
-        encoding::{compress, decompress},
+        encoding::{compress, compress_slow, decompress},
         falcon::FalconVariant,
         field::Q,
     };
+    use bit_vec::BitVec;
     use rand::thread_rng;
     use rand_distr::{num_traits::ToPrimitive, Distribution, Normal};
 
@@ -216,5 +227,29 @@ mod test {
     }
 
     #[test]
-    fn test_compress_equiv() {}
+    fn test_compress_equiv() {
+        let sigma = 1.5 * (Q.to_f64().unwrap()).sqrt();
+        let distribution = Normal::<f64>::new(0.0, sigma).unwrap();
+        let mut rng = thread_rng();
+
+        let n = 200;
+        let initial = (0..n)
+            .map(|_| {
+                (distribution.sample(&mut rng) + 0.5)
+                    .floor()
+                    .to_i32()
+                    .unwrap() as i16
+            })
+            .collect::<Vec<_>>();
+        let slen = 2 * n * 8;
+        let compressed = compress_slow(&initial, slen).unwrap();
+        let compressed_fast = compress(&initial, slen).unwrap();
+        assert_eq!(
+            compressed,
+            compressed_fast,
+            "\n{:#?}\n{:#?}",
+            BitVec::from_bytes(&compressed),
+            BitVec::from_bytes(&compressed_fast)
+        );
+    }
 }
