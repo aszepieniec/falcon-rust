@@ -101,14 +101,10 @@ fn compress_coefficient(coeff: i16) -> (usize, u8) {
     (1 + 7 + high as usize + 1, ((sign << 7) | low))
 }
 
-/// Take as input an encoding x, and a length n, and return a list of
-/// integers v of length n such that x encode v. If such a list does
-/// not exist, the encoding is invalid and we output None.
-///
-/// Algorithm 18 p. 48 of the specification [1].
-///
-/// [1]: https://falcon-sign.info/falcon.pdf
-pub(crate) fn decompress(x: &[u8], bitlength: usize, n: usize) -> Option<Vec<i16>> {
+///  This is a deprecated decompress routine used now only for testing
+/// compatibility with the new, faster implementation (below).
+#[allow(dead_code)]
+pub(crate) fn decompress_slow(x: &[u8], bitlength: usize, n: usize) -> Option<Vec<i16>> {
     if x.len() * 8 != bitlength {
         return None;
     }
@@ -153,11 +149,114 @@ pub(crate) fn decompress(x: &[u8], bitlength: usize, n: usize) -> Option<Vec<i16
     Some(result)
 }
 
+/// Take as input an encoding x, and a length n, and return a list of
+/// integers v of length n such that x encode v. If such a list does
+/// not exist, the encoding is invalid and we output None.
+///
+/// Algorithm 18 p. 48 of the specification [1].
+///
+/// [1]: https://falcon-sign.info/falcon.pdf
+pub(crate) fn decompress(x: &[u8], bitlength: usize, n: usize) -> Option<Vec<i16>> {
+    if x.len() * 8 != bitlength {
+        return None;
+    }
+
+    let bitvector = BitVec::from_bytes(x);
+    let mut index = 0;
+    let mut result = Vec::with_capacity(n);
+
+    // for all elements (last round is special due to bound checks)
+    for _ in 0..n - 1 {
+        // early return if
+        if index + 8 >= bitvector.len() {
+            println!(
+                "index + 8 = {} but bitvector is only {} long",
+                index + 8,
+                bitvector.len()
+            );
+            return None;
+        }
+
+        // read sign
+        let sign = if bitvector[index] { -1 } else { 1 };
+        index += 1;
+
+        // read low bits
+        let mut low_bits = 0i16;
+        let (index_div_8, index_mod_8) = index.div_mod_floor(&8);
+        low_bits |= (x[index_div_8] as i16) << index_mod_8;
+        low_bits |= (x[index_div_8 + 1] as i16) >> (8 - index_mod_8);
+        low_bits = (low_bits & 255) >> 1;
+        index += 7;
+
+        // read high bits
+        let mut high_bits = 0;
+        while !bitvector[index] {
+            index += 1;
+            high_bits += 1;
+        }
+        index += 1;
+
+        // compose integer and collect it
+        let integer = sign * ((high_bits << 7) | low_bits);
+        result.push(integer);
+    }
+
+    // last round
+
+    // early return if
+    if index + 8 >= bitvector.len() {
+        println!(
+            "index + 8 = {} but bitvector is only {} long",
+            index + 8,
+            bitvector.len()
+        );
+        return None;
+    }
+
+    // read sign
+    if bitvector.len() == index {
+        return None;
+    }
+    let sign = if bitvector[index] { -1 } else { 1 };
+    index += 1;
+
+    // read low bits
+    let mut low_bits = 0i16;
+    let (index_div_8, index_mod_8) = index.div_mod_floor(&8);
+    low_bits |= (x[index_div_8] as i16) << index_mod_8;
+    if index_mod_8 != 0 && index_div_8 + 1 < x.len() {
+        low_bits |= (x[index_div_8 + 1] as i16) >> (8 - index_mod_8);
+    } else if index_mod_8 != 0 {
+        return None;
+    }
+    low_bits = (low_bits & 255) >> 1;
+    index += 7;
+
+    // read high bits
+    let mut high_bits = 0;
+    if bitvector.len() == index {
+        return None;
+    }
+    while !bitvector[index] {
+        index += 1;
+        if bitvector.len() == index {
+            return None;
+        }
+        high_bits += 1;
+    }
+
+    // compose integer and collect it
+    let integer = sign * ((high_bits << 7) | low_bits);
+    result.push(integer);
+    Some(result)
+}
+
 #[cfg(test)]
 mod test {
 
     use crate::{
-        encoding::{compress, compress_slow, decompress},
+        encoding::{compress, compress_slow, decompress, decompress_slow},
         falcon::FalconVariant,
         field::Q,
     };
@@ -251,5 +350,53 @@ mod test {
             BitVec::from_bytes(&compressed),
             BitVec::from_bytes(&compressed_fast)
         );
+    }
+
+    #[test]
+    fn test_decompress_equiv() {
+        let sigma = 1.5 * (Q.to_f64().unwrap()).sqrt();
+        let distribution = Normal::<f64>::new(0.0, sigma).unwrap();
+        let mut rng = thread_rng();
+
+        let n = 200;
+        let initial = (0..n)
+            .map(|_| {
+                (distribution.sample(&mut rng) + 0.5)
+                    .floor()
+                    .to_i32()
+                    .unwrap() as i16
+            })
+            .collect::<Vec<_>>();
+        let slen = 2 * n * 8;
+        let compressed = compress(&initial, slen).unwrap();
+
+        let decompressed = decompress(&compressed, slen, n);
+        let decompressed_fast = decompress_slow(&compressed, slen, n);
+
+        assert_eq!(decompressed, decompressed_fast);
+    }
+
+    #[test]
+    fn test_decompress_failures() {
+        let sigma = 1.5 * (Q.to_f64().unwrap()).sqrt();
+        let distribution = Normal::<f64>::new(0.0, sigma).unwrap();
+        let mut rng = thread_rng();
+
+        let n = 200;
+        let initial = (0..n)
+            .map(|_| {
+                (distribution.sample(&mut rng) + 0.5)
+                    .floor()
+                    .to_i32()
+                    .unwrap() as i16
+            })
+            .collect::<Vec<_>>();
+        let slen = 2 * n * 8;
+        let compressed = compress(&initial, slen).unwrap();
+
+        assert!(decompress(&compressed, slen, n + 1).is_none());
+        assert!(decompress(&compressed, slen + 1, n).is_none());
+        // assert!(decompress(&compressed, slen, n - 1).is_none()); // should work
+        assert!(decompress(&compressed, slen - 1, n).is_none());
     }
 }
