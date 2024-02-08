@@ -115,11 +115,6 @@ pub(crate) fn decompress_slow(x: &[u8], bitlength: usize, n: usize) -> Option<Ve
     for _ in 0..n {
         // early return if
         if index + 8 >= bitvector.len() {
-            println!(
-                "index + 8 = {} but bitvector is only {} long",
-                index + 8,
-                bitvector.len()
-            );
             return None;
         }
 
@@ -169,11 +164,6 @@ pub(crate) fn decompress(x: &[u8], bitlength: usize, n: usize) -> Option<Vec<i16
     for _ in 0..n - 1 {
         // early return if
         if index + 8 >= bitvector.len() {
-            println!(
-                "index + 8 = {} but bitvector is only {} long",
-                index + 8,
-                bitvector.len()
-            );
             return None;
         }
 
@@ -206,11 +196,6 @@ pub(crate) fn decompress(x: &[u8], bitlength: usize, n: usize) -> Option<Vec<i16
 
     // early return if
     if index + 8 >= bitvector.len() {
-        println!(
-            "index + 8 = {} but bitvector is only {} long",
-            index + 8,
-            bitvector.len()
-        );
         return None;
     }
 
@@ -249,6 +234,25 @@ pub(crate) fn decompress(x: &[u8], bitlength: usize, n: usize) -> Option<Vec<i16
     // compose integer and collect it
     let integer = sign * ((high_bits << 7) | low_bits);
     result.push(integer);
+
+    // check padding
+    index += 1;
+    let (index_div_8, index_mod_8) = index.div_mod_floor(&8);
+    for idx in 0..(8 - index_mod_8) {
+        if let Some(b) = bitvector.get(index + idx) {
+            if b {
+                // unread part of input contains set bits
+                return None;
+            }
+        }
+    }
+    for &byte in x.iter().skip(index_div_8 + 1 - (index_mod_8 == 0) as usize) {
+        if byte != 0 {
+            // unread part of input contains set bits!
+            return None;
+        }
+    }
+
     Some(result)
 }
 
@@ -261,7 +265,7 @@ mod test {
         field::Q,
     };
     use bit_vec::BitVec;
-    use rand::thread_rng;
+    use rand::{thread_rng, Rng};
     use rand_distr::{num_traits::ToPrimitive, Distribution, Normal};
 
     #[test]
@@ -358,22 +362,26 @@ mod test {
         let distribution = Normal::<f64>::new(0.0, sigma).unwrap();
         let mut rng = thread_rng();
 
-        let n = 200;
-        let initial = (0..n)
-            .map(|_| {
-                (distribution.sample(&mut rng) + 0.5)
-                    .floor()
-                    .to_i32()
-                    .unwrap() as i16
-            })
-            .collect::<Vec<_>>();
-        let slen = 2 * n * 8;
-        let compressed = compress(&initial, slen).unwrap();
+        let num_iterations = 1000;
 
-        let decompressed = decompress(&compressed, slen, n);
-        let decompressed_fast = decompress_slow(&compressed, slen, n);
+        for _ in 0..num_iterations {
+            let n = rng.gen_range(1..100);
+            let initial = (0..n)
+                .map(|_| {
+                    (distribution.sample(&mut rng) + 0.5)
+                        .floor()
+                        .to_i32()
+                        .unwrap() as i16
+                })
+                .collect::<Vec<_>>();
+            let slen = 2 * n * 8;
+            let compressed = compress(&initial, slen).unwrap();
 
-        assert_eq!(decompressed, decompressed_fast);
+            let decompressed = decompress(&compressed, slen, n);
+            let decompressed_fast = decompress_slow(&compressed, slen, n);
+
+            assert_eq!(decompressed, decompressed_fast);
+        }
     }
 
     #[test]
@@ -382,21 +390,43 @@ mod test {
         let distribution = Normal::<f64>::new(0.0, sigma).unwrap();
         let mut rng = thread_rng();
 
-        let n = 200;
-        let initial = (0..n)
-            .map(|_| {
-                (distribution.sample(&mut rng) + 0.5)
-                    .floor()
-                    .to_i32()
-                    .unwrap() as i16
-            })
-            .collect::<Vec<_>>();
-        let slen = 2 * n * 8;
-        let compressed = compress(&initial, slen).unwrap();
+        let num_iterations = 1000;
 
-        assert!(decompress(&compressed, slen, n + 1).is_none());
-        assert!(decompress(&compressed, slen + 1, n).is_none());
-        // assert!(decompress(&compressed, slen, n - 1).is_none()); // should work
-        assert!(decompress(&compressed, slen - 1, n).is_none());
+        for _ in 0..num_iterations {
+            let n = rng.gen_range(1..100);
+            let initial = (0..n)
+                .map(|_| {
+                    (distribution.sample(&mut rng) + 0.5)
+                        .floor()
+                        .to_i32()
+                        .unwrap() as i16
+                })
+                .collect::<Vec<_>>();
+            let slen = 2 * n * 8;
+            let compressed = compress(&initial, slen).unwrap();
+
+            assert!(decompress(&compressed, slen, n + 1).is_none());
+            assert!(decompress(&compressed, slen + 1, n).is_none());
+            // assert!(decompress(&compressed, slen, n - 1).is_none()); // should work
+            assert!(decompress(&compressed, slen - 1, n).is_none());
+
+            // flip last set bit -- should cause failure
+            let mut compressed_bitvec = BitVec::from_bytes(&compressed);
+            let mut index = compressed_bitvec.len();
+            while !compressed_bitvec.get(index - 1).unwrap() {
+                index -= 1;
+            }
+            compressed_bitvec.set(index - 1, false);
+            let last_bit_flipped = compressed_bitvec.to_bytes();
+            assert!(decompress(&last_bit_flipped, slen, n).is_none());
+
+            // try random string -- might fail, but if not must re-encode to the same
+            // let random = (0..compressed.len()).map(|_| rng.gen::<u8>()).collect_vec();
+            let random = vec![162, 76];
+            if let Some(decompressed) = decompress(&random, slen, n) {
+                let recompressed = compress(&decompressed, slen).unwrap();
+                assert_eq!(random, recompressed, "decompressed: {:?}", decompressed);
+            }
+        }
     }
 }
