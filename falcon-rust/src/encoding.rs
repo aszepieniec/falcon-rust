@@ -160,6 +160,9 @@ pub(crate) fn decompress(x: &[u8], bitlength: usize, n: usize) -> Option<Vec<i16
     let mut index = 0;
     let mut result = Vec::with_capacity(n);
 
+    // tracks invalid coefficient encodings
+    let mut abort = false;
+
     // for all elements (last round is special due to bound checks)
     for _ in 0..n - 1 {
         // early return if
@@ -184,8 +187,15 @@ pub(crate) fn decompress(x: &[u8], bitlength: usize, n: usize) -> Option<Vec<i16
         while !bitvector[index] {
             index += 1;
             high_bits += 1;
+
+            if high_bits == 95 || index + 1 == bitvector.len() {
+                return None;
+            }
         }
         index += 1;
+
+        // test if coefficient is encoded properly
+        abort |= low_bits == 0 && high_bits == 0 && sign == -1;
 
         // compose integer and collect it
         let integer = sign * ((high_bits << 7) | low_bits);
@@ -231,6 +241,11 @@ pub(crate) fn decompress(x: &[u8], bitlength: usize, n: usize) -> Option<Vec<i16
         high_bits += 1;
     }
 
+    // test if coefficient encoded properly
+    if abort || (low_bits == 0 && high_bits == 0 && sign == -1) {
+        return None;
+    }
+
     // compose integer and collect it
     let integer = sign * ((high_bits << 7) | low_bits);
     result.push(integer);
@@ -265,6 +280,7 @@ mod test {
         field::Q,
     };
     use bit_vec::BitVec;
+    use itertools::Itertools;
     use rand::{thread_rng, Rng};
     use rand_distr::{num_traits::ToPrimitive, Distribution, Normal};
 
@@ -298,14 +314,16 @@ mod test {
                     .collect::<Vec<_>>()
                     .try_into()
                     .unwrap();
-                let compressed = compress(&initial, slen * 8).unwrap();
-                if let Some(decompressed) = decompress(
-                    &compressed,
-                    (FalconVariant::Falcon512.parameters().sig_bytelen - SALT_LEN - HEAD_LEN) * 8,
-                    N,
-                ) {
-                    assert_eq!(initial.to_vec(), decompressed);
-                    num_successes_512 += 1;
+                if let Some(compressed) = compress(&initial, slen * 8) {
+                    if let Some(decompressed) = decompress(
+                        &compressed,
+                        (FalconVariant::Falcon512.parameters().sig_bytelen - SALT_LEN - HEAD_LEN)
+                            * 8,
+                        N,
+                    ) {
+                        assert_eq!(initial.to_vec(), decompressed);
+                        num_successes_512 += 1;
+                    }
                 }
             }
 
@@ -325,10 +343,11 @@ mod test {
                     .collect::<Vec<_>>()
                     .try_into()
                     .unwrap();
-                let compressed = compress(&initial, slen * 8).unwrap();
-                if let Some(decompressed) = decompress(&compressed, slen * 8, N) {
-                    assert_eq!(initial.to_vec(), decompressed);
-                    num_successes_1024 += 1;
+                if let Some(compressed) = compress(&initial, slen * 8) {
+                    if let Some(decompressed) = decompress(&compressed, slen * 8, N) {
+                        assert_eq!(initial.to_vec(), decompressed);
+                        num_successes_1024 += 1;
+                    }
                 }
             }
         }
@@ -429,10 +448,33 @@ mod test {
 
             // try random string -- might fail, but if not must re-encode to the same
             // let random = (0..compressed.len()).map(|_| rng.gen::<u8>()).collect_vec();
-            let random = vec![162, 76];
+            let mut random = compressed.iter().map(|_| rng.gen::<u8>()).collect_vec();
+            let num_trailing_zeros = compressed
+                .iter()
+                .cloned()
+                .rev()
+                .find_position(|&x| x != 0)
+                .map(|(pos, _val)| pos)
+                .unwrap_or(0);
+            let len = random.len();
+            for i in 0..num_trailing_zeros {
+                random[len - 1 - i] = 0;
+            }
             if let Some(decompressed) = decompress(&random, slen, n) {
                 let recompressed = compress(&decompressed, slen).unwrap();
-                assert_eq!(random, recompressed, "decompressed: {:?}", decompressed);
+                assert_eq!(
+                    random,
+                    recompressed,
+                    "decompressed: {:?}\ndifference: {:?}",
+                    decompressed,
+                    random
+                        .iter()
+                        .enumerate()
+                        .zip(recompressed.iter().enumerate())
+                        .filter(|((_rai, rav), (_rei, rev))| rav != rev)
+                        .map(|((rai, rav), (_rei, rev))| format!("{}. {} vs {}", rai, rav, rev))
+                        .join(" ")
+                );
             }
         }
     }
