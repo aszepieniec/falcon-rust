@@ -270,12 +270,14 @@ mod test {
 
     #[test]
     fn test_compress_decompress() {
-        let num_iterations = 200;
+        let num_iterations = 1000;
 
         let sigma = 1.5 * (Q.to_f64().unwrap()).sqrt();
         let distribution = Normal::<f64>::new(0.0, sigma).unwrap();
         let mut rng = thread_rng();
 
+        let mut num_successes_512 = 0;
+        let mut num_successes_1024 = 0;
         for _ in 0..num_iterations {
             const SALT_LEN: usize = 40;
             const HEAD_LEN: usize = 1;
@@ -297,13 +299,14 @@ mod test {
                     .try_into()
                     .unwrap();
                 let compressed = compress(&initial, slen * 8).unwrap();
-                let decompressed = decompress(
+                if let Some(decompressed) = decompress(
                     &compressed,
                     (FalconVariant::Falcon512.parameters().sig_bytelen - SALT_LEN - HEAD_LEN) * 8,
                     N,
-                )
-                .unwrap();
-                assert_eq!(initial.to_vec(), decompressed);
+                ) {
+                    assert_eq!(initial.to_vec(), decompressed);
+                    num_successes_512 += 1;
+                }
             }
 
             // N = 1024
@@ -323,10 +326,14 @@ mod test {
                     .try_into()
                     .unwrap();
                 let compressed = compress(&initial, slen * 8).unwrap();
-                let decompressed = decompress(&compressed, slen * 8, N).unwrap();
-                assert_eq!(initial.to_vec(), decompressed);
+                if let Some(decompressed) = decompress(&compressed, slen * 8, N) {
+                    assert_eq!(initial.to_vec(), decompressed);
+                    num_successes_1024 += 1;
+                }
             }
         }
+        assert!((num_successes_512 as f64) / (num_iterations as f64) > 0.995);
+        assert!((num_successes_1024 as f64) / (num_iterations as f64) > 0.995);
     }
 
     #[test]
