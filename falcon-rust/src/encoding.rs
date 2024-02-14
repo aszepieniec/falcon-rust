@@ -34,7 +34,7 @@ pub(crate) fn compress_slow(v: &[i16], slen: usize) -> Option<Vec<u8>> {
     Some(bitvector.to_bytes())
 }
 
-/// Take as input a list of integers v and a bytelength slen, and
+/// Take as input a list of integers v and a byte length slen, and
 /// return a bytestring of length slen that encode/compress v.
 /// If this is not possible, return False.
 ///
@@ -52,17 +52,23 @@ pub(crate) fn compress_slow(v: &[i16], slen: usize) -> Option<Vec<u8>> {
 pub(crate) fn compress(v: &[i16], slen: usize) -> Option<Vec<u8>> {
     // encode each coefficient separately; join later
     let lengths_and_coefficients = v.iter().map(|c| compress_coefficient(*c)).collect_vec();
-    if lengths_and_coefficients
+    let total_length = lengths_and_coefficients
         .iter()
         .map(|(l, _c)| *l)
-        .sum::<usize>()
-        > slen
-    {
+        .sum::<usize>();
+
+    // if we can't fit all coefficients in the allotted bytes
+    if total_length > slen * 8 {
+        return None;
+    }
+
+    // no coefficients are given
+    if v.is_empty() {
         return None;
     }
 
     // join all but one coefficients assuming enough space
-    let mut bytes = vec![0u8; slen / 8];
+    let mut bytes = vec![0u8; slen];
     let mut counter = 0;
     for (length, coefficient) in lengths_and_coefficients.iter().take(v.len() - 1) {
         let (cdiv8, cmod8) = counter.div_mod_floor(&8);
@@ -104,11 +110,7 @@ fn compress_coefficient(coeff: i16) -> (usize, u8) {
 ///  This is a deprecated decompress routine used now only for testing
 /// compatibility with the new, faster implementation (below).
 #[allow(dead_code)]
-pub(crate) fn decompress_slow(x: &[u8], bitlength: usize, n: usize) -> Option<Vec<i16>> {
-    if x.len() * 8 != bitlength {
-        return None;
-    }
-
+pub(crate) fn decompress_slow(x: &[u8], n: usize) -> Option<Vec<i16>> {
     let bitvector = BitVec::from_bytes(x);
     let mut index = 0;
     let mut result = Vec::with_capacity(n);
@@ -151,11 +153,7 @@ pub(crate) fn decompress_slow(x: &[u8], bitlength: usize, n: usize) -> Option<Ve
 /// Algorithm 18 p. 48 of the specification [1].
 ///
 /// [1]: https://falcon-sign.info/falcon.pdf
-pub(crate) fn decompress(x: &[u8], bitlength: usize, n: usize) -> Option<Vec<i16>> {
-    if x.len() * 8 != bitlength {
-        return None;
-    }
-
+pub(crate) fn decompress(x: &[u8], n: usize) -> Option<Vec<i16>> {
     let bitvector = BitVec::from_bytes(x);
     let mut index = 0;
     let mut result = Vec::with_capacity(n);
@@ -276,13 +274,52 @@ mod test {
 
     use crate::{
         encoding::{compress, compress_slow, decompress, decompress_slow},
-        falcon::FalconVariant,
         field::Q,
     };
     use bit_vec::BitVec;
     use itertools::Itertools;
     use rand::{thread_rng, Rng};
     use rand_distr::{num_traits::ToPrimitive, Distribution, Normal};
+
+    use proptest::prelude::*;
+
+    fn short_elements(n: usize) -> Vec<i16> {
+        let sigma = 1.5 * (Q.to_f64().unwrap()).sqrt();
+        let distribution = Normal::<f64>::new(0.0, sigma).unwrap();
+        let mut rng = thread_rng();
+        (0..n)
+            .map(|_| {
+                (distribution.sample(&mut rng) + 0.5)
+                    .floor()
+                    .to_i32()
+                    .unwrap() as i16
+            })
+            .collect::<Vec<_>>()
+    }
+    proptest! {
+        #[test]
+        fn compress_does_not_crash(v in (0..2000usize).prop_map(short_elements)) {
+            compress(&v, 2*v.len());
+        }
+    }
+    proptest! {
+        #[test]
+        fn decompress_recovers(v in (0..2000usize).prop_map(short_elements)) {
+            let slen = 2 * v.len();
+            let n = v.len();
+            if let Some(compressed) = compress(&v, slen) {
+                let recovered = decompress(&compressed, n).unwrap();
+                prop_assert_eq!(v, recovered.clone());
+                let recompressed = compress(&recovered, slen).unwrap();
+                prop_assert_eq!(compressed, recompressed);
+            }
+        }
+    }
+
+    #[test]
+    fn compress_empty_vec_does_not_crash() {
+        compress(&[], 0);
+    }
 
     #[test]
     fn test_compress_decompress() {
@@ -315,12 +352,7 @@ mod test {
                     .try_into()
                     .unwrap();
                 if let Some(compressed) = compress(&initial, slen * 8) {
-                    if let Some(decompressed) = decompress(
-                        &compressed,
-                        (FalconVariant::Falcon512.parameters().sig_bytelen - SALT_LEN - HEAD_LEN)
-                            * 8,
-                        N,
-                    ) {
+                    if let Some(decompressed) = decompress(&compressed, N) {
                         assert_eq!(initial.to_vec(), decompressed);
                         num_successes_512 += 1;
                     }
@@ -344,7 +376,7 @@ mod test {
                     .try_into()
                     .unwrap();
                 if let Some(compressed) = compress(&initial, slen * 8) {
-                    if let Some(decompressed) = decompress(&compressed, slen * 8, N) {
+                    if let Some(decompressed) = decompress(&compressed, N) {
                         assert_eq!(initial.to_vec(), decompressed);
                         num_successes_1024 += 1;
                     }
@@ -372,7 +404,7 @@ mod test {
             .collect::<Vec<_>>();
         let slen = 2 * n * 8;
         let compressed = compress_slow(&initial, slen).unwrap();
-        let compressed_fast = compress(&initial, slen).unwrap();
+        let compressed_fast = compress(&initial, slen / 8).unwrap();
         assert_eq!(
             compressed,
             compressed_fast,
@@ -403,8 +435,8 @@ mod test {
             let slen = 2 * n * 8;
             let compressed = compress(&initial, slen).unwrap();
 
-            let decompressed = decompress(&compressed, slen, n);
-            let decompressed_fast = decompress_slow(&compressed, slen, n);
+            let decompressed = decompress(&compressed, n);
+            let decompressed_fast = decompress_slow(&compressed, n);
 
             assert_eq!(decompressed, decompressed_fast);
         }
@@ -431,10 +463,8 @@ mod test {
             let slen = 2 * n * 8;
             let compressed = compress(&initial, slen).unwrap();
 
-            assert!(decompress(&compressed, slen, n + 1).is_none());
-            assert!(decompress(&compressed, slen + 1, n).is_none());
-            // assert!(decompress(&compressed, slen, n - 1).is_none()); // should work
-            assert!(decompress(&compressed, slen - 1, n).is_none());
+            assert!(decompress(&compressed, n + 1).is_none());
+            // assert!(decompress(&compressed, n - 1).is_none()); // should work
 
             // flip last set bit -- should cause failure
             let mut compressed_bitvec = BitVec::from_bytes(&compressed);
@@ -444,7 +474,7 @@ mod test {
             }
             compressed_bitvec.set(index - 1, false);
             let last_bit_flipped = compressed_bitvec.to_bytes();
-            assert!(decompress(&last_bit_flipped, slen, n).is_none());
+            assert!(decompress(&last_bit_flipped, n).is_none());
 
             // try random string -- might fail, but if not must re-encode to the same
             // let random = (0..compressed.len()).map(|_| rng.gen::<u8>()).collect_vec();
@@ -460,7 +490,7 @@ mod test {
             for i in 0..num_trailing_zeros {
                 random[len - 1 - i] = 0;
             }
-            if let Some(decompressed) = decompress(&random, slen, n) {
+            if let Some(decompressed) = decompress(&random, n) {
                 let recompressed = compress(&decompressed, slen).unwrap();
                 assert_eq!(
                     random,

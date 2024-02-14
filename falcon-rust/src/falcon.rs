@@ -537,7 +537,7 @@ pub fn verify<const N: usize>(m: &[u8], sig: &Signature<N>, pk: &PublicKey<N>) -
     let r_cat_m = [sig.r.to_vec(), m.to_vec()].concat();
     let c = hash_to_point(&r_cat_m, n);
 
-    let s2 = match decompress(&sig.s, (params.sig_bytelen - 41) * 8, n) {
+    let s2 = match decompress(&sig.s, n) {
         Some(success) => success,
         None => {
             return false;
@@ -1233,7 +1233,7 @@ mod test {
             r: nonce,
             s: compress(
                 &sigvec,
-                (FalconVariant::Falcon1024.parameters().sig_bytelen - 41) * 8,
+                FalconVariant::Falcon1024.parameters().sig_bytelen - 41,
             )
             .unwrap(),
         };
@@ -1250,7 +1250,7 @@ mod test {
             r: nonce,
             s: compress(
                 &sigvec,
-                (FalconVariant::Falcon512.parameters().sig_bytelen - 41) * 8,
+                FalconVariant::Falcon512.parameters().sig_bytelen - 41,
             )
             .unwrap(),
         };
