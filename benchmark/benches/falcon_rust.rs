@@ -15,203 +15,221 @@ const SIGS_PER_KEY: usize = 10;
 
 pub fn falcon_rust_operation(c: &mut Criterion) {
     let mut rng = thread_rng();
-    let mut keys512 = vec![];
-    let mut keys1024 = vec![];
+    let mut keys512 = (0..NUM_KEYS)
+        .map(|_| falcon_rust::falcon512::keygen(rng.gen()))
+        .collect_vec();
+    let mut keys1024 = (0..NUM_KEYS)
+        .map(|_| falcon_rust::falcon1024::keygen(rng.gen()))
+        .collect_vec();
+    let mut msgs512 = (0..NUM_KEYS * SIGS_PER_KEY)
+        .map(|_| rng.gen::<[u8; 15]>())
+        .collect_vec();
+    let mut msgs1024 = (0..NUM_KEYS * SIGS_PER_KEY)
+        .map(|_| rng.gen::<[u8; 15]>())
+        .collect_vec();
+    let mut sigs512 = (0..NUM_KEYS * SIGS_PER_KEY)
+        .map(|i| falcon_rust::falcon512::sign(&msgs512[i], &keys512[i % NUM_KEYS].0))
+        .collect_vec();
+    let mut sigs1024 = (0..NUM_KEYS * SIGS_PER_KEY)
+        .map(|i| falcon_rust::falcon1024::sign(&msgs1024[i], &keys1024[i % NUM_KEYS].0))
+        .collect_vec();
+    let mut serialized_secret_keys_512 = keys512.iter().map(|k| k.0.to_bytes()).collect_vec();
+    let mut serialized_public_keys_512 = keys512.iter().map(|k| k.1.to_bytes()).collect_vec();
+    let mut serialized_signatures_512 = sigs512.iter().map(|s| s.to_bytes()).collect_vec();
+    let mut serialized_secret_keys_1024 = keys1024.iter().map(|k| k.0.to_bytes()).collect_vec();
+    let mut serialized_public_keys_1024 = keys1024.iter().map(|k| k.1.to_bytes()).collect_vec();
+    let mut serialized_signatures_1024 = sigs1024.iter().map(|s| s.to_bytes()).collect_vec();
 
     let mut group = c.benchmark_group("falcon-rust");
     group.sample_size(NUM_KEYS);
     group.bench_function("keygen 512", |b| {
         b.iter(|| {
-            keys512.push(falcon_rust::falcon512::keygen(rng.gen()));
+            falcon_rust::falcon512::keygen(rng.gen());
         })
     });
     group.bench_function("keygen 1024", |b| {
         b.iter(|| {
-            keys1024.push(falcon_rust::falcon1024::keygen(rng.gen()));
+            falcon_rust::falcon1024::keygen(rng.gen());
         })
     });
     group.finish();
 
     let mut group = c.benchmark_group("falcon-rust");
-    let mut sigs512 = vec![
-        falcon_rust::falcon512::sign(&rng.gen::<[u8; 16]>(), &keys512[0].0);
-        NUM_KEYS * SIGS_PER_KEY
-    ];
-    let mut msgs512 = (0..NUM_KEYS * SIGS_PER_KEY)
-        .map(|_| rng.gen::<[u8; 15]>())
-        .collect_vec();
-    let mut sigs1024 = vec![
-        falcon_rust::falcon1024::sign(&rng.gen::<[u8; 16]>(), &keys1024[0].0);
-        NUM_KEYS * SIGS_PER_KEY
-    ];
-    let mut msgs1024 = (0..NUM_KEYS * SIGS_PER_KEY)
-        .map(|_| rng.gen::<[u8; 15]>())
-        .collect_vec();
     group.sample_size(NUM_KEYS * SIGS_PER_KEY);
-    let mut i = 0;
+    let mut iterator_sign_512 = 0;
     group.bench_function("sign 512", |b| {
         b.iter(|| {
-            sigs512[i % (NUM_KEYS * SIGS_PER_KEY)] = falcon_rust::falcon512::sign(
-                &msgs512[i % (NUM_KEYS * SIGS_PER_KEY)],
-                &keys512[i % NUM_KEYS].0,
+            falcon_rust::falcon512::sign(
+                &msgs512[iterator_sign_512 % (NUM_KEYS * SIGS_PER_KEY)],
+                &keys512[iterator_sign_512 % NUM_KEYS].0,
             );
-            i += 1;
+            iterator_sign_512 += 1;
         })
     });
-    i = 0;
+    let mut iterator_sign_1024 = 0;
     group.bench_function("sign 1024", |b| {
         b.iter(|| {
-            sigs1024[i % (NUM_KEYS * SIGS_PER_KEY)] = falcon_rust::falcon1024::sign(
-                &msgs1024[i % (NUM_KEYS * SIGS_PER_KEY)],
-                &keys1024[i % NUM_KEYS].0,
+            falcon_rust::falcon1024::sign(
+                &msgs1024[iterator_sign_1024 % (NUM_KEYS * SIGS_PER_KEY)],
+                &keys1024[iterator_sign_1024 % NUM_KEYS].0,
             );
-            i += 1;
+            iterator_sign_1024 += 1;
         })
     });
     group.finish();
 
     let mut group = c.benchmark_group("falcon-rust");
     group.sample_size(NUM_KEYS * SIGS_PER_KEY);
-    i = 0;
+    let mut iterator_verify_512 = 0;
     group.bench_function("verify 512", |b| {
         b.iter(|| {
             assert!(falcon_rust::falcon512::verify(
-                &msgs512[i % msgs512.len()],
-                &sigs512[i % sigs512.len()],
-                &keys512[i % NUM_KEYS].1,
+                &msgs512[iterator_verify_512 % msgs512.len()],
+                &sigs512[iterator_verify_512 % sigs512.len()],
+                &keys512[iterator_verify_512 % NUM_KEYS].1,
             ));
-            i += 1;
+            iterator_verify_512 += 1;
         })
     });
-    i = 0;
+    let mut iterator_verify_1024 = 0;
     group.bench_function("verify 1024", |b| {
         b.iter(|| {
             assert!(falcon_rust::falcon1024::verify(
-                &msgs1024[i % msgs1024.len()],
-                &sigs1024[i % sigs1024.len()],
-                &keys1024[i % NUM_KEYS].1,
+                &msgs1024[iterator_verify_1024 % msgs1024.len()],
+                &sigs1024[iterator_verify_1024 % sigs1024.len()],
+                &keys1024[iterator_verify_1024 % NUM_KEYS].1,
             ));
-            i += 1;
+            iterator_verify_1024 += 1;
         })
     });
     group.finish();
 
     let mut group = c.benchmark_group("falcon-rust");
-    let mut serialized_secret_keys_512 = vec![vec![]; (NUM_KEYS)];
-    let mut serialized_public_keys_512 = vec![vec![]; (NUM_KEYS)];
-    let mut serialized_signatures_512 = vec![vec![]; (NUM_KEYS * SIGS_PER_KEY)];
-    let mut serialized_secret_keys_1024 = vec![vec![]; (NUM_KEYS)];
-    let mut serialized_public_keys_1024 = vec![vec![]; (NUM_KEYS)];
-    let mut serialized_signatures_1024 = vec![vec![]; (NUM_KEYS * SIGS_PER_KEY)];
-    i = 0;
-    group.bench_function("serialize secret key 512", |b| {
+    let mut iterator_serialize_sk_512 = 0;
+    group.bench_function("serialize sk 512", |b| {
         b.iter(|| {
-            serialized_secret_keys_512[i % (NUM_KEYS)] =
-                keys512[i % keys512.len()].0.clone().to_bytes();
-            i += 1;
+            keys512[iterator_serialize_sk_512 % keys512.len()]
+                .0
+                .clone()
+                .to_bytes();
+            iterator_serialize_sk_512 += 1;
         })
     });
-    i = 0;
-    group.bench_function("serialize secret key 1024", |b| {
+    let mut iterator_serialize_sk_1024 = 0;
+    group.bench_function("serialize sk 1024", |b| {
         b.iter(|| {
-            serialized_secret_keys_1024[i % (NUM_KEYS)] =
-                keys1024[i % keys1024.len()].0.clone().to_bytes();
-            i += 1;
+            keys1024[iterator_serialize_sk_1024 % keys1024.len()]
+                .0
+                .clone()
+                .to_bytes();
+            iterator_serialize_sk_1024 += 1;
         })
     });
-    i = 0;
-    group.bench_function("serialize public key 512", |b| {
+    let mut iterator_serialize_pk_512 = 0;
+    group.bench_function("serialize pk 512", |b| {
         b.iter(|| {
-            serialized_public_keys_512[i % (NUM_KEYS)] =
-                keys512[i % keys512.len()].1.clone().to_bytes();
-            i += 1;
+            keys512[iterator_serialize_pk_512 % keys512.len()]
+                .1
+                .clone()
+                .to_bytes();
+            iterator_serialize_pk_512 += 1;
         })
     });
-    i = 0;
-    group.bench_function("serialize public key 1024", |b| {
+    let mut iterator_serialize_pk_1024 = 0;
+    group.bench_function("serialize pk 1024", |b| {
         b.iter(|| {
-            serialized_public_keys_1024[i % (NUM_KEYS)] =
-                keys1024[i % keys1024.len()].1.clone().to_bytes();
-            i += 1;
+            keys1024[iterator_serialize_pk_1024 % keys1024.len()]
+                .1
+                .clone()
+                .to_bytes();
+            iterator_serialize_pk_1024 += 1;
         })
     });
-    i = 0;
-    group.bench_function("serialize signature 512", |b| {
+    let mut iterator_serialize_sig_512 = 0;
+    group.bench_function("serialize sig 512", |b| {
         b.iter(|| {
-            serialized_signatures_512[i % (NUM_KEYS * SIGS_PER_KEY)] =
-                sigs512[i % sigs512.len()].clone().to_bytes();
-            i += 1;
+            sigs512[iterator_serialize_sig_512 % sigs512.len()]
+                .clone()
+                .to_bytes();
+            iterator_serialize_sig_512 += 1;
         })
     });
-    i = 0;
-    group.bench_function("serialize signature 1024", |b| {
+    let mut iterator_serialize_sig_1024 = 0;
+    group.bench_function("serialize sig 1024", |b| {
         b.iter(|| {
-            serialized_signatures_1024[i % (NUM_KEYS * SIGS_PER_KEY)] =
-                sigs1024[i % sigs1024.len()].clone().to_bytes();
-            i += 1;
+            sigs1024[iterator_serialize_sig_1024 % sigs1024.len()]
+                .clone()
+                .to_bytes();
+            iterator_serialize_sig_1024 += 1;
         })
     });
     group.finish();
 
     let mut group = c.benchmark_group("falcon-rust");
-    i = 0;
-    group.bench_function("deserialize secret key 512", |b| {
+    let mut iterator_deserialize_sk_512 = 0;
+    group.bench_function("deserialize sk 512", |b| {
         b.iter(|| {
             falcon_rust::falcon512::SecretKey::from_bytes(
-                &serialized_secret_keys_512[i % (NUM_KEYS)],
+                &serialized_secret_keys_512
+                    [iterator_deserialize_sk_512 % serialized_secret_keys_512.len()],
             )
             .unwrap();
-            i += 1;
+            iterator_deserialize_sk_512 += 1;
         })
     });
-    i = 0;
-    group.bench_function("deserialize secret key 1024", |b| {
+    let mut iterator_deserialize_sk_1024 = 0;
+    group.bench_function("deserialize sk 1024", |b| {
         b.iter(|| {
             falcon_rust::falcon1024::SecretKey::from_bytes(
-                &serialized_secret_keys_1024[i % (NUM_KEYS)],
+                &serialized_secret_keys_1024
+                    [iterator_deserialize_sk_1024 % serialized_secret_keys_1024.len()],
             )
             .unwrap();
-            i += 1;
+            iterator_deserialize_sk_1024 += 1;
         })
     });
-    i = 0;
-    group.bench_function("deserialize public key 512", |b| {
+    let mut iterator_deserialize_pk_512 = 0;
+    group.bench_function("deserialize pk 512", |b| {
         b.iter(|| {
             falcon_rust::falcon512::PublicKey::from_bytes(
-                &serialized_public_keys_512[i % (NUM_KEYS)],
+                &serialized_public_keys_512
+                    [iterator_deserialize_pk_512 % serialized_public_keys_512.len()],
             )
             .unwrap();
-            i += 1;
+            iterator_deserialize_pk_512 += 1;
         })
     });
-    i = 0;
-    group.bench_function("deserialize public key 1024", |b| {
+    let mut iterator_deserialize_pk_1024 = 0;
+    group.bench_function("deserialize pk 1024", |b| {
         b.iter(|| {
             falcon_rust::falcon1024::PublicKey::from_bytes(
-                &serialized_public_keys_1024[i % (NUM_KEYS)],
+                &serialized_public_keys_1024
+                    [iterator_deserialize_pk_1024 % serialized_public_keys_1024.len()],
             )
             .unwrap();
-            i += 1;
+            iterator_deserialize_pk_1024 += 1;
         })
     });
-    i = 0;
-    group.bench_function("deserialize signature 512", |b| {
+    let mut iterator_deserialize_sig_512 = 0;
+    group.bench_function("deserialize sig 512", |b| {
         b.iter(|| {
             falcon_rust::falcon512::Signature::from_bytes(
-                &serialized_signatures_512[i % (NUM_KEYS * SIGS_PER_KEY)],
+                &serialized_signatures_512
+                    [iterator_deserialize_sig_512 % serialized_signatures_512.len()],
             )
             .unwrap();
-            i += 1;
+            iterator_deserialize_sig_512 += 1;
         })
     });
-    i = 0;
-    group.bench_function("deserialize signature 1024", |b| {
+    let mut iterator_deserialize_sig_1024 = 0;
+    group.bench_function("deserialize sig 1024", |b| {
         b.iter(|| {
             falcon_rust::falcon1024::Signature::from_bytes(
-                &serialized_signatures_1024[i % (NUM_KEYS * SIGS_PER_KEY)],
+                &serialized_signatures_1024
+                    [iterator_deserialize_sig_1024 % serialized_signatures_1024.len()],
             )
             .unwrap();
-            i += 1;
+            iterator_deserialize_sig_1024 += 1;
         })
     });
     group.finish();
@@ -219,85 +237,87 @@ pub fn falcon_rust_operation(c: &mut Criterion) {
 
 fn falcon_c_ffi_operation(c: &mut Criterion) {
     let mut rng = thread_rng();
-    let mut keys512 = vec![];
-    let mut keys1024 = vec![];
+    let mut keys512 = (0..NUM_KEYS).map(|_| falcon512::keypair()).collect_vec();
+    let mut keys1024 = (0..NUM_KEYS).map(|_| falcon1024::keypair()).collect_vec();
 
     let mut group = c.benchmark_group("c ffi");
     group.sample_size(NUM_KEYS);
     group.bench_function("keygen 512", |b| {
         b.iter(|| {
-            keys512.push(falcon512::keypair());
+            falcon512::keypair();
         })
     });
     group.bench_function("keygen 1024", |b| {
         b.iter(|| {
-            keys1024.push(falcon1024::keypair());
+            falcon1024::keypair();
         })
     });
     group.finish();
 
     let mut group = c.benchmark_group("c ffi");
-    let mut sigs512 = vec![
-        falcon512::detached_sign(&rng.gen::<[u8; 16]>(), &keys512[0].1);
-        NUM_KEYS * SIGS_PER_KEY
-    ];
     let mut msgs512 = (0..NUM_KEYS * SIGS_PER_KEY)
         .map(|_| rng.gen::<[u8; 15]>())
         .collect_vec();
-    let mut sigs1024 = vec![
-        falcon1024::detached_sign(&rng.gen::<[u8; 16]>(), &keys1024[0].1);
-        NUM_KEYS * SIGS_PER_KEY
-    ];
+    let mut sigs512 = msgs512
+        .iter()
+        .enumerate()
+        .map(|(i, msg)| falcon512::detached_sign(msg, &keys512[i % NUM_KEYS].1))
+        .collect_vec();
     let mut msgs1024 = (0..NUM_KEYS * SIGS_PER_KEY)
         .map(|_| rng.gen::<[u8; 15]>())
         .collect_vec();
+    let mut sigs1024 = msgs1024
+        .iter()
+        .enumerate()
+        .map(|(i, msg)| falcon1024::detached_sign(msg, &keys1024[i % NUM_KEYS].1))
+        .collect_vec();
     group.sample_size(NUM_KEYS * SIGS_PER_KEY);
-    let mut i = 0;
+    let mut iterator_sign_512 = 0;
     group.bench_function("sign 512", |b| {
         b.iter(|| {
-            sigs512[i % (NUM_KEYS * SIGS_PER_KEY)] = falcon512::detached_sign(
-                &msgs512[i % (NUM_KEYS * SIGS_PER_KEY)],
-                &keys512[i % NUM_KEYS].1,
+            sigs512[iterator_sign_512 % (NUM_KEYS * SIGS_PER_KEY)] = falcon512::detached_sign(
+                &msgs512[iterator_sign_512 % (NUM_KEYS * SIGS_PER_KEY)],
+                &keys512[iterator_sign_512 % NUM_KEYS].1,
             );
-            i += 1;
+            iterator_sign_512 += 1;
         })
     });
-    i = 0;
+    let mut iterator_sign_1024 = 0;
     group.bench_function("sign 1024", |b| {
         b.iter(|| {
-            sigs1024[i % (NUM_KEYS * SIGS_PER_KEY)] = falcon1024::detached_sign(
-                &msgs1024[i % (NUM_KEYS * SIGS_PER_KEY)],
-                &keys1024[i % NUM_KEYS].1,
+            sigs1024[iterator_sign_1024 % (NUM_KEYS * SIGS_PER_KEY)] = falcon1024::detached_sign(
+                &msgs1024[iterator_sign_1024 % (NUM_KEYS * SIGS_PER_KEY)],
+                &keys1024[iterator_sign_1024 % NUM_KEYS].1,
             );
-            i += 1;
+            iterator_sign_1024 += 1;
         })
     });
     group.finish();
 
     let mut group = c.benchmark_group("c ffi");
     group.sample_size(NUM_KEYS * SIGS_PER_KEY);
-    i = 0;
+    let mut iterator_verify_512 = 0;
     group.bench_function("verify 512", |b| {
         b.iter(|| {
             assert!(falcon512::verify_detached_signature(
-                &sigs512[i % sigs512.len()],
-                &msgs512[i % msgs512.len()],
-                &keys512[i % NUM_KEYS].0,
+                &sigs512[iterator_verify_512 % sigs512.len()],
+                &msgs512[iterator_verify_512 % msgs512.len()],
+                &keys512[iterator_verify_512 % NUM_KEYS].0,
             )
             .is_ok());
-            i += 1;
+            iterator_verify_512 += 1;
         })
     });
-    i = 0;
+    let mut iterator_verify_1024 = 0;
     group.bench_function("verify 1024", |b| {
         b.iter(|| {
             assert!(falcon1024::verify_detached_signature(
-                &sigs1024[i % sigs1024.len()],
-                &msgs1024[i % msgs1024.len()],
-                &keys1024[i % NUM_KEYS].0,
+                &sigs1024[iterator_verify_1024 % sigs1024.len()],
+                &msgs1024[iterator_verify_1024 % msgs1024.len()],
+                &keys1024[iterator_verify_1024 % NUM_KEYS].0,
             )
             .is_ok());
-            i += 1;
+            iterator_verify_1024 += 1;
         })
     });
     group.finish();

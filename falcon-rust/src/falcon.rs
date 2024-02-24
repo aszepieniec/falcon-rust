@@ -388,11 +388,7 @@ impl<const N: usize> Signature<N> {
                         | (1 << 4) // fixed bit
                         | l;
 
-        vec![header]
-            .into_iter()
-            .chain(self.r)
-            .chain(self.s.iter().cloned())
-            .collect_vec()
+        [vec![header], self.r.to_vec(), self.s.clone()].concat()
     }
 
     /// Deserialize a signature from a slice of bytes.
@@ -512,7 +508,7 @@ pub fn sign<const N: usize>(m: &[u8], sk: &SecretKey<N>) -> Signature<N> {
                 .iter()
                 .map(|a| a.re.round() as i16)
                 .collect_vec(),
-            8 * (params.sig_bytelen - 41),
+            params.sig_bytelen - 41,
         );
 
         match maybe_s {
@@ -1225,7 +1221,7 @@ mod test {
     }
 
     #[test]
-    fn test_signature_deserialize() {
+    fn test_signature_deserialize_success() {
         let n = 1024;
         let sigvec = signature_vector(n);
         let nonce = [0u8; 40];
@@ -1239,6 +1235,10 @@ mod test {
         };
 
         let serialized = original_signature.to_bytes();
+        assert_eq!(
+            FalconVariant::Falcon1024.parameters().sig_bytelen,
+            serialized.len()
+        );
         let deserialized = Signature::from_bytes(&serialized).unwrap();
 
         assert_eq!(original_signature, deserialized);
@@ -1256,6 +1256,10 @@ mod test {
         };
 
         let serialized = original_signature.to_bytes();
+        assert_eq!(
+            FalconVariant::Falcon512.parameters().sig_bytelen,
+            serialized.len()
+        );
         let deserialized = Signature::from_bytes(&serialized).unwrap();
         let reserialized = deserialized.to_bytes();
 
@@ -1272,7 +1276,7 @@ mod test {
             r: nonce,
             s: compress(
                 &sigvec,
-                (FalconVariant::Falcon512.parameters().sig_bytelen - 41) * 8,
+                FalconVariant::Falcon512.parameters().sig_bytelen - 41,
             )
             .unwrap(),
         };

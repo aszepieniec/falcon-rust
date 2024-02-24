@@ -34,8 +34,8 @@ pub(crate) fn compress_slow(v: &[i16], slen: usize) -> Option<Vec<u8>> {
     Some(bitvector.to_bytes())
 }
 
-/// Take as input a list of integers v and a byte length slen, and
-/// return a bytestring of length slen that encode/compress v.
+/// Take as input a list of integers v and a byte length `byte_length``, and
+/// return a bytestring of length `byte_length` that encode/compress v.
 /// If this is not possible, return False.
 ///
 /// For each coefficient of v:
@@ -49,7 +49,7 @@ pub(crate) fn compress_slow(v: &[i16], slen: usize) -> Option<Vec<u8>> {
 /// Algorithm 17 p. 47 of the specification [1].
 ///
 /// [1]: https://falcon-sign.info/falcon.pdf
-pub(crate) fn compress(v: &[i16], slen: usize) -> Option<Vec<u8>> {
+pub(crate) fn compress(v: &[i16], byte_length: usize) -> Option<Vec<u8>> {
     // encode each coefficient separately; join later
     let lengths_and_coefficients = v.iter().map(|c| compress_coefficient(*c)).collect_vec();
     let total_length = lengths_and_coefficients
@@ -58,7 +58,7 @@ pub(crate) fn compress(v: &[i16], slen: usize) -> Option<Vec<u8>> {
         .sum::<usize>();
 
     // if we can't fit all coefficients in the allotted bytes
-    if total_length > slen * 8 {
+    if total_length > byte_length * 8 {
         return None;
     }
 
@@ -68,7 +68,7 @@ pub(crate) fn compress(v: &[i16], slen: usize) -> Option<Vec<u8>> {
     }
 
     // join all but one coefficients assuming enough space
-    let mut bytes = vec![0u8; slen];
+    let mut bytes = vec![0u8; byte_length];
     let mut counter = 0;
     for (length, coefficient) in lengths_and_coefficients.iter().take(v.len() - 1) {
         let (cdiv8, cmod8) = counter.div_mod_floor(&8);
@@ -88,7 +88,7 @@ pub(crate) fn compress(v: &[i16], slen: usize) -> Option<Vec<u8>> {
         bytes[cdiv8 + 1] |= ((*coefficient as u16) << (8 - cmod8)) as u8;
         let (cldiv8, clmod8) = (counter + length - 1).div_mod_floor(&8);
         bytes[cldiv8] |= 128u8 >> clmod8;
-        if cldiv8 + 1 < slen / 8 {
+        if cldiv8 + 1 < byte_length {
             bytes[cldiv8 + 1] |= (128u16 << (8 - clmod8)) as u8;
         } else if (128u16 << (8 - clmod8)) as u8 != 0 {
             return None;
