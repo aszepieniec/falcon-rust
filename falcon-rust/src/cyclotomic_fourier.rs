@@ -103,7 +103,7 @@ where
     ///    (a reference to) an array of powers of psi, from 0 to n-1,
     ///    but ordered by bit-reversed index. Here psi is a primitive root
     ///    of order 2n. You can use
-    ///    `Self::bitreversed_powers(psi, n)` for this purpose, but this
+    ///    `Self::bitreversed_powers(n)` for this purpose, but this
     ///    trait implementation is not const. For the performance benefit
     ///    you want a precompiled array, which you can get if you can get
     ///    by implementing the same method and marking it "const".
@@ -143,7 +143,7 @@ where
     ///    (a reference to) an array of powers of psi^-1, from 0 to n-1,
     ///    but ordered by bit-reversed index. Here psi is a primitive root of
     ///    order 2n. You can use
-    ///    `Self::bitreversed_powers(Self::inverse_or_zero(psi), n)` for
+    ///    `Self::bitreversed_powers_inverse(n)` for
     ///    this purpose, but this trait implementation is not const. For
     ///    the performance benefit you want a precompiled array, which you
     ///    can get if you can get by implementing the same methods and marking
