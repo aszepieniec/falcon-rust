@@ -192,15 +192,7 @@ impl<F: Zero + Clone> Polynomial<F> {
 /// The following implementations are specific to cyclotomic polynomial rings,
 /// i.e., F[ X ] / <X^n + 1>, and are used extensively in Falcon.
 impl<
-        F: One
-            + Zero
-            + Clone
-            + Neg<Output = F>
-            + MulAssign
-            + AddAssign
-            + Div<Output = F>
-            + Sub<Output = F>
-            + PartialEq,
+        F: One + Zero + Clone + Neg<Output = F> + MulAssign + AddAssign + Sub<Output = F> + PartialEq,
     > Polynomial<F>
 {
     /// Reduce the polynomial by X^n + 1.
@@ -215,7 +207,22 @@ impl<
         }
         Polynomial::new(coefficients)
     }
+}
 
+/// The following implementations are specific to cyclotomic polynomial rings,
+/// i.e., F[ X ] / <X^n + 1>, and are used extensively in Falcon.
+impl<
+        F: One
+            + Zero
+            + Clone
+            + Neg<Output = F>
+            + MulAssign
+            + AddAssign
+            + Div<Output = F>
+            + Sub<Output = F>
+            + PartialEq,
+    > Polynomial<F>
+{
     /// Compute the multiplicative inverse of the polynomial in the ring
     /// F[ X ] / <X^n + 1>
     ///

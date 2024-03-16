@@ -1,5 +1,5 @@
 use std::{
-    ops::{Add, AddAssign, Mul, MulAssign, Sub, SubAssign},
+    ops::{Add, AddAssign, Mul, MulAssign, Neg, Sub, SubAssign},
     str::FromStr,
 };
 
@@ -125,6 +125,12 @@ pub struct MultiModInt {
     limbs: [u32; N],
 }
 
+impl PartialEq for MultiModInt {
+    fn eq(&self, other: &Self) -> bool {
+        self.limbs == other.limbs
+    }
+}
+
 impl Add for MultiModInt {
     type Output = MultiModInt;
 
@@ -175,6 +181,26 @@ impl Mul for MultiModInt {
                 (((self.limbs[i] as u64) * (rhs.limbs[i] as u64)) % (MODULI[i] as u64)) as u32;
         }
         Self { limbs }
+    }
+}
+
+impl MulAssign for MultiModInt {
+    fn mul_assign(&mut self, rhs: Self) {
+        for (i, p) in MODULI.into_iter().enumerate() {
+            self.limbs[i] = (((self.limbs[i] as u64) * (rhs.limbs[i] as u64)) % (p as u64)) as u32;
+        }
+    }
+}
+
+impl Neg for MultiModInt {
+    type Output = MultiModInt;
+
+    fn neg(self) -> Self::Output {
+        let mut limbs = [0u32; N];
+        for (i, p) in MODULI.into_iter().enumerate() {
+            limbs[i] = (p - self.limbs[i]) % p;
+        }
+        Self::Output { limbs }
     }
 }
 
@@ -946,9 +972,12 @@ impl Polynomial<MultiModInt> {
 mod test {
     use itertools::Itertools;
     use num::{BigUint, Integer, One};
-    use rand::{thread_rng, RngCore};
+    use rand::{thread_rng, Rng, RngCore};
 
-    use crate::multimod::{product, N};
+    use crate::{
+        multimod::{product, N},
+        polynomial::Polynomial,
+    };
 
     use super::{coefficients, MultiModInt, MODULI};
 
@@ -973,6 +1002,36 @@ mod test {
             let multimod = MultiModInt::from(big.clone());
             let big_again = BigUint::from(multimod);
             assert_eq!(big, big_again);
+        }
+    }
+
+    #[test]
+    fn cyclotomic_multiplication() {
+        let mut rng = thread_rng();
+        let logn = rng.gen_range(0..10);
+        let bitlen = rng.gen_range(0..1000);
+        for _ in 0..100 {
+            let n = 1 << logn;
+            let a = Polynomial::new(
+                (0..n)
+                    .map(|_| (0..bitlen).map(|_| rng.gen::<u8>() % 2).collect_vec())
+                    .map(|buf| BigUint::from_radix_be(&buf, 2).unwrap())
+                    .map(MultiModInt::from)
+                    .collect_vec(),
+            );
+            let b = Polynomial::new(
+                (0..n)
+                    .map(|_| (0..bitlen).map(|_| rng.gen::<u8>() % 2).collect_vec())
+                    .map(|buf| BigUint::from_radix_be(&buf, 2).unwrap())
+                    .map(MultiModInt::from)
+                    .collect_vec(),
+            );
+
+            let product = a.clone() * b.clone();
+            let c_trad = product.reduce_by_cyclotomic(n);
+            let c_fast = a.cyclotomic_mul(&b);
+
+            assert_eq!(c_trad, c_fast);
         }
     }
 }
