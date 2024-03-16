@@ -1,4 +1,5 @@
 use std::{
+    fmt::Display,
     ops::{Add, AddAssign, Mul, MulAssign, Neg, Sub, SubAssign},
     str::FromStr,
 };
@@ -220,6 +221,12 @@ impl One for MultiModInt {
     }
 }
 
+impl Display for MultiModInt {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", BigUint::from(self.clone()))
+    }
+}
+
 impl From<BigUint> for MultiModInt {
     fn from(value: BigUint) -> Self {
         let limbs = (0..N)
@@ -319,7 +326,7 @@ impl<const P: u32> Inverse for PrimeField<P> {
 
 impl<const P: u32> CyclotomicFourier for PrimeField<P> {
     fn primitive_root_of_unity(n: usize) -> Self {
-        let int = match (P, n) {
+        let int = match (P, n.ilog2()) {
             (1073754113, 12) => 872548469u32,
             (1073754113, 11) => 657672030u32,
             (1073754113, 10) => 322179190u32,
@@ -887,6 +894,45 @@ impl<const P: u32> CyclotomicFourier for PrimeField<P> {
     }
 }
 
+impl<const P: u32> PartialEq for PrimeField<P> {
+    fn eq(&self, other: &Self) -> bool {
+        self.0 == other.0
+    }
+}
+
+impl<const P: u32> Neg for PrimeField<P> {
+    type Output = PrimeField<P>;
+
+    fn neg(self) -> Self::Output {
+        PrimeField::<P>((P - self.0) % P)
+    }
+}
+
+impl<const P: u32> From<u32> for PrimeField<P> {
+    fn from(value: u32) -> Self {
+        PrimeField::<P>(value % P)
+    }
+}
+
+impl Display for Polynomial<MultiModInt> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        for i in 0..self.coefficients.len() {
+            match i {
+                0 => {
+                    write!(f, "{}", self.coefficients[i])?;
+                }
+                1 => {
+                    write!(f, " + {} * x", self.coefficients[i])?;
+                }
+                _ => {
+                    write!(f, " + {} * x^{}", self.coefficients[i], i)?;
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
 impl Polynomial<MultiModInt> {
     fn cyclotomic_mul_ith_limb<const P: u32>(&self, other: &Self, result: &mut Self, i: usize) {
         let n = self.coefficients.len();
@@ -1006,11 +1052,11 @@ mod test {
     }
 
     #[test]
-    fn cyclotomic_multiplication() {
+    fn multimod_cyclotomic_multiplication() {
         let mut rng = thread_rng();
-        let logn = rng.gen_range(0..10);
-        let bitlen = rng.gen_range(0..1000);
         for _ in 0..100 {
+            let logn = rng.gen_range(0..10);
+            let bitlen = rng.gen_range(0..1000);
             let n = 1 << logn;
             let a = Polynomial::new(
                 (0..n)
