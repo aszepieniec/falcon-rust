@@ -1,5 +1,5 @@
 use itertools::Itertools;
-use num::{BigInt, BigUint, FromPrimitive, One, Zero};
+use num::{BigInt, FromPrimitive, One, Zero};
 use num_complex::Complex64;
 use rand::{rngs::StdRng, RngCore, SeedableRng};
 
@@ -37,8 +37,8 @@ fn babai_reduce(
     .into_iter()
     .max()
     .unwrap();
-    let f_mmip = Polynomial::<MultiModInt>::try_from(f.clone()).unwrap();
-    let g_mmip = Polynomial::<MultiModInt>::try_from(g.clone()).unwrap();
+    // let f_mmip = Polynomial::<MultiModInt>::try_from(f.clone()).unwrap();
+    // let g_mmip = Polynomial::<MultiModInt>::try_from(g.clone()).unwrap();
     let shift = (size as i64) - 53;
     let f_adjusted = f
         .map(|bi| Complex64::new(i64::try_from(bi >> shift).unwrap() as f64, 0.0))
@@ -89,26 +89,26 @@ fn babai_reduce(
         let kg = (k.clone().karatsuba(g))
             .reduce_by_cyclotomic(n)
             .map(|bi| bi << (capital_size - size));
-        // *capital_f -= kf;
-        // *capital_g -= kg;
+        *capital_f -= kf;
+        *capital_g -= kg;
 
-        let k_mmip = Polynomial::<MultiModInt>::try_from(k).unwrap();
-        let kf_mmip = f_mmip
-            .cyclotomic_mul(&k_mmip)
-            .map(|mmi| mmi.clone() << (capital_size - size) as usize);
-        let kg_mmip = g_mmip
-            .cyclotomic_mul(&k_mmip)
-            .map(|mmi| mmi.clone() << (capital_size - size) as usize);
-        *capital_f -= Polynomial::<BigInt>::from(kf_mmip.clone());
-        *capital_g -= Polynomial::<BigInt>::from(kg_mmip);
+        // let k_mmip = Polynomial::<MultiModInt>::try_from(k).unwrap();
+        // let kf_mmip = f_mmip
+        //     .cyclotomic_mul(&k_mmip)
+        //     .map(|mmi| mmi.clone() << (capital_size - size) as usize);
+        // let kg_mmip = g_mmip
+        //     .cyclotomic_mul(&k_mmip)
+        //     .map(|mmi| mmi.clone() << (capital_size - size) as usize);
+        // *capital_f -= Polynomial::<BigInt>::from(kf_mmip.clone());
+        // *capital_g -= Polynomial::<BigInt>::from(kg_mmip);
 
-        println!("kf: {}", kf.coefficients.iter().join(","));
-        println!("kf[0] len: {}", kf.coefficients[0].bits());
-        println!("kf_mmip: {}", kf_mmip);
-        println!(
-            "kf_mmip len: {}",
-            BigUint::from(kf_mmip.coefficients[0].clone()).bits()
-        );
+        // println!("kf: {}", kf.coefficients.iter().join(","));
+        // println!("kf[0] len: {}", kf.coefficients[0].bits());
+        // println!("kf_mmip: {}", kf_mmip);
+        // println!(
+        //     "kf_mmip len: {}",
+        //     BigUint::from(kf_mmip.coefficients[0].clone()).bits()
+        // );
 
         counter += 1;
         if counter > 1000 {
@@ -177,9 +177,7 @@ fn ntru_solve(
 
     let f_prime = f.field_norm();
     let g_prime = g.field_norm();
-    let Some((capital_f_prime, capital_g_prime)) = ntru_solve(&f_prime, &g_prime) else {
-        return None;
-    };
+    let (capital_f_prime, capital_g_prime) = ntru_solve(&f_prime, &g_prime)?;
     let capital_f_prime_xsq = capital_f_prime.lift_next_cyclotomic();
     let capital_g_prime_xsq = capital_g_prime.lift_next_cyclotomic();
     let f_minx = f.galois_adjoint();
@@ -300,7 +298,6 @@ fn gram_schmidt_norm_squared(f: &Polynomial<i16>, g: &Polynomial<i16>) -> f64 {
 
 #[cfg(test)]
 mod test {
-    use std::str::FromStr;
 
     use itertools::Itertools;
     use num::{BigInt, FromPrimitive};
@@ -310,8 +307,6 @@ mod test {
         math::{gen_poly, gram_schmidt_norm_squared, ntru_gen, ntru_solve},
         polynomial::Polynomial,
     };
-
-    use super::babai_reduce;
 
     #[test]
     fn test_ntru_gen() {
