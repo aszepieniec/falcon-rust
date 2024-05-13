@@ -14,6 +14,7 @@ use num::{
 use crate::{cyclotomic_fourier::CyclotomicFourier, inverse::Inverse, polynomial::Polynomial};
 
 const N: usize = 330;
+pub(crate) const MULTIMOD_MAX_CAPACITY: usize = N * 30;
 
 /// The vector of moduli by which we will be reducing every limb.
 /// These were chosen as p where p-1 = 2^12 * cofactor, where
@@ -484,6 +485,10 @@ impl MultiModInt {
         }
         self.bits = bits
     }
+
+    pub fn bin(&self) -> String {
+        BigInt::from(self.clone()).to_str_radix(2)
+    }
 }
 
 impl PartialEq for MultiModInt {
@@ -639,9 +644,15 @@ impl Shl<usize> for MultiModInt {
 
     fn shl(self, mut rhs: usize) -> Self::Output {
         let bits = self.bits + rhs;
-        let num = self.limbs.len();
-        let mut limbs = if Self::num_limbs_needed(bits) > num {
-            let num = usize::min(N, 2 * num);
+        let num_limbs_needed = Self::num_limbs_needed(bits);
+        let mut limbs = if num_limbs_needed > self.limbs.len() {
+            let num = usize::min(N, usize::max(num_limbs_needed, 2 * self.limbs.len()));
+            assert!(
+                num >= num_limbs_needed,
+                "requested bit width ({}) exceeds capacity ({})",
+                bits,
+                N * 30,
+            );
             self.get_more_limbs(num)
         } else {
             self.limbs.clone()
@@ -649,7 +660,7 @@ impl Shl<usize> for MultiModInt {
         while rhs > 0 {
             let shamt = min(32, rhs);
             rhs -= shamt;
-            for (i, p) in MODULI.into_iter().take(num).enumerate() {
+            for (i, p) in MODULI.into_iter().take(limbs.len()).enumerate() {
                 limbs[i] = (((limbs[i] as u64) << shamt) % (p as u64)) as u32;
             }
         }
@@ -1677,11 +1688,67 @@ mod test {
 
     use itertools::Itertools;
     use num::{bigint::ToBigInt, BigInt, BigUint, Integer, One};
+    use proptest::arbitrary::Arbitrary;
+    use proptest::prop_assert_eq;
+    use proptest::strategy::Just;
+    use proptest::{
+        collection::vec,
+        strategy::{BoxedStrategy, Strategy},
+    };
     use rand::{rngs::StdRng, thread_rng, Rng, SeedableRng};
+    use test_strategy::proptest;
 
     use crate::{multimod::N, polynomial::Polynomial};
 
     use super::{coefficient, root_of_unity_4096, MultiModInt, MODULI};
+
+    fn random_bit_vector(length: usize, seed: [u8; 32]) -> Vec<u8> {
+        let mut rng: StdRng = SeedableRng::from_seed(seed);
+        (0..length).map(|_| rng.gen::<u8>() % 2).collect_vec()
+    }
+
+    fn random_biguint(bitlen: usize, seed: [u8; 32]) -> BigUint {
+        let mut rng: StdRng = SeedableRng::from_seed(seed);
+        BigUint::from_radix_be(&random_bit_vector(bitlen, rng.gen()), 2).unwrap()
+    }
+
+    fn random_bigint(bitlen: usize, seed: [u8; 32]) -> BigInt {
+        let mut rng: StdRng = SeedableRng::from_seed(seed);
+        let biguint = random_biguint(bitlen, rng.gen()).to_bigint().unwrap();
+        if rng.gen() {
+            -biguint
+        } else {
+            biguint
+        }
+    }
+
+    fn arbitrary_bigint(bitlen: usize) -> BoxedStrategy<BigInt> {
+        let limbs = vec(u32::arbitrary(), (bitlen + 31) / 32);
+        let sign = bool::arbitrary();
+        (limbs, sign)
+            .prop_map(move |(bb, ss)| {
+                let bigint = BigInt::from(BigUint::from_slice(&bb) >> (bb.len() * 32 - bitlen));
+                if ss {
+                    -bigint
+                } else {
+                    bigint
+                }
+            })
+            .boxed()
+    }
+
+    fn arbitrary_multimodint(bitlen: usize) -> BoxedStrategy<MultiModInt> {
+        arbitrary_bigint(bitlen).prop_map(MultiModInt::from).boxed()
+    }
+
+    fn arbitrary_multimodint_polynomial(
+        bitlen: usize,
+        num_coefficients: usize,
+    ) -> BoxedStrategy<Polynomial<MultiModInt>> {
+        vec(arbitrary_multimodint(bitlen), num_coefficients)
+            .prop_map(Polynomial::new)
+            .boxed()
+    }
 
     #[test]
     fn coefficients_are_1_mod_p() {
@@ -1708,26 +1775,6 @@ mod test {
                 r = (((r as u64) * (r as u64)) % (p as u64)) as u32;
             }
             assert_eq!(r, 1);
-        }
-    }
-
-    fn random_bit_vector(length: usize, seed: [u8; 32]) -> Vec<u8> {
-        let mut rng: StdRng = SeedableRng::from_seed(seed);
-        (0..length).map(|_| rng.gen::<u8>() % 2).collect_vec()
-    }
-
-    fn random_biguint(bitlen: usize, seed: [u8; 32]) -> BigUint {
-        let mut rng: StdRng = SeedableRng::from_seed(seed);
-        BigUint::from_radix_be(&random_bit_vector(bitlen, rng.gen()), 2).unwrap()
-    }
-
-    fn random_bigint(bitlen: usize, seed: [u8; 32]) -> BigInt {
-        let mut rng: StdRng = SeedableRng::from_seed(seed);
-        let biguint = random_biguint(bitlen, rng.gen()).to_bigint().unwrap();
-        if rng.gen() {
-            -biguint
-        } else {
-            biguint
         }
     }
 
@@ -1908,63 +1955,56 @@ mod test {
 
     #[test]
     fn cyclotomic_multiplication() {
-        for _ in 0..10 {
-            let seed: [u8; 32] = thread_rng().gen();
-            println!(
-                "seed = [{}];",
-                seed.iter().map(|c| format!("0x{:x}", c)).join(",")
-            );
-            let mut rng: StdRng = SeedableRng::from_seed(seed);
-            let logn = rng.gen_range(0..10);
-            let n = 1 << logn;
-            let bitlen = rng.gen_range(0..567);
-            let a = Polynomial::new(
-                (0..n)
-                    .map(|_| random_biguint(bitlen, rng.gen()))
-                    .map(MultiModInt::from)
-                    .collect_vec(),
-            );
-            let b = Polynomial::new(
-                (0..n)
-                    .map(|_| random_biguint(bitlen, rng.gen()))
-                    .map(MultiModInt::from)
-                    .collect_vec(),
-            );
-
-            println!("about to compute old-fashioned product over multimod ints ...");
-            let product = a.clone() * b.clone();
-            let c_trad = product.reduce_by_cyclotomic(n);
-
-            println!("about to compute cyclotomic product ...");
-            let c_fast = a.cyclotomic_mul(&b);
-            assert_eq!(c_trad, c_fast, "\nleft: {}\n\nright: {}\n", c_trad, c_fast);
-        }
-    }
-
-    #[test]
-    fn test_shift_left() {
-        let mut rng = thread_rng();
+        let seed: [u8; 32] = thread_rng().gen();
+        println!(
+            "seed = [{}];",
+            seed.iter().map(|c| format!("0x{:x}", c)).join(",")
+        );
+        let mut rng: StdRng = SeedableRng::from_seed(seed);
         let logn = rng.gen_range(0..10);
         let n = 1 << logn;
-        let bitlen = 500;
-
+        let bitlen = rng.gen_range(0..567);
         let a = Polynomial::new(
             (0..n)
                 .map(|_| random_biguint(bitlen, rng.gen()))
                 .map(MultiModInt::from)
                 .collect_vec(),
         );
+        let b = Polynomial::new(
+            (0..n)
+                .map(|_| random_biguint(bitlen, rng.gen()))
+                .map(MultiModInt::from)
+                .collect_vec(),
+        );
 
-        // let shift1 = rng.gen_range(0..250);
-        let shift1 = 1;
+        println!("about to compute old-fashioned product over multimod ints ...");
+        let product = a.clone() * b.clone();
+        let c_trad = product.reduce_by_cyclotomic(n);
+
+        println!("about to compute cyclotomic product ...");
+        let c_fast = a.cyclotomic_mul(&b);
+        assert_eq!(c_trad, c_fast, "\nleft: {}\n\nright: {}\n", c_trad, c_fast);
+    }
+
+    const MULTIMOD_CAPACITY: usize = 1001;
+    #[proptest(cases = 50)]
+    fn shift_left(
+        #[filter(|x| *x < MULTIMOD_CAPACITY)]
+        #[strategy(1usize..(MULTIMOD_CAPACITY-1))]
+        _total_shift: usize,
+        #[strategy(0usize..#_total_shift)] shift1: usize,
+        #[strategy(Just(#_total_shift - #shift1))] shift2: usize,
+        #[strategy(0usize..(MULTIMOD_CAPACITY-(#shift1+#shift2)))] _bitlen: usize,
+        #[strategy(0usize..=0)] _logn: usize,
+        #[strategy(arbitrary_multimodint_polynomial(#_bitlen, 1 << #_logn))] a: Polynomial<
+            MultiModInt,
+        >,
+    ) {
         let b = a.map(|mmi| mmi.clone() << shift1);
-
-        // let shift2 = rng.gen_range(0..250);
-        let shift2 = 0;
         let c = b.map(|mmi| mmi.clone() << shift2);
 
         let d = a.map(|mmi| mmi.clone() << (shift1 + shift2));
 
-        assert_eq!(c, d);
+        prop_assert_eq!(c, d);
     }
 }
