@@ -1689,14 +1689,14 @@ mod test {
     use itertools::Itertools;
     use num::{bigint::ToBigInt, BigInt, BigUint, Integer, One};
     use proptest::arbitrary::Arbitrary;
+    use proptest::collection::vec;
     use proptest::prop_assert_eq;
+    use proptest::proptest;
+    use proptest::strategy::BoxedStrategy;
     use proptest::strategy::Just;
-    use proptest::{
-        collection::vec,
-        strategy::{BoxedStrategy, Strategy},
-    };
+    use proptest::strategy::Strategy;
     use rand::{rngs::StdRng, thread_rng, Rng, SeedableRng};
-    use test_strategy::proptest;
+    use test_strategy::proptest as strategy_proptest;
 
     use crate::{multimod::N, polynomial::Polynomial};
 
@@ -1823,6 +1823,18 @@ mod test {
         let d_mmi = MultiModInt::from(d);
         let mmi_d = MultiModInt::from(a) * MultiModInt::from(b) - MultiModInt::from(c);
         assert_eq!(d_mmi, mmi_d);
+    }
+
+    proptest! {
+        #[test]
+        fn to_and_fro_proptest(a in "[+-]?[0-9]{1,2980}") {
+            let b = BigInt::from_str(&a).unwrap();
+            let c = MultiModInt::from(b.clone());
+            let d = BigInt::from(c.clone());
+            let e = MultiModInt::from(d.clone());
+            prop_assert_eq!(b, d);
+            prop_assert_eq!(c, e);
+        }
     }
 
     #[test]
@@ -1987,7 +1999,7 @@ mod test {
     }
 
     const MULTIMOD_CAPACITY: usize = 1001;
-    #[proptest(cases = 50)]
+    #[strategy_proptest(cases = 50)]
     fn shift_left(
         #[filter(|x| *x < MULTIMOD_CAPACITY)]
         #[strategy(1usize..(MULTIMOD_CAPACITY-1))]
