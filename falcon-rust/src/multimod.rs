@@ -412,7 +412,7 @@ pub struct MultiModInt {
     limbs: Vec<u32>,
 
     /// Bound on the number of bits
-    bits: usize,
+    bitsize_bound: usize,
 }
 
 impl MultiModInt {
@@ -430,7 +430,10 @@ impl MultiModInt {
                     .unwrap(),
             );
         }
-        MultiModInt { limbs, bits }
+        MultiModInt {
+            limbs,
+            bitsize_bound: bits,
+        }
     }
 
     fn get_more_limbs(&self, total_count: usize) -> Vec<u32> {
@@ -469,7 +472,7 @@ impl MultiModInt {
         let num = Self::num_limbs_needed(bits);
         Self {
             limbs: vec![0u32; num],
-            bits: 1,
+            bitsize_bound: 1,
         }
     }
 
@@ -483,11 +486,20 @@ impl MultiModInt {
             self.limbs
                 .push(integer.mod_floor(&BigInt::from(p)).to_u32().unwrap());
         }
-        self.bits = bits
+        self.bitsize_bound = bits
     }
 
     pub fn bin(&self) -> String {
         BigInt::from(self.clone()).to_str_radix(2)
+    }
+
+    /// Returns the bitsize of the integer, ignoring its sign.
+    pub fn bits(&self) -> usize {
+        // BigInts of more than 2^64 bits are never needed in this repo
+        BigInt::from(self.clone())
+            .bits()
+            .try_into()
+            .expect("cannot cast bitsize as usize")
     }
 }
 
@@ -501,7 +513,7 @@ impl Add for MultiModInt {
     type Output = MultiModInt;
 
     fn add(self, rhs: Self) -> Self::Output {
-        let bits = 1 + usize::max(self.bits, rhs.bits);
+        let bits = 1 + usize::max(self.bitsize_bound, rhs.bitsize_bound);
         let num = usize::min(N, Self::num_limbs_needed(bits));
         assert!(
             Self::num_limbs_needed(bits) <= num,
@@ -514,7 +526,10 @@ impl Add for MultiModInt {
         for i in 0..num {
             limbs.push((self_limbs[i] + other_limbs[i]) % MODULI[i]);
         }
-        let output = Self::Output { limbs, bits };
+        let output = Self::Output {
+            limbs,
+            bitsize_bound: bits,
+        };
         if self.sign() == rhs.sign() {
             assert_eq!(output.sign(), self.sign());
         }
@@ -538,7 +553,7 @@ impl Sub for MultiModInt {
     type Output = MultiModInt;
 
     fn sub(self, rhs: Self) -> Self::Output {
-        let bits = 1 + usize::max(self.bits, rhs.bits);
+        let bits = 1 + usize::max(self.bitsize_bound, rhs.bitsize_bound);
         let num = usize::min(N, Self::num_limbs_needed(bits));
         assert!(
             Self::num_limbs_needed(bits) <= num,
@@ -554,7 +569,10 @@ impl Sub for MultiModInt {
                     % (MODULI[i] as u64)) as u32,
             );
         }
-        Self::Output { limbs, bits }
+        Self::Output {
+            limbs,
+            bitsize_bound: bits,
+        }
     }
 }
 
@@ -568,7 +586,7 @@ impl Mul for MultiModInt {
     type Output = MultiModInt;
 
     fn mul(self, rhs: Self) -> Self::Output {
-        let bits = self.bits + rhs.bits;
+        let bits = self.bitsize_bound + rhs.bitsize_bound;
         assert!(
             Self::num_limbs_needed(bits) <= N,
             "Not enough moduli available for {} bits",
@@ -583,7 +601,10 @@ impl Mul for MultiModInt {
                 (((self_limbs[i] as u64) * (other_limbs[i] as u64)) % (MODULI[i] as u64)) as u32,
             );
         }
-        let output = Self { limbs, bits };
+        let output = Self {
+            limbs,
+            bitsize_bound: bits,
+        };
         if self.sign() == rhs.sign() && self.sign() != Sign::NoSign {
             assert_eq!(output.sign(), Sign::Plus);
         } else if self.sign() != rhs.sign()
@@ -612,7 +633,7 @@ impl Neg for MultiModInt {
         }
         Self::Output {
             limbs,
-            bits: self.bits,
+            bitsize_bound: self.bitsize_bound,
         }
     }
 }
@@ -621,7 +642,7 @@ impl Zero for MultiModInt {
     fn zero() -> Self {
         Self {
             limbs: vec![0u32; 1],
-            bits: 1,
+            bitsize_bound: 1,
         }
     }
 
@@ -634,7 +655,7 @@ impl One for MultiModInt {
     fn one() -> Self {
         Self {
             limbs: vec![1u32; 1],
-            bits: 1,
+            bitsize_bound: 1,
         }
     }
 }
@@ -643,7 +664,7 @@ impl Shl<usize> for MultiModInt {
     type Output = MultiModInt;
 
     fn shl(self, mut rhs: usize) -> Self::Output {
-        let bits = self.bits + rhs;
+        let bits = self.bitsize_bound + rhs;
         let num_limbs_needed = Self::num_limbs_needed(bits);
         let mut limbs = if num_limbs_needed > self.limbs.len() {
             let num = usize::min(N, usize::max(num_limbs_needed, 2 * self.limbs.len()));
@@ -664,7 +685,10 @@ impl Shl<usize> for MultiModInt {
                 limbs[i] = (((limbs[i] as u64) << shamt) % (p as u64)) as u32;
             }
         }
-        Self { limbs, bits }
+        Self {
+            limbs,
+            bitsize_bound: bits,
+        }
     }
 }
 
@@ -1222,13 +1246,13 @@ impl Polynomial<MultiModInt> {
         let lhs_max_bits = self
             .coefficients
             .iter()
-            .map(|mmi| mmi.bits)
+            .map(|mmi| mmi.bitsize_bound)
             .max()
             .unwrap_or_default();
         let rhs_max_bits = other
             .coefficients
             .iter()
-            .map(|mmi| mmi.bits)
+            .map(|mmi| mmi.bitsize_bound)
             .max()
             .unwrap_or_default();
         assert!(
@@ -1257,7 +1281,7 @@ impl Polynomial<MultiModInt> {
             .coefficients
             .iter()
             .chain(other.coefficients.iter())
-            .map(|mmi| mmi.bits)
+            .map(|mmi| mmi.bitsize_bound)
             .min()
             .unwrap_or_default()
             < bits
@@ -1723,7 +1747,7 @@ mod test {
     }
 
     fn arbitrary_bigint(bitlen: usize) -> BoxedStrategy<BigInt> {
-        let limbs = vec(u32::arbitrary(), (bitlen + 31) / 32);
+        let limbs = vec(u32::arbitrary(), bitlen.div_ceil(32));
         let sign = bool::arbitrary();
         (limbs, sign)
             .prop_map(move |(bb, ss)| {
@@ -1778,34 +1802,17 @@ mod test {
         }
     }
 
-    #[test]
-    fn to_and_fro() {
-        let mut rng = thread_rng();
-        for _ in 0..100 {
-            let bitlen = rng.gen_range(1..1000);
-            let big = random_biguint(bitlen, rng.gen());
-            let multimod = MultiModInt::from(big.clone());
-            let big_again = BigUint::from(multimod);
-            assert_eq!(big, big_again);
-
-            let big = random_bigint(bitlen, rng.gen());
-            let multimod = MultiModInt::from(big.clone());
-            let big_again = BigInt::from(multimod.clone());
-            let multimod_again = MultiModInt::from(big_again.clone());
-            assert_eq!(multimod, multimod_again);
-        }
-    }
-
-    #[test]
-    fn num_bits_bound() {
-        let mut rng = thread_rng();
-        let bits = 1000;
-        let mmi = MultiModInt::from(random_biguint(bits, rng.gen()));
+    #[strategy_proptest]
+    fn casting_preserves_bitsize(
+        #[strategy(1usize..1000)] bits: usize,
+        #[strategy(arbitrary_bigint(#bits))] bigint: BigInt,
+    ) {
+        let mmi = MultiModInt::from(bigint);
 
         assert!(
-            BigUint::from(mmi.clone()).bits() <= bits as u64,
+            BigInt::from(mmi.clone()).bits() <= bits as u64,
             "{} > {}",
-            BigUint::from(mmi).bits(),
+            BigInt::from(mmi).bits(),
             bits
         );
     }
@@ -1913,7 +1920,7 @@ mod test {
             "\n\nmmi_d: {}\nd_mmi: {} of bitcaps {}\n\nd was: {:?} of bitlens {}\n\na: {:?}\n\nb: {:?}",
             mmi_d,
             d_mmi,
-            d_mmi.coefficients.iter().map(|mmi| mmi.bits).join(","),
+            d_mmi.coefficients.iter().map(|mmi| mmi.bitsize_bound).join(","),
             d,
             d.coefficients.iter().map(|c| c.bits()).join(","),
             a,
@@ -1957,7 +1964,7 @@ mod test {
             "\n\nmmi_d: {}\nd_mmi: {} of bitcaps {}\n\nd was: {:?} of bitlens {}\n\na: {:?}\n\nb: {:?}",
             mmi_d,
             d_mmi,
-            d_mmi.coefficients.iter().map(|mmi| mmi.bits).join(","),
+            d_mmi.coefficients.iter().map(|mmi| mmi.bitsize_bound).join(","),
             d,
             d.coefficients.iter().map(|c| c.bits()).join(","),
             a,
