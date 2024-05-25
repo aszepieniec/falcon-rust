@@ -1260,7 +1260,7 @@ impl Polynomial<MultiModInt> {
                 >= self
                     .coefficients
                     .iter()
-                    .map(|mmi| BigUint::from(mmi.clone()).bits())
+                    .map(|mmi| BigInt::from(mmi.clone()).bits())
                     .max()
                     .unwrap() as usize
         );
@@ -1269,7 +1269,7 @@ impl Polynomial<MultiModInt> {
                 >= other
                     .coefficients
                     .iter()
-                    .map(|mmi| BigUint::from(mmi.clone()).bits())
+                    .map(|mmi| BigInt::from(mmi.clone()).bits())
                     .max()
                     .unwrap() as usize
         );
@@ -1711,7 +1711,7 @@ mod test {
     use std::str::FromStr;
 
     use itertools::Itertools;
-    use num::{bigint::ToBigInt, BigInt, BigUint, Integer, One};
+    use num::{BigInt, BigUint, Integer, One};
     use proptest::arbitrary::Arbitrary;
     use proptest::collection::vec;
     use proptest::prop_assert_eq;
@@ -1719,32 +1719,11 @@ mod test {
     use proptest::strategy::BoxedStrategy;
     use proptest::strategy::Just;
     use proptest::strategy::Strategy;
-    use rand::{rngs::StdRng, thread_rng, Rng, SeedableRng};
     use test_strategy::proptest as strategy_proptest;
 
     use crate::{multimod::N, polynomial::Polynomial};
 
     use super::{coefficient, root_of_unity_4096, MultiModInt, MODULI};
-
-    fn random_bit_vector(length: usize, seed: [u8; 32]) -> Vec<u8> {
-        let mut rng: StdRng = SeedableRng::from_seed(seed);
-        (0..length).map(|_| rng.gen::<u8>() % 2).collect_vec()
-    }
-
-    fn random_biguint(bitlen: usize, seed: [u8; 32]) -> BigUint {
-        let mut rng: StdRng = SeedableRng::from_seed(seed);
-        BigUint::from_radix_be(&random_bit_vector(bitlen, rng.gen()), 2).unwrap()
-    }
-
-    fn random_bigint(bitlen: usize, seed: [u8; 32]) -> BigInt {
-        let mut rng: StdRng = SeedableRng::from_seed(seed);
-        let biguint = random_biguint(bitlen, rng.gen()).to_bigint().unwrap();
-        if rng.gen() {
-            -biguint
-        } else {
-            biguint
-        }
-    }
 
     fn arbitrary_bigint(bitlen: usize) -> BoxedStrategy<BigInt> {
         let limbs = vec(u32::arbitrary(), bitlen.div_ceil(32));
@@ -1770,6 +1749,15 @@ mod test {
         num_coefficients: usize,
     ) -> BoxedStrategy<Polynomial<MultiModInt>> {
         vec(arbitrary_multimodint(bitlen), num_coefficients)
+            .prop_map(Polynomial::new)
+            .boxed()
+    }
+
+    fn arbitrary_bigint_polynomial(
+        bitlen: usize,
+        num_coefficients: usize,
+    ) -> BoxedStrategy<Polynomial<BigInt>> {
+        vec(arbitrary_bigint(bitlen), num_coefficients)
             .prop_map(Polynomial::new)
             .boxed()
     }
@@ -1817,19 +1805,16 @@ mod test {
         );
     }
 
-    #[test]
-    fn multimodint_arithmetic() {
-        let mut rng = thread_rng();
-        let bitlen = 1000;
-
-        let a = random_bigint(bitlen, rng.gen());
-        let b = random_bigint(bitlen, rng.gen());
-        let c = random_bigint(bitlen, rng.gen());
-
+    #[strategy_proptest]
+    fn multimodint_arithmetic(
+        #[strategy(arbitrary_bigint(1000))] a: BigInt,
+        #[strategy(arbitrary_bigint(1000))] b: BigInt,
+        #[strategy(arbitrary_bigint(1000))] c: BigInt,
+    ) {
         let d = a.clone() * b.clone() - c.clone();
         let d_mmi = MultiModInt::from(d);
         let mmi_d = MultiModInt::from(a) * MultiModInt::from(b) - MultiModInt::from(c);
-        assert_eq!(d_mmi, mmi_d);
+        prop_assert_eq!(d_mmi, mmi_d);
     }
 
     proptest! {
@@ -1862,31 +1847,14 @@ mod test {
         assert_eq!(c, a);
     }
 
-    #[test]
-    fn multimodint_polynomial_arithmetic_fixed() {
-        let seed = [
-            0x94, 0x88, 0xc2, 0xe5, 0x3d, 0xde, 0xdc, 0xa4, 0xa6, 0x32, 0x7d, 0x7, 0xbd, 0x22,
-            0xf4, 0x7a, 0xa7, 0x94, 0x6d, 0xaf, 0x8f, 0xb7, 0x28, 0x22, 0x53, 0x78, 0x80, 0x64,
-            0xea, 0xd6, 0xd2, 0xd6,
-        ];
-        let mut rng: StdRng = SeedableRng::from_seed(seed);
-        // let logn = rng.gen_range(1..10);
-        // let logn = rng.gen_range(3..10);
-        let logn = 4;
-        let n = 1 << logn;
-        let bitlen = 70;
-
-        let a = Polynomial::new(
-            (0..n)
-                .map(|_| random_bigint(bitlen, rng.gen()))
-                .collect_vec(),
-        );
-        let b = Polynomial::new(
-            (0..n)
-                .map(|_| random_bigint(bitlen, rng.gen()))
-                .collect_vec(),
-        );
-
+    #[strategy_proptest]
+    fn multimodint_polynomial_arithmetic_a(
+        #[strategy(0usize..5)] _logn: usize,
+        #[strategy(Just(1<<#_logn))] _n: usize,
+        #[strategy(Just(70))] _bitlen: usize,
+        #[strategy(arbitrary_bigint_polynomial(#_bitlen, #_n))] a: Polynomial<BigInt>,
+        #[strategy(arbitrary_bigint_polynomial(#_bitlen, #_n))] b: Polynomial<BigInt>,
+    ) {
         let mut bigint_terms = vec![];
         let mut multimod_terms = vec![];
         for (ai, ac) in a.coefficients.iter().enumerate() {
@@ -1898,59 +1866,34 @@ mod test {
                 }
             }
         }
-        assert_eq!(
+        prop_assert_eq!(
             bigint_terms
                 .iter()
                 .map(|bi| MultiModInt::from(bi.clone()))
                 .collect_vec(),
-            multimod_terms
+            multimod_terms.clone()
         );
         let bigint_sum = bigint_terms.into_iter().sum::<BigInt>();
         let multimod_sum = multimod_terms.into_iter().sum();
-        assert_eq!(MultiModInt::from(bigint_sum), multimod_sum);
+        prop_assert_eq!(MultiModInt::from(bigint_sum), multimod_sum);
         let d = a.clone() * b.clone();
         let mmi_d = Polynomial::<MultiModInt>::from(d.clone());
 
         let d_mmi =
             Polynomial::<MultiModInt>::from(a.clone()) * Polynomial::<MultiModInt>::from(b.clone());
 
-        assert_eq!(
-            mmi_d,
-            d_mmi,
-            "\n\nmmi_d: {}\nd_mmi: {} of bitcaps {}\n\nd was: {:?} of bitlens {}\n\na: {:?}\n\nb: {:?}",
-            mmi_d,
-            d_mmi,
-            d_mmi.coefficients.iter().map(|mmi| mmi.bitsize_bound).join(","),
-            d,
-            d.coefficients.iter().map(|c| c.bits()).join(","),
-            a,
-            b
-        );
+        assert_eq!(mmi_d, d_mmi,);
     }
 
-    #[test]
-    fn multimodint_polynomial_arithmetic() {
-        let mut rng = thread_rng();
-        let logn = rng.gen_range(3..10);
-        let n = 1 << logn;
-        let bitlen = 70;
-
-        let a = Polynomial::new(
-            (0..n)
-                .map(|_| random_bigint(bitlen, rng.gen()))
-                .collect_vec(),
-        );
-        let b = Polynomial::new(
-            (0..n)
-                .map(|_| random_bigint(bitlen, rng.gen()))
-                .collect_vec(),
-        );
-        let c = Polynomial::new(
-            (0..n)
-                .map(|_| random_bigint(bitlen, rng.gen()))
-                .collect_vec(),
-        );
-
+    #[strategy_proptest]
+    fn multimodint_polynomial_arithmetic_b(
+        #[strategy(0usize..4)] _logn: usize,
+        #[strategy(Just(1 << #_logn))] _n: usize,
+        #[strategy(Just(70))] _bitlen: usize,
+        #[strategy(arbitrary_bigint_polynomial(#_bitlen, #_n))] a: Polynomial<BigInt>,
+        #[strategy(arbitrary_bigint_polynomial(#_bitlen, #_n))] b: Polynomial<BigInt>,
+        #[strategy(arbitrary_bigint_polynomial(#_bitlen, #_n))] c: Polynomial<BigInt>,
+    ) {
         let d = (a.clone() * b.clone()) - c.clone();
         let mmi_d = Polynomial::<MultiModInt>::from(d.clone());
 
@@ -1958,51 +1901,22 @@ mod test {
             * Polynomial::<MultiModInt>::from(b.clone())
             - Into::<Polynomial<MultiModInt>>::into(c);
 
-        assert_eq!(
-            mmi_d,
-            d_mmi,
-            "\n\nmmi_d: {}\nd_mmi: {} of bitcaps {}\n\nd was: {:?} of bitlens {}\n\na: {:?}\n\nb: {:?}",
-            mmi_d,
-            d_mmi,
-            d_mmi.coefficients.iter().map(|mmi| mmi.bitsize_bound).join(","),
-            d,
-            d.coefficients.iter().map(|c| c.bits()).join(","),
-            a,
-            b
-        );
+        prop_assert_eq!(mmi_d, d_mmi);
     }
 
-    #[test]
-    fn cyclotomic_multiplication() {
-        let seed: [u8; 32] = thread_rng().gen();
-        println!(
-            "seed = [{}];",
-            seed.iter().map(|c| format!("0x{:x}", c)).join(",")
-        );
-        let mut rng: StdRng = SeedableRng::from_seed(seed);
-        let logn = rng.gen_range(0..10);
-        let n = 1 << logn;
-        let bitlen = rng.gen_range(0..567);
-        let a = Polynomial::new(
-            (0..n)
-                .map(|_| random_biguint(bitlen, rng.gen()))
-                .map(MultiModInt::from)
-                .collect_vec(),
-        );
-        let b = Polynomial::new(
-            (0..n)
-                .map(|_| random_biguint(bitlen, rng.gen()))
-                .map(MultiModInt::from)
-                .collect_vec(),
-        );
-
-        println!("about to compute old-fashioned product over multimod ints ...");
+    #[strategy_proptest]
+    fn cyclotomic_multiplication(
+        #[strategy(0usize..5)] _logn: usize,
+        #[strategy(Just(1<<#_logn))] n: usize,
+        #[strategy(0usize..567)] _bitlen: usize,
+        #[strategy(arbitrary_multimodint_polynomial(#_bitlen, #n))] a: Polynomial<MultiModInt>,
+        #[strategy(arbitrary_multimodint_polynomial(#_bitlen, #n))] b: Polynomial<MultiModInt>,
+    ) {
         let product = a.clone() * b.clone();
         let c_trad = product.reduce_by_cyclotomic(n);
 
-        println!("about to compute cyclotomic product ...");
         let c_fast = a.cyclotomic_mul(&b);
-        assert_eq!(c_trad, c_fast, "\nleft: {}\n\nright: {}\n", c_trad, c_fast);
+        assert_eq!(c_trad, c_fast);
     }
 
     const MULTIMOD_CAPACITY: usize = 1001;
