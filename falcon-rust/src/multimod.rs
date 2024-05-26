@@ -698,20 +698,46 @@ impl Display for MultiModInt {
     }
 }
 
-impl From<BigUint> for MultiModInt {
-    fn from(val: BigUint) -> Self {
-        let bits = val.bits() as usize;
-        let num = Self::num_limbs_needed(bits);
-        MultiModInt::from_biguint_with_num_limbs(val, num)
+#[derive(Debug, Clone)]
+pub struct MultiModIntConversionError<T> {
+    original: T,
+}
+
+impl<T: Display> Display for MultiModIntConversionError<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_fmt(format_args!(
+            "MultiModIntConversionError({})",
+            self.original
+        ))
     }
 }
 
-impl From<BigInt> for MultiModInt {
-    fn from(value: BigInt) -> Self {
+impl TryFrom<BigUint> for MultiModInt {
+    fn try_from(val: BigUint) -> Result<Self, Self::Error> {
+        let bits = val.bits() as usize;
+        if bits > MULTIMOD_MAX_CAPACITY {
+            return Err(MultiModIntConversionError { original: val });
+        }
+        let num = Self::num_limbs_needed(bits);
+        Ok(MultiModInt::from_biguint_with_num_limbs(val, num))
+    }
+
+    type Error = MultiModIntConversionError<BigUint>;
+}
+
+impl TryFrom<BigInt> for MultiModInt {
+    type Error = MultiModIntConversionError<BigInt>;
+    fn try_from(value: BigInt) -> Result<Self, Self::Error> {
         if value < BigInt::zero() {
-            -MultiModInt::from((-value).to_biguint().unwrap())
+            let Ok(mmi) = MultiModInt::try_from((-value.clone()).to_biguint().unwrap()) else {
+                return Err(MultiModIntConversionError { original: value });
+            };
+            Ok(-mmi)
         } else {
-            MultiModInt::from(value.to_biguint().unwrap())
+            let Ok(mmi) = MultiModInt::try_from(value.to_biguint().unwrap()) else {
+                return Err(MultiModIntConversionError { original: value });
+            };
+            Ok(mmi)
         }
     }
 }
@@ -1688,7 +1714,7 @@ impl From<Polynomial<BigUint>> for Polynomial<MultiModInt> {
         Polynomial::new(
             val.coefficients
                 .into_iter()
-                .map(|bi| bi.into())
+                .map(|bi| bi.try_into().unwrap())
                 .collect_vec(),
         )
     }
@@ -1699,7 +1725,7 @@ impl From<Polynomial<BigInt>> for Polynomial<MultiModInt> {
         Polynomial::new(
             val.coefficients
                 .into_iter()
-                .map(|bu| bu.into())
+                .map(|bu| bu.try_into().unwrap())
                 .collect_vec(),
         )
     }
@@ -1741,7 +1767,9 @@ mod test {
     }
 
     fn arbitrary_multimodint(bitlen: usize) -> BoxedStrategy<MultiModInt> {
-        arbitrary_bigint(bitlen).prop_map(MultiModInt::from).boxed()
+        arbitrary_bigint(bitlen)
+            .prop_map(|bi| MultiModInt::try_from(bi).unwrap())
+            .boxed()
     }
 
     fn arbitrary_multimodint_polynomial(
@@ -1795,7 +1823,7 @@ mod test {
         #[strategy(1usize..1000)] bits: usize,
         #[strategy(arbitrary_bigint(#bits))] bigint: BigInt,
     ) {
-        let mmi = MultiModInt::from(bigint);
+        let mmi = MultiModInt::try_from(bigint).unwrap();
 
         assert!(
             BigInt::from(mmi.clone()).bits() <= bits as u64,
@@ -1812,8 +1840,9 @@ mod test {
         #[strategy(arbitrary_bigint(1000))] c: BigInt,
     ) {
         let d = a.clone() * b.clone() - c.clone();
-        let d_mmi = MultiModInt::from(d);
-        let mmi_d = MultiModInt::from(a) * MultiModInt::from(b) - MultiModInt::from(c);
+        let d_mmi = MultiModInt::try_from(d).unwrap();
+        let mmi_d = MultiModInt::try_from(a).unwrap() * MultiModInt::try_from(b).unwrap()
+            - MultiModInt::try_from(c).unwrap();
         prop_assert_eq!(d_mmi, mmi_d);
     }
 
@@ -1821,9 +1850,9 @@ mod test {
         #[test]
         fn to_and_fro_proptest(a in "[+-]?[0-9]{1,2980}") {
             let b = BigInt::from_str(&a).unwrap();
-            let c = MultiModInt::from(b.clone());
+            let c = MultiModInt::try_from(b.clone()).unwrap();
             let d = BigInt::from(c.clone());
-            let e = MultiModInt::from(d.clone());
+            let e = MultiModInt::try_from(d.clone()).unwrap();
             prop_assert_eq!(b, d);
             prop_assert_eq!(c, e);
         }
@@ -1832,7 +1861,7 @@ mod test {
     #[test]
     fn to_and_fro_fixed() {
         let b = BigInt::from_str("-2098365342651410771540682191176265762931285").unwrap();
-        let c = MultiModInt::from(b.clone());
+        let c = MultiModInt::try_from(b.clone()).unwrap();
         let d = BigInt::from(c);
         assert_eq!(b, d);
     }
@@ -1841,7 +1870,7 @@ mod test {
     fn multimodint_fixed() {
         let a = BigInt::from_str("-322777953413029095759719085619503741066179").unwrap();
         println!("a has {} bits", a.bits());
-        let b = MultiModInt::from(a.clone());
+        let b = MultiModInt::try_from(a.clone()).unwrap();
         println!("b has {} limbs", b.limbs.len());
         let c = BigInt::from(b);
         assert_eq!(c, a);
@@ -1861,21 +1890,23 @@ mod test {
             for (bi, bc) in b.coefficients.iter().enumerate() {
                 if ai + bi == 11 {
                     bigint_terms.push(ac.clone() * bc);
-                    multimod_terms
-                        .push(MultiModInt::from(ac.clone()) * MultiModInt::from(bc.clone()));
+                    multimod_terms.push(
+                        MultiModInt::try_from(ac.clone()).unwrap()
+                            * MultiModInt::try_from(bc.clone()).unwrap(),
+                    );
                 }
             }
         }
         prop_assert_eq!(
             bigint_terms
                 .iter()
-                .map(|bi| MultiModInt::from(bi.clone()))
+                .map(|bi| MultiModInt::try_from(bi.clone()).unwrap())
                 .collect_vec(),
             multimod_terms.clone()
         );
         let bigint_sum = bigint_terms.into_iter().sum::<BigInt>();
         let multimod_sum = multimod_terms.into_iter().sum();
-        prop_assert_eq!(MultiModInt::from(bigint_sum), multimod_sum);
+        prop_assert_eq!(MultiModInt::try_from(bigint_sum).unwrap(), multimod_sum);
         let d = a.clone() * b.clone();
         let mmi_d = Polynomial::<MultiModInt>::from(d.clone());
 
