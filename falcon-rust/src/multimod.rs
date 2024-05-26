@@ -699,11 +699,11 @@ impl Display for MultiModInt {
 }
 
 #[derive(Debug, Clone)]
-pub struct MultiModIntConversionError<T> {
+pub struct MultiModIntConversionError<T: Display + Clone> {
     original: T,
 }
 
-impl<T: Display> Display for MultiModIntConversionError<T> {
+impl<T: Display + Clone> Display for MultiModIntConversionError<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_fmt(format_args!(
             "MultiModIntConversionError({})",
@@ -1709,25 +1709,58 @@ impl From<Polynomial<MultiModInt>> for Polynomial<BigUint> {
     }
 }
 
-impl From<Polynomial<BigUint>> for Polynomial<MultiModInt> {
-    fn from(val: Polynomial<BigUint>) -> Self {
-        Polynomial::new(
-            val.coefficients
-                .into_iter()
-                .map(|bi| bi.try_into().unwrap())
-                .collect_vec(),
-        )
+#[derive(Debug, Clone)]
+pub struct MultiModIntPolynomialConversionError<T: Display + Clone> {
+    original: Polynomial<T>,
+}
+
+impl<T: Display + Clone> Display for MultiModIntPolynomialConversionError<T>
+where
+    MultiModInt: TryFrom<T>,
+    <MultiModInt as TryFrom<T>>::Error: Display,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_fmt(format_args!(
+            "MultiModIntPolynomialConversionError({})",
+            self.original
+                .coefficients
+                .iter()
+                .cloned()
+                .map(|c| MultiModInt::try_from(c))
+                .map(|r| match r {
+                    Ok(_) => "ok".to_string(),
+                    Err(e) => format!("{}", e),
+                })
+                .join(", ")
+        ))
     }
 }
 
-impl From<Polynomial<BigInt>> for Polynomial<MultiModInt> {
-    fn from(val: Polynomial<BigInt>) -> Self {
-        Polynomial::new(
-            val.coefficients
-                .into_iter()
-                .map(|bu| bu.try_into().unwrap())
-                .collect_vec(),
-        )
+impl TryFrom<Polynomial<BigUint>> for Polynomial<MultiModInt> {
+    type Error = MultiModIntPolynomialConversionError<BigUint>;
+    fn try_from(val: Polynomial<BigUint>) -> Result<Self, Self::Error> {
+        let coefficients = val.coefficients.iter().cloned().map(MultiModInt::try_from);
+        if coefficients.clone().all(|c| c.is_ok()) {
+            Ok(Polynomial::new(
+                coefficients.map(|c| c.unwrap()).collect_vec(),
+            ))
+        } else {
+            Err(MultiModIntPolynomialConversionError { original: val })
+        }
+    }
+}
+
+impl TryFrom<Polynomial<BigInt>> for Polynomial<MultiModInt> {
+    type Error = MultiModIntPolynomialConversionError<BigInt>;
+    fn try_from(val: Polynomial<BigInt>) -> Result<Self, Self::Error> {
+        let coefficients = val.coefficients.iter().cloned().map(MultiModInt::try_from);
+        if coefficients.clone().all(|c| c.is_ok()) {
+            Ok(Polynomial::new(
+                coefficients.map(|c| c.unwrap()).collect_vec(),
+            ))
+        } else {
+            Err(MultiModIntPolynomialConversionError { original: val })
+        }
     }
 }
 
@@ -1908,10 +1941,10 @@ mod test {
         let multimod_sum = multimod_terms.into_iter().sum();
         prop_assert_eq!(MultiModInt::try_from(bigint_sum).unwrap(), multimod_sum);
         let d = a.clone() * b.clone();
-        let mmi_d = Polynomial::<MultiModInt>::from(d.clone());
+        let mmi_d = Polynomial::<MultiModInt>::try_from(d.clone()).unwrap();
 
-        let d_mmi =
-            Polynomial::<MultiModInt>::from(a.clone()) * Polynomial::<MultiModInt>::from(b.clone());
+        let d_mmi = Polynomial::<MultiModInt>::try_from(a.clone()).unwrap()
+            * Polynomial::<MultiModInt>::try_from(b.clone()).unwrap();
 
         assert_eq!(mmi_d, d_mmi,);
     }
@@ -1926,11 +1959,11 @@ mod test {
         #[strategy(arbitrary_bigint_polynomial(#_bitlen, #_n))] c: Polynomial<BigInt>,
     ) {
         let d = (a.clone() * b.clone()) - c.clone();
-        let mmi_d = Polynomial::<MultiModInt>::from(d.clone());
+        let mmi_d = Polynomial::<MultiModInt>::try_from(d.clone()).unwrap();
 
-        let d_mmi = Polynomial::<MultiModInt>::from(a.clone())
-            * Polynomial::<MultiModInt>::from(b.clone())
-            - Into::<Polynomial<MultiModInt>>::into(c);
+        let d_mmi = Polynomial::<MultiModInt>::try_from(a.clone()).unwrap()
+            * Polynomial::<MultiModInt>::try_from(b.clone()).unwrap()
+            - Polynomial::<MultiModInt>::try_from(c).unwrap();
 
         prop_assert_eq!(mmi_d, d_mmi);
     }
