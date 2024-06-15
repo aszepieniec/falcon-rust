@@ -67,4 +67,5 @@ pub(crate) mod inverse;
 pub(crate) mod math;
 pub(crate) mod multimod;
 pub(crate) mod polynomial;
+pub(crate) mod product_tree;
 pub(crate) mod samplerz;
