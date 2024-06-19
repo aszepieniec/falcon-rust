@@ -1,12 +1,12 @@
 use std::collections::VecDeque;
 
-use num::BigInt;
+use num::BigUint;
 use num::FromPrimitive;
 use num::ToPrimitive;
 
 #[derive(Debug, Clone)]
 pub struct ProductBranch {
-    pub product: BigInt,
+    pub product: BigUint,
     pub left: Box<ProductTree>,
     pub right: Box<ProductTree>,
 }
@@ -18,9 +18,9 @@ pub enum ProductTree {
 }
 
 impl ProductTree {
-    pub fn value(&self) -> BigInt {
+    pub fn value(&self) -> BigUint {
         match self {
-            ProductTree::Leaf(leaf) => BigInt::from_u32(*leaf).unwrap(),
+            ProductTree::Leaf(leaf) => BigUint::from_u32(*leaf).unwrap(),
             ProductTree::Branch(branch) => branch.product.clone(),
         }
     }
@@ -44,7 +44,7 @@ impl ProductTree {
         deque[0].clone()
     }
 
-    pub fn reduce(&self, int: &BigInt) -> Vec<u32> {
+    pub fn reduce(&self, int: &BigUint) -> Vec<u32> {
         match self {
             ProductTree::Leaf(_leaf) => vec![int.to_u32().unwrap()],
             ProductTree::Branch(branch) => {
@@ -66,7 +66,6 @@ mod test {
     use std::ops::Mul;
 
     use itertools::Itertools;
-    use num::BigInt;
     use num::BigUint;
     use num::FromPrimitive;
     use num::One;
@@ -81,10 +80,10 @@ mod test {
 
     use crate::product_tree::ProductTree;
 
-    fn arbitrary_bigint(bitlen: usize) -> BoxedStrategy<BigInt> {
+    fn arbitrary_biguint(bitlen: usize) -> BoxedStrategy<BigUint> {
         let limbs = vec(u32::arbitrary(), bitlen.div_ceil(32));
         limbs
-            .prop_map(move |bb| BigInt::from(BigUint::from_slice(&bb) >> (bb.len() * 32 - bitlen)))
+            .prop_map(move |bb| BigUint::from_slice(&bb) >> (bb.len() * 32 - bitlen))
             .boxed()
     }
 
@@ -97,8 +96,8 @@ mod test {
         let cumulative_product = ints
             .iter()
             .cloned()
-            .map(|i| BigInt::from_u32(i).unwrap())
-            .fold(BigInt::one(), BigInt::mul);
+            .map(|i| BigUint::from_u32(i).unwrap())
+            .fold(BigUint::one(), BigUint::mul);
         let tree = ProductTree::from_leafs(&ints);
         prop_assert_eq!(cumulative_product, tree.value());
     }
@@ -108,13 +107,13 @@ mod test {
         #[strategy(1usize..5)] _logn: usize,
         #[strategy(Just(1<<#_logn))] _n: usize,
         #[strategy(vec(u32::arbitrary(), #_n))] moduli: Vec<u32>,
-        #[strategy(arbitrary_bigint(#_n*30))] integer: BigInt,
+        #[strategy(arbitrary_biguint(#_n*30))] integer: BigUint,
     ) {
         let tree = ProductTree::from_leafs(&moduli);
         let leaf_remainders = tree.reduce(&integer);
         let individual_remainders = moduli
             .into_iter()
-            .map(|m| BigInt::from_u32(m).unwrap())
+            .map(|m| BigUint::from_u32(m).unwrap())
             .map(|p| integer.clone() % p)
             .map(|b| b.to_u32().unwrap())
             .collect_vec();
