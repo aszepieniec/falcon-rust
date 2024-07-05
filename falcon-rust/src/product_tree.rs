@@ -1,17 +1,30 @@
+use core::fmt;
 use std::collections::VecDeque;
 
+use itertools::Itertools;
 use num::BigUint;
 use num::FromPrimitive;
 use num::ToPrimitive;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProductBranch {
     pub product: BigUint,
     pub left: Box<ProductTree>,
     pub right: Box<ProductTree>,
 }
 
-#[derive(Debug, Clone)]
+impl ProductBranch {
+    fn as_rust_expression(&self) -> String {
+        format!(
+            "ProductBranch {{ product: BigUint::from_bytes_le(&[{}]), left: Box::new({}), right: Box::new({}) }} ",
+            self.product.to_bytes_le().iter().join(", "),
+            self.left.as_rust_expression(),
+            self.right.as_rust_expression()
+        )
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProductTree {
     Leaf(u32),
     Branch(ProductBranch),
@@ -26,7 +39,6 @@ impl ProductTree {
     }
 
     pub fn from_leafs(integers: &[u32]) -> ProductTree {
-        assert!(integers.len().is_power_of_two());
         let mut deque: VecDeque<ProductTree> = integers
             .into_iter()
             .map(|&i| ProductTree::Leaf(i))
@@ -55,6 +67,24 @@ impl ProductTree {
                     branch.right.reduce(&right_remainder),
                 ]
                 .concat()
+            }
+        }
+    }
+
+    pub fn as_branch(&self) -> &ProductBranch {
+        match self {
+            ProductTree::Leaf(leaf) => {
+                panic!("cannot cast product tree as branch when it is a leaf")
+            }
+            ProductTree::Branch(branch) => branch,
+        }
+    }
+
+    pub fn as_rust_expression(&self) -> String {
+        match self {
+            ProductTree::Leaf(leaf) => format!("ProductTree::Leaf({})", *leaf),
+            ProductTree::Branch(branch) => {
+                format!("ProductTree::Branch({})", branch.as_rust_expression())
             }
         }
     }
