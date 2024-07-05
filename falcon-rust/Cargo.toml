@@ -15,14 +15,15 @@ categories = ["cryptography"]
 
 [dependencies]
 bit-vec = "0.6"
+itertools = "0.12.0"
+hex = "0.4.3"
+lazy_static = "1.5.0"
+num-complex = "0.4.4"
+num = "0.4.1"
 rand = "0.8.5"
 rand_distr = "0.4.3"
 rand_chacha = "0.3.1"
-itertools = "0.12.0"
-hex = "0.4.3"
 sha3 = "0.10.8"
-num-complex = "0.4.4"
-num = "0.4.1"
 
 [dev-dependencies]
 proptest = "1.4.0"
