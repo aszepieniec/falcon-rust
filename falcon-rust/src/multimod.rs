@@ -1273,9 +1273,7 @@ mod test {
     #[test]
     fn multimodint_fixed() {
         let a = BigInt::from_str("-322777953413029095759719085619503741066179").unwrap();
-        println!("a has {} bits", a.bits());
         let b = MultiModInt::try_from(a.clone()).unwrap();
-        println!("b has {} limbs", b.limbs.len());
         let c = BigInt::from(b);
         assert_eq!(c, a);
     }
