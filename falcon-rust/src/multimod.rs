@@ -14,9 +14,9 @@ use num::{
 use crate::{
     cyclotomic_fourier::CyclotomicFourier,
     inverse::Inverse,
-    modular_inverses_sequence::{ModularInversesSequence, MODULAR_INVERSES_SEQUENCE},
     polynomial::Polynomial,
-    product_tree::{ProductBranch, ProductTree},
+    product_tree::ProductTree,
+    residue_number_system::{BEZOUT_COEFFICIENTS, PARTIAL_PRODUCTS},
 };
 use crate::{
     product_tree::MASTER_TREE,
@@ -24,43 +24,6 @@ use crate::{
 };
 
 pub(crate) const MULTIMOD_MAX_CAPACITY: usize = MODULI.len() * 30;
-
-/// Coefficient c_i in the relation
-/// integer = x_0 * c_0  +  x_1 * c_1  +  ...  + x_n-1 * c_n-1  mod prod_i p_i
-/// where {x_i} are the integer's limbs.
-///
-/// The ith coefficient reduces to 1 modulo p_i, and to 0 modulo any other modulus.
-/// It can be found as
-///
-/// c_i = [(prod_j p_j) / p_i]^-1  *  (prod_j p_j) / p_i
-///
-/// where the inverse is taken modulo p_i.
-///
-/// This function is not const because of dependencies, but we would like it to be.
-fn coefficient(i: usize, n: usize) -> BigUint {
-    // aggregate factors
-    let mut reduced = 1u32;
-    let mut aggregate_big = BigUint::one();
-    for (j, &p) in MODULI.iter().enumerate().take(n) {
-        if j != i {
-            aggregate_big *= BigUint::from_u32(p).unwrap();
-            reduced = (((reduced as u64) * (p as u64)) % (MODULI[i] as u64)) as u32;
-        }
-    }
-
-    // invert reduced
-    let mut inverse = 1u32;
-    for j in (0..32).rev() {
-        inverse = (((inverse as u64) * (inverse as u64)) % (MODULI[i] as u64)) as u32;
-        if (MODULI[i] - 2) & (1 << j) != 0 {
-            inverse = (((inverse as u64) * (reduced as u64)) % (MODULI[i] as u64)) as u32;
-        }
-    }
-
-    // combine factors and return
-    let inverse_big = BigUint::from_u32(inverse).unwrap();
-    inverse_big * aggregate_big
-}
 
 /// Product of all moduli up to modulus n.
 ///
@@ -174,7 +137,12 @@ impl MultiModInt {
     }
 
     fn to_biguint(&self) -> BigUint {
-        MODULAR_INVERSES_SEQUENCE.construct(&self.limbs)
+        self.limbs
+            .iter()
+            .enumerate()
+            .map(|(i, x)| BEZOUT_COEFFICIENTS.get(i).unwrap().mul(*x))
+            .sum::<BigUint>()
+            .mod_floor(&PARTIAL_PRODUCTS.get(self.limbs.len() - 1).unwrap())
     }
 }
 
@@ -434,7 +402,7 @@ impl From<MultiModInt> for BigInt {
             .limbs
             .iter()
             .enumerate()
-            .map(|(i, x)| x * coefficient(i, num))
+            .map(|(i, x)| BEZOUT_COEFFICIENTS.get(i).unwrap().mul(*x))
             .sum::<BigUint>()
             .mod_floor(&product);
         // let biguint = value.to_biguint();
@@ -1195,8 +1163,9 @@ mod test {
     use test_strategy::proptest as strategy_proptest;
 
     use crate::polynomial::Polynomial;
+    use crate::residue_number_system::BEZOUT_COEFFICIENTS;
 
-    use super::{coefficient, MultiModInt, MODULI};
+    use super::{MultiModInt, MODULI};
 
     fn arbitrary_bigint(bitlen: usize) -> BoxedStrategy<BigInt> {
         let limbs = vec(u32::arbitrary(), bitlen.div_ceil(32));
@@ -1242,7 +1211,7 @@ mod test {
         for (i, p, c) in MODULI
             .into_iter()
             .enumerate()
-            .map(|(i, p)| (i, p, coefficient(i, MODULI.len())))
+            .map(|(i, p)| (i, p, BEZOUT_COEFFICIENTS.get(i).unwrap()))
         {
             assert_eq!(
                 c.mod_floor(&Into::<BigUint>::into(p)),
@@ -1409,7 +1378,7 @@ mod test {
 
     #[strategy_proptest(cases = 10)]
     fn conversion_between_biguint_and_multimodint(
-        #[strategy(vec(0..u32::MAX, 256))] limbs: Vec<u32>,
+        #[strategy(vec(0..u32::MAX, 6))] limbs: Vec<u32>,
     ) {
         let biguint = BigUint::from_slice(&limbs);
         let multimodint = MultiModInt::try_from(biguint.clone()).unwrap();

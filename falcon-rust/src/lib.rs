@@ -65,7 +65,6 @@ pub(crate) mod ffsampling;
 pub(crate) mod field;
 pub(crate) mod inverse;
 pub(crate) mod math;
-pub(crate) mod modular_inverses_sequence;
 pub(crate) mod multimod;
 pub(crate) mod polynomial;
 pub(crate) mod product_tree;
