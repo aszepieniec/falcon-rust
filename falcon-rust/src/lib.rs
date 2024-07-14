@@ -69,4 +69,5 @@ pub(crate) mod modular_inverses_sequence;
 pub(crate) mod multimod;
 pub(crate) mod polynomial;
 pub(crate) mod product_tree;
+pub(crate) mod residue_number_system;
 pub(crate) mod samplerz;
