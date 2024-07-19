@@ -10,6 +10,7 @@ license = "MIT"
 [dependencies]
 falcon-rust = { path = "../falcon-rust/" }
 itertools = "0.12.0"
+num = "0.4.1"
 pqcrypto-falcon = "0.3.0"
 rand = "0.8.5"
 
@@ -18,4 +19,12 @@ criterion = { version = "0.4.0", features = ["html_reports"] }
 
 [[bench]]
 name = "falcon_rust"
+harness = false
+
+[[bench]]
+name = "ntru_gen"
+harness = false
+
+[[bench]]
+name = "babai_reduce"
 harness = false
