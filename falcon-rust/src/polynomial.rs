@@ -1,7 +1,7 @@
 use num::{One, Zero};
 use sha3::{digest::*, Shake256};
 use std::default::Default;
-use std::fmt::Debug;
+use std::fmt::{Debug, Display};
 use std::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 
 use itertools::Itertools;
@@ -9,8 +9,10 @@ use itertools::Itertools;
 use crate::field::{Felt, Q};
 use crate::inverse::Inverse;
 
+/// Marked pub for benchmarking; not considered part of the public API.
+#[doc(hidden)]
 #[derive(Debug, Clone)]
-pub(crate) struct Polynomial<F> {
+pub struct Polynomial<F> {
     pub coefficients: Vec<F>,
 }
 
@@ -635,6 +637,12 @@ pub(crate) fn hash_to_point(string: &[u8], n: usize) -> Polynomial<Felt> {
     }
 
     Polynomial { coefficients }
+}
+
+impl<T: Display> Display for Polynomial<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "[{}]", self.coefficients.iter().join(", "))
+    }
 }
 
 #[cfg(test)]

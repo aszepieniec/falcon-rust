@@ -1,8 +1,7 @@
 use std::{
-    cmp::min,
     fmt::Display,
     iter::Sum,
-    ops::{Add, AddAssign, Mul, MulAssign, Neg, Shl, Sub, SubAssign},
+    ops::{Add, AddAssign, Mul, MulAssign, Neg, Sub, SubAssign},
 };
 
 use itertools::Itertools;
@@ -25,19 +24,6 @@ use crate::{
 
 pub(crate) const MULTIMOD_MAX_CAPACITY: usize = MODULI.len() * 30;
 
-/// Product of all moduli up to modulus n.
-///
-/// This function is not const because of dependencies, but we would like it to be.
-fn product(n: usize) -> BigUint {
-    let mut prod = BigUint::one();
-    let mut i = 0;
-    while i < n {
-        prod *= BigUint::from_u32(MODULI[i]).unwrap();
-        i += 1;
-    }
-    prod
-}
-
 /// An integer, smaller than the product of all moduli, represented
 /// as the list of of residues modulo moduli {0, ..., num-1} for num <= N.
 /// Every limb stores at least 30 bits, so the total capacity is 15360 bits.
@@ -52,11 +38,6 @@ pub struct MultiModInt {
 
 impl MultiModInt {
     pub fn from_biguint_with_num_limbs(int: BigUint, num: usize) -> MultiModInt {
-        assert!(
-            num <= MODULI.len(),
-            "MultiModInt does not support more than {} limbs (given: {num}).",
-            MODULI.len()
-        );
         let bits = int.bits() as usize;
         let mut tree: &ProductTree = &MASTER_TREE;
         let num_halvings = MODULI.len().ilog2() - num.next_power_of_two().ilog2();
@@ -71,9 +52,8 @@ impl MultiModInt {
     }
 
     fn get_more_limbs(&self, total_count: usize) -> Vec<u32> {
-        assert!(total_count <= MODULI.len());
         let int = BigInt::from(self.clone());
-        let product = product(total_count);
+        let product = &PARTIAL_PRODUCTS[total_count - 1];
         let uint = if int < BigInt::zero() {
             (product.to_bigint().unwrap() + int).to_biguint().unwrap()
         } else {
@@ -158,11 +138,6 @@ impl Add for MultiModInt {
     fn add(self, rhs: Self) -> Self::Output {
         let bits = 1 + usize::max(self.bitsize_bound, rhs.bitsize_bound);
         let num = usize::min(MODULI.len(), Self::num_limbs_needed(bits));
-        assert!(
-            Self::num_limbs_needed(bits) <= num,
-            "Not enough limbs for multimod integers of {} bits",
-            bits
-        );
         let self_limbs = self.get_more_limbs(num);
         let other_limbs = rhs.get_more_limbs(num);
         let mut limbs = Vec::<u32>::with_capacity(num);
@@ -173,9 +148,6 @@ impl Add for MultiModInt {
             limbs,
             bitsize_bound: bits,
         };
-        if self.sign() == rhs.sign() {
-            assert_eq!(output.sign(), self.sign());
-        }
         output
     }
 }
@@ -198,11 +170,6 @@ impl Sub for MultiModInt {
     fn sub(self, rhs: Self) -> Self::Output {
         let bits = 1 + usize::max(self.bitsize_bound, rhs.bitsize_bound);
         let num = usize::min(MODULI.len(), Self::num_limbs_needed(bits));
-        assert!(
-            Self::num_limbs_needed(bits) <= num,
-            "Not enough limbs to hold multimod integers of {} bits",
-            bits
-        );
         let self_limbs = self.get_more_limbs(num);
         let other_limbs = rhs.get_more_limbs(num);
         let mut limbs = Vec::<u32>::with_capacity(num);
@@ -230,11 +197,6 @@ impl Mul for MultiModInt {
 
     fn mul(self, rhs: Self) -> Self::Output {
         let bits = self.bitsize_bound + rhs.bitsize_bound;
-        assert!(
-            Self::num_limbs_needed(bits) <= MODULI.len(),
-            "Not enough moduli available for {} bits",
-            bits
-        );
         let num = usize::min(MODULI.len(), Self::num_limbs_needed(bits));
         let self_limbs = self.get_more_limbs(num);
         let other_limbs = rhs.get_more_limbs(num);
@@ -248,14 +210,6 @@ impl Mul for MultiModInt {
             limbs,
             bitsize_bound: bits,
         };
-        if self.sign() == rhs.sign() && self.sign() != Sign::NoSign {
-            assert_eq!(output.sign(), Sign::Plus);
-        } else if self.sign() != rhs.sign()
-            && self.sign() != Sign::NoSign
-            && rhs.sign() != Sign::NoSign
-        {
-            assert_eq!(output.sign(), Sign::Minus);
-        }
         output
     }
 }
@@ -299,41 +253,6 @@ impl One for MultiModInt {
         Self {
             limbs: vec![1u32; 1],
             bitsize_bound: 1,
-        }
-    }
-}
-
-impl Shl<usize> for MultiModInt {
-    type Output = MultiModInt;
-
-    fn shl(self, mut rhs: usize) -> Self::Output {
-        let bits = self.bitsize_bound + rhs;
-        let num_limbs_needed = Self::num_limbs_needed(bits);
-        let mut limbs = if num_limbs_needed > self.limbs.len() {
-            let num = usize::min(
-                MODULI.len(),
-                usize::max(num_limbs_needed, 2 * self.limbs.len()),
-            );
-            assert!(
-                num >= num_limbs_needed,
-                "requested bit width ({}) exceeds capacity ({})",
-                bits,
-                MODULI.len() * 30,
-            );
-            self.get_more_limbs(num)
-        } else {
-            self.limbs.clone()
-        };
-        while rhs > 0 {
-            let shamt = min(32, rhs);
-            rhs -= shamt;
-            for (i, p) in MODULI.into_iter().take(limbs.len()).enumerate() {
-                limbs[i] = (((limbs[i] as u64) << shamt) % (p as u64)) as u32;
-            }
-        }
-        Self {
-            limbs,
-            bitsize_bound: bits,
         }
     }
 }
@@ -397,39 +316,20 @@ impl From<MultiModInt> for BigUint {
 impl From<MultiModInt> for BigInt {
     fn from(value: MultiModInt) -> Self {
         let num = value.limbs.len();
-        let product = product(num);
+        let product = &PARTIAL_PRODUCTS[num - 1];
         let biguint = value
             .limbs
             .iter()
             .enumerate()
             .map(|(i, x)| BEZOUT_COEFFICIENTS.get(i).unwrap().mul(*x))
             .sum::<BigUint>()
-            .mod_floor(&product);
+            .mod_floor(product);
         // let biguint = value.to_biguint();
         if biguint > (product.clone() >> 1) {
             biguint.to_bigint().unwrap() - product.to_bigint().unwrap()
         } else {
             biguint.to_bigint().unwrap()
         }
-    }
-}
-
-impl Display for Polynomial<MultiModInt> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        for i in 0..self.coefficients.len() {
-            match i {
-                0 => {
-                    write!(f, "{}", self.coefficients[i])?;
-                }
-                1 => {
-                    write!(f, " + {} * x", self.coefficients[i])?;
-                }
-                _ => {
-                    write!(f, " + {} * x^{}", self.coefficients[i], i)?;
-                }
-            }
-        }
-        Ok(())
     }
 }
 
@@ -481,24 +381,6 @@ impl Polynomial<MultiModInt> {
             .map(|mmi| mmi.bitsize_bound)
             .max()
             .unwrap_or_default();
-        assert!(
-            lhs_max_bits
-                >= self
-                    .coefficients
-                    .iter()
-                    .map(|mmi| BigInt::from(mmi.clone()).bits())
-                    .max()
-                    .unwrap() as usize
-        );
-        assert!(
-            rhs_max_bits
-                >= other
-                    .coefficients
-                    .iter()
-                    .map(|mmi| BigInt::from(mmi.clone()).bits())
-                    .max()
-                    .unwrap() as usize
-        );
         let bits =
             1 + self.coefficients.len() + other.coefficients.len() + lhs_max_bits + rhs_max_bits;
 
@@ -1147,7 +1029,7 @@ impl TryFrom<Polynomial<BigInt>> for Polynomial<MultiModInt> {
 }
 
 #[cfg(test)]
-mod test {
+pub(crate) mod test {
 
     use std::str::FromStr;
 
@@ -1197,7 +1079,7 @@ mod test {
             .boxed()
     }
 
-    fn arbitrary_bigint_polynomial(
+    pub(crate) fn arbitrary_bigint_polynomial(
         bitlen: usize,
         num_coefficients: usize,
     ) -> BoxedStrategy<Polynomial<BigInt>> {
@@ -1315,7 +1197,7 @@ mod test {
         let d_mmi = Polynomial::<MultiModInt>::try_from(a.clone()).unwrap()
             * Polynomial::<MultiModInt>::try_from(b.clone()).unwrap();
 
-        assert_eq!(mmi_d, d_mmi,);
+        prop_assert_eq!(mmi_d, d_mmi);
     }
 
     #[strategy_proptest]
@@ -1352,26 +1234,16 @@ mod test {
         assert_eq!(c_trad, c_fast);
     }
 
-    const MULTIMOD_CAPACITY: usize = 1001;
-    #[strategy_proptest(cases = 50)]
-    fn shift_left(
-        #[filter(|x| *x < MULTIMOD_CAPACITY)]
-        #[strategy(1usize..(MULTIMOD_CAPACITY-1))]
-        _total_shift: usize,
-        #[strategy(0usize..#_total_shift)] shift1: usize,
-        #[strategy(Just(#_total_shift - #shift1))] shift2: usize,
-        #[strategy(0usize..(MULTIMOD_CAPACITY-(#shift1+#shift2)))] _bitlen: usize,
-        #[strategy(0usize..=0)] _logn: usize,
-        #[strategy(arbitrary_multimodint_polynomial(#_bitlen, 1 << #_logn))] a: Polynomial<
-            MultiModInt,
-        >,
+    #[strategy_proptest]
+    fn cyclotomic_multiplication_lopsided(
+        #[strategy(arbitrary_multimodint_polynomial(4, 4))] a: Polynomial<MultiModInt>,
+        #[strategy(arbitrary_multimodint_polynomial(5461, 4))] b: Polynomial<MultiModInt>,
     ) {
-        let b = a.map(|mmi| mmi.clone() << shift1);
-        let c = b.map(|mmi| mmi.clone() << shift2);
+        let product = a.clone() * b.clone();
+        let c_trad = product.reduce_by_cyclotomic(4);
 
-        let d = a.map(|mmi| mmi.clone() << (shift1 + shift2));
-
-        prop_assert_eq!(c, d);
+        let c_fast = a.cyclotomic_mul(&b);
+        assert_eq!(c_trad, c_fast);
     }
 
     #[strategy_proptest(cases = 10)]

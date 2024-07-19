@@ -475,8 +475,10 @@ pub fn sign<const N: usize>(m: &[u8], sk: &SecretKey<N>) -> Signature<N> {
     let t1 = -c_over_q_fft.hadamard_mul(&f_fft);
 
     let s = loop {
+        let mut seed = [0u8; 32];
+        rng.fill_bytes(&mut seed);
         let bold_s = loop {
-            let z = ffsampling(&(t0.clone(), t1.clone()), &sk.tree, &params, &mut rng);
+            let z = ffsampling(&(t0.clone(), t1.clone()), &sk.tree, &params, seed);
             let t0_min_z0 = t0.clone() - z.0;
             let t1_min_z1 = t1.clone() - z.1;
 

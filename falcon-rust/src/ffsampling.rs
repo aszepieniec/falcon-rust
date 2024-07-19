@@ -1,6 +1,12 @@
+use std::io::Write;
+
 use num_complex::{Complex, Complex64};
 use rand::RngCore;
 use rand_distr::num_traits::{One, Zero};
+use sha3::{
+    digest::{ExtendableOutput, XofReader},
+    Shake256,
+};
 
 use crate::{falcon, fast_fft::FastFft, polynomial::Polynomial, samplerz::sampler_z};
 
@@ -96,26 +102,52 @@ pub(crate) fn ffsampling(
     t: &(Polynomial<Complex64>, Polynomial<Complex64>),
     tree: &LdlTree,
     parameters: &falcon::FalconParameters,
-    rng: &mut dyn RngCore,
+    // rng: &mut dyn RngCore,
+    seed: [u8; 32],
 ) -> (Polynomial<Complex64>, Polynomial<Complex64>) {
+    let mut buffer = [0u8; 128];
+    let mut shake = Shake256::default();
+    let _ = shake.write(&seed);
+    shake.finalize_xof().read(&mut buffer);
+
     match tree {
         LdlTree::Branch(ell, left, right) => {
             let bold_t1 = t.1.split_fft();
-            let bold_z1 = ffsampling(&bold_t1, right, parameters, rng);
+            let bold_z1 = ffsampling(
+                &bold_t1,
+                right,
+                parameters,
+                buffer[0..32].to_owned().try_into().unwrap(),
+            );
             let z1 = Polynomial::<Complex64>::merge_fft(&bold_z1.0, &bold_z1.1);
 
             // t0' = t0  + (t1 - z1) * l
             let t0_prime = t.0.clone() + (t.1.clone() - z1.clone()).hadamard_mul(ell);
 
             let bold_t0 = t0_prime.split_fft();
-            let bold_z0 = ffsampling(&bold_t0, left, parameters, rng);
+            let bold_z0 = ffsampling(
+                &bold_t0,
+                left,
+                parameters,
+                buffer[32..64].to_owned().try_into().unwrap(),
+            );
             let z0 = Polynomial::<Complex64>::merge_fft(&bold_z0.0, &bold_z0.1);
 
             (z0, z1)
         }
         LdlTree::Leaf(value) => {
-            let z0 = sampler_z(t.0.coefficients[0].re, value[0].re, parameters.sigmin, rng);
-            let z1 = sampler_z(t.1.coefficients[0].re, value[0].re, parameters.sigmin, rng);
+            let z0 = sampler_z(
+                t.0.coefficients[0].re,
+                value[0].re,
+                parameters.sigmin,
+                buffer[64..96].to_owned().try_into().unwrap(),
+            );
+            let z1 = sampler_z(
+                t.1.coefficients[0].re,
+                value[0].re,
+                parameters.sigmin,
+                buffer[96..128].to_owned().try_into().unwrap(),
+            );
             (
                 Polynomial::new(vec![Complex64::new(z0 as f64, 0.0)]),
                 Polynomial::new(vec![Complex64::new(z1 as f64, 0.0)]),

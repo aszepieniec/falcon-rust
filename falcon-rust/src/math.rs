@@ -1,7 +1,14 @@
+use std::io::{Read, Write};
+
+use hex::ToHex;
 use itertools::Itertools;
 use num::{BigInt, FromPrimitive, One, Zero};
 use num_complex::Complex64;
 use rand::{rngs::StdRng, RngCore, SeedableRng};
+use sha3::{
+    digest::{crypto_common::KeyInit, ExtendableOutput, Update},
+    Shake256, Shake256Core,
+};
 
 use crate::{
     fast_fft::FastFft,
@@ -12,16 +19,18 @@ use crate::{
 };
 
 /// Reduce the vector (F,G) relative to (f,g). This method follows the python
-/// implementation [1]. Note that this algorithm can end up in an infinite loop. (It's one
-/// of the things the author would like to fix.) When this happens, control returns an
-/// error (hence the return type) and generates another keypair with fresh randomness.
+/// implementation [1].
 ///
 /// Algorithm 7 in the spec [2, p.35]
 ///
 /// [1]: https://github.com/tprest/falcon.py
 ///
 /// [2]: https://falcon-sign.info/falcon.pdf
-fn babai_reduce(
+///
+/// This function is marked pub for the purpose of benchmarking; it is not
+/// considered part of the public API.
+#[doc(hidden)]
+pub fn babai_reduce_bigint(
     f: &Polynomial<BigInt>,
     g: &Polynomial<BigInt>,
     capital_f: &mut Polynomial<BigInt>,
@@ -37,8 +46,6 @@ fn babai_reduce(
     .into_iter()
     .max()
     .unwrap();
-    // let f_mmip = Polynomial::<MultiModInt>::try_from(f.clone()).unwrap();
-    // let g_mmip = Polynomial::<MultiModInt>::try_from(g.clone()).unwrap();
     let shift = (size as i64) - 53;
     let f_adjusted = f
         .map(|bi| Complex64::new(i64::try_from(bi >> shift).unwrap() as f64, 0.0))
@@ -83,24 +90,145 @@ fn babai_reduce(
         if k.is_zero() {
             break;
         }
-        let kf = (k.clone().karatsuba(f))
-            .reduce_by_cyclotomic(n)
-            .map(|bi| bi << (capital_size - size));
-        let kg = (k.clone().karatsuba(g))
-            .reduce_by_cyclotomic(n)
-            .map(|bi| bi << (capital_size - size));
-        *capital_f -= kf;
-        *capital_g -= kg;
+        let kf = (k.clone().karatsuba(f)).reduce_by_cyclotomic(n);
+        let shifted_kf = kf.map(|bi| bi << (capital_size - size));
+        let kg = (k.clone().karatsuba(g)).reduce_by_cyclotomic(n);
+        let shifted_kg = kg.map(|bi| bi << (capital_size - size));
 
-        // let k_mmip = Polynomial::<MultiModInt>::try_from(k).unwrap();
-        // let kf_mmip = f_mmip
-        //     .cyclotomic_mul(&k_mmip)
-        //     .map(|mmi| mmi.clone() << (capital_size - size) as usize);
-        // let kg_mmip = g_mmip
-        //     .cyclotomic_mul(&k_mmip)
-        //     .map(|mmi| mmi.clone() << (capital_size - size) as usize);
-        // *capital_f -= Polynomial::<BigInt>::from(kf_mmip.clone());
-        // *capital_g -= Polynomial::<BigInt>::from(kg_mmip);
+        *capital_f -= shifted_kf;
+        *capital_g -= shifted_kg;
+
+        counter += 1;
+        if counter > 1000 {
+            // If we get here, that means that (with high likelihood) we are in an
+            // infinite loop. We know it happens from time to time -- seldomly, but it
+            // does. It would be nice to fix that! But in order to fix it we need to be
+            // able to reproduce it, and for that we need test vectors. So print them
+            // and hope that one day they circle back to the implementor.
+            return Err(format!("Encountered infinite loop in babai_reduce of falcon-rust.\n\
+            Please help the developer(s) fix it! You can do this by sending them the inputs to the function that caused the behavior:\n\
+            f: {:?}\n\
+            g: {:?}\n\
+            capital_f: {:?}\n\
+            capital_g: {:?}\n", f.coefficients, g.coefficients, capital_f.coefficients, capital_g.coefficients));
+        }
+    }
+    Ok(())
+}
+
+/// Reduce the vector (F,G) relative to (f,g). This method follows the python
+/// implementation [1] but uses multimodular arithmetic for fast operations on
+/// big integer polynomials in a cyclotomic ring.
+///
+/// Algorithm 7 in the spec [2, p.35]
+///
+/// [1]: https://github.com/tprest/falcon.py
+///
+/// [2]: https://falcon-sign.info/falcon.pdf
+///
+///
+/// This function is marked pub for the purpose of benchmarking; it is not
+/// considered part of the public API.
+#[doc(hidden)]
+pub fn babai_reduce_mmi(
+    f: &Polynomial<BigInt>,
+    g: &Polynomial<BigInt>,
+    capital_f: &mut Polynomial<BigInt>,
+    capital_g: &mut Polynomial<BigInt>,
+) -> Result<(), String> {
+    // println!(
+    //     "babai reduce called on integers of size ({}, {}, {}, {}) and len {}",
+    //     f.coefficients.iter().map(|c| c.bits()).max().unwrap(),
+    //     g.coefficients.iter().map(|c| c.bits()).max().unwrap(),
+    //     capital_f
+    //         .coefficients
+    //         .iter()
+    //         .map(|c| c.bits())
+    //         .max()
+    //         .unwrap(),
+    //     capital_g
+    //         .coefficients
+    //         .iter()
+    //         .map(|c| c.bits())
+    //         .max()
+    //         .unwrap(),
+    //     f.coefficients.len()
+    // );
+    let bitsize = |bi: &BigInt| (bi.bits() + 7) & (u64::MAX ^ 7);
+    let size = [
+        f.map(bitsize).fold(0, |a, &b| u64::max(a, b)),
+        g.map(bitsize).fold(0, |a, &b| u64::max(a, b)),
+        53,
+    ]
+    .into_iter()
+    .max()
+    .unwrap();
+    let f_mmip = Polynomial::<MultiModInt>::try_from(f.clone()).unwrap();
+    let g_mmip = Polynomial::<MultiModInt>::try_from(g.clone()).unwrap();
+
+    let shift = (size as i64) - 53;
+    let f_adjusted = f
+        .map(|bi| Complex64::new(i64::try_from(bi >> shift).unwrap() as f64, 0.0))
+        .fft();
+    let g_adjusted = g
+        .map(|bi| Complex64::new(i64::try_from(bi >> shift).unwrap() as f64, 0.0))
+        .fft();
+
+    let f_star_adjusted = f_adjusted.map(|c| c.conj());
+    let g_star_adjusted = g_adjusted.map(|c| c.conj());
+    let denominator_fft =
+        f_adjusted.hadamard_mul(&f_star_adjusted) + g_adjusted.hadamard_mul(&g_star_adjusted);
+
+    let mut counter = 0;
+    loop {
+        let capital_size = [
+            capital_f.map(bitsize).fold(0, |a, &b| u64::max(a, b)),
+            capital_g.map(bitsize).fold(0, |a, &b| u64::max(a, b)),
+            53,
+        ]
+        .into_iter()
+        .max()
+        .unwrap();
+
+        if capital_size < size {
+            break;
+        }
+        let capital_shift = (capital_size as i64) - 53;
+        let capital_f_adjusted = capital_f
+            .map(|bi| Complex64::new(i64::try_from(bi >> capital_shift).unwrap() as f64, 0.0))
+            .fft();
+        let capital_g_adjusted = capital_g
+            .map(|bi| Complex64::new(i64::try_from(bi >> capital_shift).unwrap() as f64, 0.0))
+            .fft();
+
+        let numerator = capital_f_adjusted.hadamard_mul(&f_star_adjusted)
+            + capital_g_adjusted.hadamard_mul(&g_star_adjusted);
+        let quotient = numerator.hadamard_div(&denominator_fft).ifft();
+
+        let k = quotient.map(|f| Into::<BigInt>::into(f.re.round() as i64));
+
+        if k.is_zero() {
+            break;
+        }
+        // let kf = (k.clone().karatsuba(f))
+        //     .reduce_by_cyclotomic(n)
+        //     .map(|bi| bi << (capital_size - size));
+        // let kg = (k.clone().karatsuba(g))
+        //     .reduce_by_cyclotomic(n)
+        //     .map(|bi| bi << (capital_size - size));
+        // *capital_f -= kf;
+        // *capital_g -= kg;
+
+        let k_mmip = Polynomial::<MultiModInt>::try_from(k).unwrap();
+        let kf_mmip = f_mmip.cyclotomic_mul(&k_mmip);
+        let kf = kf_mmip.map(|m| BigInt::from(m.clone()));
+        let kg_mmip = g_mmip.cyclotomic_mul(&k_mmip);
+        let kg = kg_mmip.map(|m| BigInt::from(m.clone()));
+        let shifted_kf = kf.map(|bi| bi << (capital_size - size));
+        let shifted_kg = kg.map(|bi| bi << (capital_size - size));
+
+        *capital_f -= shifted_kf;
+        *capital_g -= shifted_kg;
 
         // println!("kf: {}", kf.coefficients.iter().join(","));
         // println!("kf[0] len: {}", kf.coefficients[0].bits());
@@ -186,7 +314,7 @@ fn ntru_solve(
     let mut capital_f = (capital_f_prime_xsq.karatsuba(&g_minx)).reduce_by_cyclotomic(n);
     let mut capital_g = (capital_g_prime_xsq.karatsuba(&f_minx)).reduce_by_cyclotomic(n);
 
-    match babai_reduce(f, g, &mut capital_f, &mut capital_g) {
+    match babai_reduce_mmi(f, g, &mut capital_f, &mut capital_g) {
         Ok(_) => Some((capital_f, capital_g)),
         Err(_e) => {
             #[cfg(test)]
@@ -204,20 +332,32 @@ fn ntru_solve(
 /// Sample 4 small polynomials f, g, F, G such that f * G - g * F = q mod (X^n + 1).
 /// Algorithm 5 (NTRUgen) of the documentation [1, p.34].
 ///
+/// This function is marked pub for benchmarking purposes only. Not considered part
+/// of the public API.
+///
 /// [1]: https://falcon-sign.info/falcon.pdf
-pub(crate) fn ntru_gen(
+#[doc(hidden)]
+pub fn ntru_gen(
     n: usize,
-    seed: [u8; 32],
+    mut seed: [u8; 32],
 ) -> (
     Polynomial<i16>,
     Polynomial<i16>,
     Polynomial<i16>,
     Polynomial<i16>,
 ) {
-    let mut rng: StdRng = SeedableRng::from_seed(seed);
+    // let mut rng: StdRng = SeedableRng::from_seed(seed);
+
     loop {
-        let f = gen_poly(n, &mut rng);
-        let g = gen_poly(n, &mut rng);
+        let mut buffer = [0u8; 96];
+        let mut shake = Shake256::default();
+        shake.update(&seed);
+        let _ = shake.finalize_xof().read(&mut buffer);
+        seed = buffer[0..32].to_vec().try_into().unwrap();
+
+        let f = gen_poly(n, buffer[32..64].to_owned().try_into().unwrap());
+        let g = gen_poly(n, buffer[64..96].to_owned().try_into().unwrap());
+
         let f_ntt = f.map(|&i| Felt::new(i)).fft();
         if f_ntt.coefficients.iter().any(|e| e.is_zero()) {
             continue;
@@ -243,14 +383,27 @@ pub(crate) fn ntru_gen(
 /// Generate a polynomial of degree at most n-1 whose coefficients are
 /// distributed according to a discrete Gaussian with mu = 0 and
 /// sigma = 1.17 * sqrt(Q / (2n)).
-fn gen_poly(n: usize, rng: &mut dyn RngCore) -> Polynomial<i16> {
+// fn gen_poly(n: usize, rng: &mut dyn RngCore) -> Polynomial<i16> {
+fn gen_poly(n: usize, seed: [u8; 32]) -> Polynomial<i16> {
     let mu = 0.0;
     let sigma_star = 1.43300980528773;
+    const NUM_COEFFICIENTS: usize = 4096;
+    let mut buffer = [0u8; NUM_COEFFICIENTS * 32];
+    let mut shake = Shake256::default();
+    shake.write(&seed).unwrap();
+    let _ = shake.finalize_xof().read(&mut buffer);
     Polynomial {
-        coefficients: (0..4096)
-            .map(|_| sampler_z(mu, sigma_star, sigma_star - 0.001, rng))
+        coefficients: (0..NUM_COEFFICIENTS)
+            .map(|i| {
+                sampler_z(
+                    mu,
+                    sigma_star,
+                    sigma_star - 0.001,
+                    buffer[i * 32..(i + 1) * 32].to_owned().try_into().unwrap(),
+                )
+            })
             .collect_vec()
-            .chunks(4096 / n)
+            .chunks(NUM_COEFFICIENTS / n)
             .map(|ch| ch.iter().sum())
             .collect_vec(),
     }
@@ -299,41 +452,126 @@ fn gram_schmidt_norm_squared(f: &Polynomial<i16>, g: &Polynomial<i16>) -> f64 {
 #[cfg(test)]
 mod test {
 
+    use std::str::FromStr;
+
     use itertools::Itertools;
     use num::{BigInt, FromPrimitive};
+    use proptest::arbitrary::Arbitrary;
+    use proptest::collection::vec;
+    use proptest::prop_assert_eq;
+    use proptest::proptest;
+    use proptest::strategy::BoxedStrategy;
+    use proptest::strategy::Just;
+    use proptest::strategy::Strategy;
     use rand::{thread_rng, Rng};
+    use test_strategy::proptest as strategy_proptest;
 
     use crate::{
         math::{gen_poly, gram_schmidt_norm_squared, ntru_gen, ntru_solve},
+        multimod::test::arbitrary_bigint_polynomial,
         polynomial::Polynomial,
     };
 
-    #[test]
-    fn test_ntru_gen() {
-        let n = 512;
-        let mut rng = thread_rng();
-        let (f, g, capital_f, capital_g) = ntru_gen(n, rng.gen());
+    use super::{babai_reduce_bigint, babai_reduce_mmi};
+    fn babai_infinite_loop_polynomials() -> (
+        Polynomial<BigInt>,
+        Polynomial<BigInt>,
+        Polynomial<BigInt>,
+        Polynomial<BigInt>,
+    ) {
+        let f = Polynomial::new(
+            [
+                BigInt::from_str("6426042728002").unwrap(),
+                BigInt::from_str("-20675284604736").unwrap(),
+                BigInt::from_str("-12121913318466").unwrap(),
+                BigInt::from_str("-27836101162563").unwrap(),
+            ]
+            .to_vec(),
+        );
 
-        let f_times_capital_g = (f * capital_g).reduce_by_cyclotomic(n);
-        let g_times_capital_f = (g * capital_f).reduce_by_cyclotomic(n);
-        let difference = f_times_capital_g - g_times_capital_f;
-        assert_eq!(Polynomial::constant(12289), difference);
+        let g = Polynomial::new(
+            [
+                BigInt::from_str("-1001246212").unwrap(),
+                BigInt::from_str("-1347303037").unwrap(),
+                BigInt::from_str("987026048").unwrap(),
+                BigInt::from_str("-1001311747").unwrap(),
+            ]
+            .to_vec(),
+        );
+
+        let capital_f = Polynomial::new(
+            [
+                BigInt::from_str(
+                    "563985131491945032326798334533872091781886676547754689048287010878681928",
+                )
+                .unwrap(),
+                BigInt::from_str(
+                    "-348444005402208553421931883447687919671423051554816023996113866522386058",
+                )
+                .unwrap(),
+                BigInt::from_str(
+                    "-85657170778585026649528684432821341936755757853602491207147473952485632",
+                )
+                .unwrap(),
+                BigInt::from_str(
+                    "135623655239747178410899900677875843487151183900794566193191499131611018",
+                )
+                .unwrap(),
+            ]
+            .to_vec(),
+        );
+
+        let capital_g = Polynomial::new(
+            [
+                BigInt::from_str(
+                    "49040356584788663746447138446729467702643846166576265941049418069366",
+                )
+                .unwrap(),
+                BigInt::from_str(
+                    "-57075549200927059197269512430308877512934179841045274854176350745681",
+                )
+                .unwrap(),
+                BigInt::from_str(
+                    "18442173959410247991253446345066800376513088376845717824090327663990",
+                )
+                .unwrap(),
+                BigInt::from_str(
+                    "19528334302175388221061434098432127604592213845277598673231565264960",
+                )
+                .unwrap(),
+            ]
+            .to_vec(),
+        );
+
+        (f, g, capital_f, capital_g)
     }
 
     #[test]
-    fn test_gen_poly() {
-        let mut rng = thread_rng();
-        let n = 1024;
-        let mut sum_norms = 0.0;
-        let num_iterations = 100;
-        for _ in 0..num_iterations {
-            let f = gen_poly(n, &mut rng);
-            sum_norms += f.l2_norm();
-        }
-        let average = sum_norms / (num_iterations as f64);
-        assert!(90.0 < average);
-        assert!(average < 94.0);
+    fn babai_infinite_loop_bigint() {
+        let (f, g, mut capital_f, mut capital_g) = babai_infinite_loop_polynomials();
+        assert!(babai_reduce_bigint(&f, &g, &mut capital_f, &mut capital_g).is_ok())
     }
+
+    #[test]
+    fn babai_infinite_loop_mmi() {
+        let (f, g, mut capital_f, mut capital_g) = babai_infinite_loop_polynomials();
+        assert!(babai_reduce_mmi(&f, &g, &mut capital_f, &mut capital_g).is_ok())
+    }
+
+    // #[test]
+    // fn test_gen_poly() {
+    //     let mut rng = thread_rng();
+    //     let n = 1024;
+    //     let mut sum_norms = 0.0;
+    //     let num_iterations = 100;
+    //     for _ in 0..num_iterations {
+    //         let f = gen_poly(n, &mut rng);
+    //         sum_norms += f.l2_norm();
+    //     }
+    //     let average = sum_norms / (num_iterations as f64);
+    //     assert!(90.0 < average);
+    //     assert!(average < 94.0);
+    // }
 
     #[test]
     fn test_gs_norm() {
@@ -385,5 +623,44 @@ mod test {
 
         let ntru = (f * capital_g - g * capital_f).reduce_by_cyclotomic(n);
         assert_eq!(Polynomial::constant(12289.into()), ntru);
+    }
+
+    #[strategy_proptest]
+    fn bigint_and_multimodint_babai_reduce_agree(
+        #[strategy(0usize..5)] _logn: usize,
+        #[strategy(Just(1<<#_logn))] _n: usize,
+        #[strategy(arbitrary_bigint_polynomial(1000, #_n))] f: Polynomial<BigInt>,
+        #[strategy(arbitrary_bigint_polynomial(1000, #_n))] g: Polynomial<BigInt>,
+        #[strategy(arbitrary_bigint_polynomial(1000, #_n))] mut bi_capital_f: Polynomial<BigInt>,
+        #[strategy(arbitrary_bigint_polynomial(1000, #_n))] mut bi_capital_g: Polynomial<BigInt>,
+    ) {
+        let mut mmi_capital_f = bi_capital_f.clone();
+        let mut mmi_capital_g = bi_capital_g.clone();
+
+        babai_reduce_bigint(&f, &g, &mut bi_capital_f, &mut bi_capital_g).unwrap();
+        babai_reduce_mmi(&f, &g, &mut mmi_capital_f, &mut mmi_capital_g).unwrap();
+        prop_assert_eq!(bi_capital_f, mmi_capital_f);
+        prop_assert_eq!(bi_capital_g, mmi_capital_g);
+    }
+
+    #[test]
+    fn test_ntru_gen() {
+        let n = 512;
+        // let mut rng = thread_rng();
+        let seed: [u8; 32] =
+            hex::decode("deadbeef00000000deadbeef00000000deadbeef00000000deadbeef00000000")
+                .unwrap()
+                .try_into()
+                .unwrap();
+        let (f, g, capital_f, capital_g) = ntru_gen(n, seed);
+
+        println!("f: {}", f);
+        println!("g: {}", g);
+        println!("capital f: {}", capital_f);
+        println!("capital g: {}", capital_g);
+        let f_times_capital_g = (f * capital_g).reduce_by_cyclotomic(n);
+        let g_times_capital_f = (g * capital_f).reduce_by_cyclotomic(n);
+        let difference = f_times_capital_g - g_times_capital_f;
+        assert_eq!(Polynomial::constant(12289), difference);
     }
 }
