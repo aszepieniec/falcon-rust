@@ -2,6 +2,7 @@ use std::io::{Read, Write};
 
 use hex::ToHex;
 use itertools::Itertools;
+use num::Signed;
 use num::{BigInt, FromPrimitive, One, Zero};
 use num_complex::Complex64;
 use rand::{rngs::StdRng, RngCore, SeedableRng};
@@ -137,7 +138,7 @@ pub fn babai_reduce_mmi(
     capital_g: &mut Polynomial<BigInt>,
 ) -> Result<(), String> {
     // println!(
-    //     "babai reduce called on integers of size ({}, {}, {}, {}) and len {}",
+    //     "\nbabai reduce called on integers of size ({}, {}, {}, {}) and len {}",
     //     f.coefficients.iter().map(|c| c.bits()).max().unwrap(),
     //     g.coefficients.iter().map(|c| c.bits()).max().unwrap(),
     //     capital_f
@@ -163,8 +164,15 @@ pub fn babai_reduce_mmi(
     .into_iter()
     .max()
     .unwrap();
-    let f_mmip = Polynomial::<MultiModInt>::try_from(f.clone()).unwrap();
-    let g_mmip = Polynomial::<MultiModInt>::try_from(g.clone()).unwrap();
+
+    let n = f.coefficients.len();
+    let required_capacity = size as usize + 10;
+
+    let f_mmip = f.map(|c| MultiModInt::from_bigint_with_capacity(c, required_capacity));
+    let g_mmip = g.map(|c| MultiModInt::from_bigint_with_capacity(c, required_capacity));
+
+    // let f_mmip = Polynomial::<MultiModInt>::try_from(f.clone()).unwrap();
+    // let g_mmip = Polynomial::<MultiModInt>::try_from(g.clone()).unwrap();
 
     let shift = (size as i64) - 53;
     let f_adjusted = f
@@ -219,11 +227,25 @@ pub fn babai_reduce_mmi(
         // *capital_f -= kf;
         // *capital_g -= kg;
 
-        let k_mmip = Polynomial::<MultiModInt>::try_from(k).unwrap();
+        // let k_mmip = Polynomial::<MultiModInt>::try_from(k).unwrap();
+
+        let k_mmip = k.map(|c| MultiModInt::from_bigint_with_capacity(c, required_capacity));
+
         let kf_mmip = f_mmip.cyclotomic_mul(&k_mmip);
         let kf = kf_mmip.map(|m| BigInt::from(m.clone()));
         let kg_mmip = g_mmip.cyclotomic_mul(&k_mmip);
         let kg = kg_mmip.map(|m| BigInt::from(m.clone()));
+
+        // println!(
+        //     "product has {} bits",
+        //     kf.coefficients
+        //         .iter()
+        //         .chain(kg.coefficients.iter())
+        //         .map(|c| c.bits())
+        //         .max()
+        //         .unwrap()
+        // );
+
         let shifted_kf = kf.map(|bi| bi << (capital_size - size));
         let shifted_kg = kg.map(|bi| bi << (capital_size - size));
 

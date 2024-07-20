@@ -21,6 +21,7 @@ use crate::{
     product_tree::MASTER_TREE,
     residue_number_system::{PrimeField, MODULI},
 };
+use num::Signed;
 
 pub(crate) const MULTIMOD_MAX_CAPACITY: usize = MODULI.len() * 30;
 
@@ -45,6 +46,26 @@ impl MultiModInt {
             tree = tree.as_branch().left.as_ref();
         }
         let limbs = tree.reduce(&int)[0..num].to_vec();
+        MultiModInt {
+            limbs,
+            bitsize_bound: bits,
+        }
+    }
+
+    pub fn from_bigint_with_capacity(int: &BigInt, capacity: usize) -> MultiModInt {
+        let bits = int.bits() as usize;
+        let mut tree: &ProductTree = &MASTER_TREE;
+        let num_limbs = Self::num_limbs_needed(capacity);
+        let num_halvings = MODULI.len().ilog2() - num_limbs.next_power_of_two().ilog2();
+        for _ in 0..num_halvings {
+            tree = tree.as_branch().left.as_ref();
+        }
+        let mut limbs = tree.reduce(&int.abs().to_biguint().unwrap())[0..num_limbs].to_vec();
+        if matches!(int.sign(), Sign::Minus) {
+            for (limb, &p) in limbs.iter_mut().zip(&MODULI) {
+                *limb = p - *limb;
+            }
+        }
         MultiModInt {
             limbs,
             bitsize_bound: bits,
@@ -86,6 +107,13 @@ impl MultiModInt {
         let num = Self::num_limbs_needed(bits);
         Self {
             limbs: vec![0u32; num],
+            bitsize_bound: 1,
+        }
+    }
+
+    pub fn zero_with_num_limbs(num_limbs: usize) -> Self {
+        Self {
+            limbs: vec![0u32; num_limbs],
             bitsize_bound: 1,
         }
     }
@@ -367,59 +395,16 @@ impl Polynomial<MultiModInt> {
         }
     }
 
+    /// Compute the product of two polynomials over multimodular integers and
+    /// reduce the result modulo the fitting cyclotomic polynomial. This
+    /// function assumes that all multimod ints have the same number of limbs,
+    /// and that multimod ints with this number of ints have enough capacity to
+    /// store every coefficient of the product.
     pub(crate) fn cyclotomic_mul(&self, other: &Self) -> Self {
-        // calculate new bound on number of bits
-        let lhs_max_bits = self
-            .coefficients
-            .iter()
-            .map(|mmi| mmi.bitsize_bound)
-            .max()
-            .unwrap_or_default();
-        let rhs_max_bits = other
-            .coefficients
-            .iter()
-            .map(|mmi| mmi.bitsize_bound)
-            .max()
-            .unwrap_or_default();
-        let bits =
-            1 + self.coefficients.len() + other.coefficients.len() + lhs_max_bits + rhs_max_bits;
-
-        // if not enough capacity for this many bits, activate limbs and recurse once
-        if self
-            .coefficients
-            .iter()
-            .chain(other.coefficients.iter())
-            .map(|mmi| mmi.bitsize_bound)
-            .min()
-            .unwrap_or_default()
-            < bits
-        {
-            let mut self_with_activated_limbs = self.clone();
-            self_with_activated_limbs
-                .coefficients
-                .iter_mut()
-                .for_each(|mmi| mmi.expand_capacity(bits));
-            let mut other_with_activated_limbs = other.clone();
-            other_with_activated_limbs
-                .coefficients
-                .iter_mut()
-                .for_each(|mmi| mmi.expand_capacity(bits));
-            Self::cyclotomic_mul_with_n_bits(
-                &self_with_activated_limbs,
-                &other_with_activated_limbs,
-                bits,
-            )
-        } else {
-            Self::cyclotomic_mul_with_n_bits(self, other, bits)
-        }
-    }
-
-    pub fn cyclotomic_mul_with_n_bits(lhs: &Self, rhs: &Self, bits: usize) -> Self {
-        let n = lhs.coefficients.len();
-        let num_limbs = MultiModInt::num_limbs_needed(bits);
-        // create object to be populated and returned
+        let num_limbs = self.coefficients[0].limbs.len();
+        let n = self.coefficients.len();
         let mut result =
-            Polynomial::<MultiModInt>::new(vec![MultiModInt::zero_with_capacity(bits); n]);
+            Polynomial::<MultiModInt>::new(vec![MultiModInt::zero_with_num_limbs(num_limbs); n]);
 
         // populate with cyclotomic products
         let cyclotomic_mul_ith_limbs_p = [
@@ -942,7 +927,7 @@ impl Polynomial<MultiModInt> {
             .enumerate()
             .take(num_limbs)
         {
-            function(lhs, rhs, &mut result, i);
+            function(self, other, &mut result, i);
         }
 
         result
@@ -1039,6 +1024,7 @@ pub(crate) mod test {
     use proptest::collection::vec;
     use proptest::prop_assert_eq;
     use proptest::proptest;
+    use proptest::strategy;
     use proptest::strategy::BoxedStrategy;
     use proptest::strategy::Just;
     use proptest::strategy::Strategy;
@@ -1070,6 +1056,15 @@ pub(crate) mod test {
             .boxed()
     }
 
+    fn arbitrary_multimodint_with_capacity(
+        bitlen: usize,
+        capacity: usize,
+    ) -> BoxedStrategy<MultiModInt> {
+        arbitrary_bigint(bitlen)
+            .prop_map(move |bi| MultiModInt::from_bigint_with_capacity(&bi, capacity))
+            .boxed()
+    }
+
     fn arbitrary_multimodint_polynomial(
         bitlen: usize,
         num_coefficients: usize,
@@ -1077,6 +1072,19 @@ pub(crate) mod test {
         vec(arbitrary_multimodint(bitlen), num_coefficients)
             .prop_map(Polynomial::new)
             .boxed()
+    }
+
+    fn arbitrary_multimodint_polynomial_with_capacity(
+        bitlen: usize,
+        num_coefficients: usize,
+        capacity: usize,
+    ) -> BoxedStrategy<Polynomial<MultiModInt>> {
+        vec(
+            arbitrary_multimodint_with_capacity(bitlen, capacity),
+            num_coefficients,
+        )
+        .prop_map(Polynomial::new)
+        .boxed()
     }
 
     pub(crate) fn arbitrary_bigint_polynomial(
@@ -1224,8 +1232,10 @@ pub(crate) mod test {
         #[strategy(0usize..5)] _logn: usize,
         #[strategy(Just(1<<#_logn))] n: usize,
         #[strategy(0usize..567)] _bitlen: usize,
-        #[strategy(arbitrary_multimodint_polynomial(#_bitlen, #n))] a: Polynomial<MultiModInt>,
-        #[strategy(arbitrary_multimodint_polynomial(#_bitlen, #n))] b: Polynomial<MultiModInt>,
+        #[strategy(arbitrary_multimodint_polynomial_with_capacity(#_bitlen, #n, 1 + 2*#_bitlen + #_logn))]
+        a: Polynomial<MultiModInt>,
+        #[strategy(arbitrary_multimodint_polynomial_with_capacity(#_bitlen, #n, 1 + 2*#_bitlen + #_logn))]
+        b: Polynomial<MultiModInt>,
     ) {
         let product = a.clone() * b.clone();
         let c_trad = product.reduce_by_cyclotomic(n);
@@ -1236,8 +1246,12 @@ pub(crate) mod test {
 
     #[strategy_proptest]
     fn cyclotomic_multiplication_lopsided(
-        #[strategy(arbitrary_multimodint_polynomial(4, 4))] a: Polynomial<MultiModInt>,
-        #[strategy(arbitrary_multimodint_polynomial(5461, 4))] b: Polynomial<MultiModInt>,
+        #[strategy(arbitrary_multimodint_polynomial_with_capacity(4, 4, 6000))] a: Polynomial<
+            MultiModInt,
+        >,
+        #[strategy(arbitrary_multimodint_polynomial_with_capacity(5461, 4, 6000))] b: Polynomial<
+            MultiModInt,
+        >,
     ) {
         let product = a.clone() * b.clone();
         let c_trad = product.reduce_by_cyclotomic(4);
@@ -1254,5 +1268,15 @@ pub(crate) mod test {
         let multimodint = MultiModInt::try_from(biguint.clone()).unwrap();
         let biguint_again = BigUint::from(multimodint);
         prop_assert_eq!(biguint, biguint_again);
+    }
+
+    #[strategy_proptest]
+    fn test_from_bigint_with_capacity(
+        #[strategy(100usize..1000)] capacity: usize,
+        #[strategy(arbitrary_bigint(100))] bigint: BigInt,
+    ) {
+        let direct = MultiModInt::from_bigint_with_capacity(&bigint, capacity);
+        let idiomatic = MultiModInt::try_from(bigint).unwrap();
+        prop_assert_eq!(idiomatic, direct);
     }
 }
