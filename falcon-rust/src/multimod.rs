@@ -32,28 +32,20 @@ pub(crate) const MULTIMOD_MAX_CAPACITY: usize = MODULI.len() * 30;
 pub struct MultiModInt {
     /// List of residues modulo p_i
     limbs: Vec<u32>,
-
-    /// Bound on the number of bits
-    bitsize_bound: usize,
 }
 
 impl MultiModInt {
     pub fn from_biguint_with_num_limbs(int: BigUint, num: usize) -> MultiModInt {
-        let bits = int.bits() as usize;
         let mut tree: &ProductTree = &MASTER_TREE;
         let num_halvings = MODULI.len().ilog2() - num.next_power_of_two().ilog2();
         for _ in 0..num_halvings {
             tree = tree.as_branch().left.as_ref();
         }
         let limbs = tree.reduce(&int)[0..num].to_vec();
-        MultiModInt {
-            limbs,
-            bitsize_bound: bits,
-        }
+        MultiModInt { limbs }
     }
 
     pub fn from_bigint_with_capacity(int: &BigInt, capacity: usize) -> MultiModInt {
-        let bits = int.bits() as usize;
         let mut tree: &ProductTree = &MASTER_TREE;
         let num_limbs = Self::num_limbs_needed(capacity);
         let num_halvings = MODULI.len().ilog2() - num_limbs.next_power_of_two().ilog2();
@@ -66,29 +58,7 @@ impl MultiModInt {
                 *limb = p - *limb;
             }
         }
-        MultiModInt {
-            limbs,
-            bitsize_bound: bits,
-        }
-    }
-
-    fn get_more_limbs(&self, total_count: usize) -> Vec<u32> {
-        let int = BigInt::from(self.clone());
-        let product = &PARTIAL_PRODUCTS[total_count - 1];
-        let uint = if int < BigInt::zero() {
-            (product.to_bigint().unwrap() + int).to_biguint().unwrap()
-        } else {
-            int.to_biguint().unwrap()
-        };
-        let mut limbs = self.limbs.clone();
-        for p in MODULI.into_iter().take(total_count).skip(self.limbs.len()) {
-            limbs.push(
-                uint.mod_floor(&BigUint::from_u32(p).unwrap())
-                    .to_u32()
-                    .unwrap(),
-            );
-        }
-        limbs
+        MultiModInt { limbs }
     }
 
     pub fn num_limbs_needed(bits: usize) -> usize {
@@ -107,14 +77,12 @@ impl MultiModInt {
         let num = Self::num_limbs_needed(bits);
         Self {
             limbs: vec![0u32; num],
-            bitsize_bound: 1,
         }
     }
 
     pub fn zero_with_num_limbs(num_limbs: usize) -> Self {
         Self {
             limbs: vec![0u32; num_limbs],
-            bitsize_bound: 1,
         }
     }
 
@@ -128,7 +96,6 @@ impl MultiModInt {
             self.limbs
                 .push(integer.mod_floor(&BigInt::from(p)).to_u32().unwrap());
         }
-        self.bitsize_bound = bits
     }
 
     pub fn bin(&self) -> String {
@@ -163,19 +130,13 @@ impl PartialEq for MultiModInt {
 impl Add for MultiModInt {
     type Output = MultiModInt;
 
-    fn add(self, rhs: Self) -> Self::Output {
-        let bits = 1 + usize::max(self.bitsize_bound, rhs.bitsize_bound);
-        let num = usize::min(MODULI.len(), Self::num_limbs_needed(bits));
-        let self_limbs = self.get_more_limbs(num);
-        let other_limbs = rhs.get_more_limbs(num);
+    fn add(self, other: Self) -> Self::Output {
+        let num = usize::min(self.limbs.len(), other.limbs.len());
         let mut limbs = Vec::<u32>::with_capacity(num);
         for i in 0..num {
-            limbs.push((self_limbs[i] + other_limbs[i]) % MODULI[i]);
+            limbs.push((self.limbs[i] + other.limbs[i]) % MODULI[i]);
         }
-        let output = Self::Output {
-            limbs,
-            bitsize_bound: bits,
-        };
+        let output = Self::Output { limbs };
         output
     }
 }
@@ -195,22 +156,16 @@ impl Sum for MultiModInt {
 impl Sub for MultiModInt {
     type Output = MultiModInt;
 
-    fn sub(self, rhs: Self) -> Self::Output {
-        let bits = 1 + usize::max(self.bitsize_bound, rhs.bitsize_bound);
-        let num = usize::min(MODULI.len(), Self::num_limbs_needed(bits));
-        let self_limbs = self.get_more_limbs(num);
-        let other_limbs = rhs.get_more_limbs(num);
+    fn sub(self, other: Self) -> Self::Output {
+        let num = usize::min(self.limbs.len(), other.limbs.len());
         let mut limbs = Vec::<u32>::with_capacity(num);
         for i in 0..num {
             limbs.push(
-                (((self_limbs[i] as u64) + ((MODULI[i] as u64) - (other_limbs[i] as u64)))
+                (((self.limbs[i] as u64) + ((MODULI[i] as u64) - (other.limbs[i] as u64)))
                     % (MODULI[i] as u64)) as u32,
             );
         }
-        Self::Output {
-            limbs,
-            bitsize_bound: bits,
-        }
+        Self::Output { limbs }
     }
 }
 
@@ -223,21 +178,31 @@ impl SubAssign for MultiModInt {
 impl Mul for MultiModInt {
     type Output = MultiModInt;
 
-    fn mul(self, rhs: Self) -> Self::Output {
-        let bits = self.bitsize_bound + rhs.bitsize_bound;
-        let num = usize::min(MODULI.len(), Self::num_limbs_needed(bits));
-        let self_limbs = self.get_more_limbs(num);
-        let other_limbs = rhs.get_more_limbs(num);
+    fn mul(self, other: Self) -> Self::Output {
+        let num = usize::min(self.limbs.len(), other.limbs.len());
         let mut limbs = Vec::<u32>::with_capacity(num);
         for i in 0..num {
             limbs.push(
-                (((self_limbs[i] as u64) * (other_limbs[i] as u64)) % (MODULI[i] as u64)) as u32,
+                (((self.limbs[i] as u64) * (other.limbs[i] as u64)) % (MODULI[i] as u64)) as u32,
             );
         }
-        let output = Self {
-            limbs,
-            bitsize_bound: bits,
-        };
+        let output = Self { limbs };
+        output
+    }
+}
+
+impl Mul for &MultiModInt {
+    type Output = MultiModInt;
+
+    fn mul(self, other: Self) -> Self::Output {
+        let num = usize::min(self.limbs.len(), other.limbs.len());
+        let mut limbs = Vec::<u32>::with_capacity(num);
+        for i in 0..num {
+            limbs.push(
+                (((self.limbs[i] as u64) * (other.limbs[i] as u64)) % (MODULI[i] as u64)) as u32,
+            );
+        }
+        let output = MultiModInt { limbs };
         output
     }
 }
@@ -256,18 +221,14 @@ impl Neg for MultiModInt {
         for (i, p) in MODULI.into_iter().take(self.limbs.len()).enumerate() {
             limbs[i] = (p - self.limbs[i]) % p;
         }
-        Self::Output {
-            limbs,
-            bitsize_bound: self.bitsize_bound,
-        }
+        Self::Output { limbs }
     }
 }
 
 impl Zero for MultiModInt {
     fn zero() -> Self {
         Self {
-            limbs: vec![0u32; 1],
-            bitsize_bound: 1,
+            limbs: vec![0u32; MODULI.len()],
         }
     }
 
@@ -279,8 +240,7 @@ impl Zero for MultiModInt {
 impl One for MultiModInt {
     fn one() -> Self {
         Self {
-            limbs: vec![1u32; 1],
-            bitsize_bound: 1,
+            limbs: vec![1u32; MODULI.len()],
         }
     }
 }
@@ -362,6 +322,43 @@ impl From<MultiModInt> for BigInt {
 }
 
 impl Polynomial<MultiModInt> {
+    pub fn cyclotomic_mul_prepare_ith_limb<const P: u32>(&mut self, i: usize) {
+        let n = self.coefficients.len();
+        let mut self_vector = self
+            .coefficients
+            .iter()
+            .map(|c| PrimeField::<P>(c.limbs[i]))
+            .collect_vec();
+        let psi_rev = PrimeField::<P>::bitreversed_powers(n);
+        PrimeField::<P>::fft(&mut self_vector, &psi_rev);
+        self.coefficients
+            .iter_mut()
+            .zip(self_vector)
+            .for_each(|(c, v)| {
+                c.limbs[i] = v.0;
+            });
+    }
+
+    pub fn cyclotomic_mul_finalize_ith_limb<const P: u32>(&mut self, i: usize) {
+        let n = self.coefficients.len();
+        let mut self_vector = self
+            .coefficients
+            .iter()
+            .map(|c| PrimeField::<P>(c.limbs[i]))
+            .collect_vec();
+
+        let psi_rev_inv = PrimeField::<P>::bitreversed_powers_inverse(n);
+        let ninv = PrimeField::<P>(n as u32).inverse_or_zero();
+        PrimeField::<P>::ifft(&mut self_vector, &psi_rev_inv, ninv);
+
+        self.coefficients
+            .iter_mut()
+            .zip(self_vector)
+            .for_each(|(c, v)| {
+                c.limbs[i] = v.0;
+            });
+    }
+
     fn cyclotomic_mul_ith_limb<const P: u32>(&self, other: &Self, result: &mut Self, i: usize) {
         let n = self.coefficients.len();
 
@@ -393,6 +390,1068 @@ impl Polynomial<MultiModInt> {
         for (j, rj) in result_vector.into_iter().enumerate() {
             result.coefficients[j].limbs[i] = rj.0;
         }
+    }
+
+    pub(crate) fn cyclotomic_mul_prepare(&mut self) {
+        let cyclotomic_mul_prepare_ith_limbs_p = [
+            Self::cyclotomic_mul_prepare_ith_limb::<1073754113>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1073950721>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1073958913>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1073983489>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1074196481>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1074343937>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1074442241>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1074475009>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1074515969>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1074524161>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1074548737>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1074589697>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1074597889>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1074688001>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1074696193>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1074810881>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1074835457>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1074941953>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1075007489>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1075064833>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1075105793>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1075351553>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1075376129>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1075449857>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1075507201>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1075621889>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1075695617>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1075720193>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1075752961>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1076039681>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1076064257>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1076162561>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1076187137>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1076211713>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1076269057>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1076334593>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1076391937>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1076531201>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1076613121>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1076908033>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1076948993>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1077047297>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1077178369>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1077252097>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1077391361>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1077399553>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1077620737>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1077686273>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1077792769>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1077882881>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1078038529>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1078079489>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1078112257>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1078153217>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1078210561>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1078333441>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1078382593>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1078398977>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1078497281>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1078505473>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1078546433>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1078571009>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1078620161>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1078775809>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1078849537>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1078939649>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1079185409>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1079193601>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1079357441>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1079431169>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1079603201>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1079627777>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1079635969>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1079676929>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1079685121>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1079734273>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1079832577>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1079848961>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1079873537>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1079922689>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1080020993>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1080348673>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1080365057>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1080446977>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1080496129>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1080512513>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1080741889>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1080864769>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1080938497>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1080954881>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1081077761>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1081225217>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1081323521>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1081348097>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1081397249>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1081430017>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1081495553>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1081577473>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1081643009>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1081700353>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1081774081>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1081815041>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1081839617>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1081921537>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1082060801>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1082093569>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1082331137>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1082462209>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1082552321>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1082601473>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1082699777>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1082724353>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1082806273>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1082904577>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1082929153>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1083002881>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1083076609>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1083117569>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1083215873>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1083289601>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1083371521>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1083518977>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1083535361>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1083928577>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1083953153>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1084076033>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1084133377>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1084149761>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1084297217>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1084477441>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1084518401>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1084641281>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1084649473>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1084674049>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1084690433>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1084813313>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1084911617>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1084968961>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1085140993>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1085181953>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1085255681>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1085411329>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1085501441>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1085534209>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1085550593>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1085607937>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1085648897>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1085673473>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1085779969>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1085796353>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1085870081>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1085894657>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1085952001>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1086066689>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1086115841>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1086345217>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1086410753>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1086443521>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1086566401>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1086713857>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1086763009>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1086853121>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1086902273>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1086935041>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1087025153>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1087148033>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1087254529>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1087303681>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1087418369>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1087451137>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1087475713>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1087492097>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1087762433>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1087836161>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1087860737>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1087885313>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1088311297>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1088376833>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1088401409>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1088409601>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1088458753>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1088606209>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1088647169>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1088679937>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1088778241>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1088802817>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1088851969>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1088868353>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1088966657>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1089220609>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1089458177>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1089540097>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1089835009>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1089949697>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1090170881>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1090179073>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1090203649>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1090293761>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1090400257>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1090490369>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1090498561>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1090646017>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1090768897>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1090867201>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1091014657>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1091104769>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1091178497>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1091399681>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1091571713>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1091850241>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1092022273>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1092038657>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1092210689>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1092268033>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1092333569>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1092636673>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1092653057>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1092661249>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1092734977>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1092882433>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1092923393>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1092997121>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1093005313>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1093152769>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1093292033>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1093414913>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1093439489>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1093513217>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1093537793>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1093570561>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1093939201>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1094184961>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1094250497>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1094258689>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1094299649>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1094356993>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1094381569>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1094430721>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1094471681>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1094504449>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1094725633>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1094889473>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1094914049>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1094946817>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1094963201>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1094995969>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1095012353>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1095045121>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1095331841>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1095462913>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1095536641>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1095585793>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1095700481>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1095708673>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1095774209>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1095847937>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1096101889>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1096142849>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1096175617>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1096216577>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1096224769>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1096339457>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1096388609>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1096396801>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1096486913>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1096544257>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1096609793>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1096716289>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1096765441>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1096880129>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1096937473>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1096953857>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1096962049>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1097076737>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1097175041>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1097183233>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1097199617>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1097256961>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1097306113>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1097322497>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1097453569>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1097469953>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1097527297>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1097691137>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1097715713>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1097748481>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1097895937>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1098035201>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1098084353>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1098231809>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1098280961>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1098313729>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1098387457>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1098403841>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1098485761>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1098731521>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1098756097>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1098780673>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1098805249>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1098854401>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1098919937>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1099042817>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1099067393>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1099272193>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1099296769>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1099370497>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1099411457>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1099591681>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1099665409>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1099755521>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1099763713>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1100001281>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1100132353>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1100173313>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1100296193>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1100451841>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1100492801>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1100500993>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1100574721>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1100623873>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1100689409>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1100697601>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1100812289>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1100820481>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1100861441>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1100894209>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1101107201>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1101139969>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1101189121>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1101213697>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1101352961>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1101361153>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1101385729>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1101434881>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1101549569>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1101557761>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1101598721>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1101623297>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1101672449>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1101729793>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1101852673>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1101926401>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1102041089>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1102163969>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1102295041>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1102360577>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1102483457>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1102532609>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1102565377>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1102712833>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1102860289>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1102934017>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1103147009>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1103196161>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1103245313>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1103343617>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1103548417>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1103835137>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1103843329>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1103917057>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1103966209>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1104007169>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1104261121>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1104408577>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1104457729>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1104654337>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1104695297>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1104703489>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1104719873>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1104867329>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1105195009>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1105309697>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1105367041>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1105408001>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1105457153>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1105489921>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1105514497>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1105555457>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1105580033>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1105604609>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1105686529>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1105784833>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1105825793>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1105883137>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1105907713>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1105981441>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1106030593>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1106071553>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1106227201>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1106300929>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1106350081>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1106374657>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1106399233>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1106464769>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1106513921>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1106538497>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1106546689>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1106710529>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1106931713>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1107030017>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1107054593>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1107521537>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1107619841>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1107668993>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1107816449>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1108013057>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1108021249>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1108062209>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1108135937>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1108144129>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1108217857>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1108381697>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1108430849>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1108439041>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1108463617>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1108488193>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1108553729>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1108586497>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1108611073>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1108750337>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1108774913>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1108922369>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1108979713>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1109004289>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1109094401>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1109127169>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1109217281>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1109299201>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1109323777>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1109618689>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1109692417>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1109708801>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1109880833>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1109962753>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1110085633>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1110151169>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1110224897>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1110249473>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1110282241>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1110306817>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1110454273>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1110716417>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1111109633>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1111166977>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1111183361>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1111216129>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1111232513>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1111257089>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1111412737>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1111461889>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1111502849>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1111560193>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1111584769>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1111625729>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1111658497>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1111683073>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1111756801>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1111797761>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1111822337>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1111928833>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1111994369>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1112043521>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1112174593>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1112289281>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1112338433>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1112363009>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1112371201>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1112494081>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1112567809>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1112682497>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1112739841>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1112887297>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1112952833>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1112977409>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1113059329>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1113346049>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1113403393>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1113567233>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1113600001>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1113747457>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1113886721>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1113894913>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1113935873>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1114034177>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1114165249>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1114238977>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1114451969>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1114632193>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1114746881>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1114771457>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1114894337>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1115025409>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1115074561>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1115148289>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1115410433>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1115492353>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1115590657>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1115615233>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1115631617>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1115713537>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1115729921>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1115762689>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1115803649>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1115901953>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1116131329>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1116270593>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1116418049>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1116549121>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1116639233>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1116794881>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1116917761>,
+            Self::cyclotomic_mul_prepare_ith_limb::<1116991489>,
+        ];
+
+        let num_limbs = self.coefficients[0].limbs.len();
+        for (i, function) in cyclotomic_mul_prepare_ith_limbs_p
+            .iter()
+            .enumerate()
+            .take(num_limbs)
+        {
+            function(self, i);
+        }
+    }
+
+    pub(crate) fn cyclotomic_mul_finalize(&mut self) {
+        let cyclotomic_mul_finalize_ith_limbs_p = [
+            Self::cyclotomic_mul_finalize_ith_limb::<1073754113>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1073950721>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1073958913>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1073983489>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1074196481>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1074343937>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1074442241>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1074475009>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1074515969>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1074524161>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1074548737>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1074589697>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1074597889>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1074688001>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1074696193>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1074810881>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1074835457>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1074941953>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1075007489>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1075064833>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1075105793>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1075351553>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1075376129>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1075449857>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1075507201>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1075621889>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1075695617>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1075720193>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1075752961>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1076039681>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1076064257>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1076162561>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1076187137>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1076211713>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1076269057>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1076334593>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1076391937>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1076531201>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1076613121>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1076908033>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1076948993>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1077047297>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1077178369>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1077252097>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1077391361>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1077399553>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1077620737>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1077686273>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1077792769>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1077882881>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1078038529>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1078079489>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1078112257>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1078153217>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1078210561>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1078333441>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1078382593>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1078398977>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1078497281>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1078505473>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1078546433>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1078571009>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1078620161>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1078775809>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1078849537>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1078939649>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1079185409>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1079193601>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1079357441>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1079431169>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1079603201>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1079627777>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1079635969>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1079676929>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1079685121>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1079734273>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1079832577>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1079848961>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1079873537>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1079922689>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1080020993>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1080348673>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1080365057>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1080446977>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1080496129>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1080512513>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1080741889>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1080864769>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1080938497>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1080954881>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1081077761>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1081225217>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1081323521>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1081348097>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1081397249>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1081430017>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1081495553>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1081577473>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1081643009>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1081700353>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1081774081>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1081815041>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1081839617>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1081921537>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1082060801>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1082093569>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1082331137>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1082462209>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1082552321>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1082601473>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1082699777>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1082724353>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1082806273>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1082904577>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1082929153>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1083002881>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1083076609>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1083117569>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1083215873>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1083289601>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1083371521>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1083518977>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1083535361>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1083928577>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1083953153>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1084076033>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1084133377>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1084149761>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1084297217>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1084477441>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1084518401>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1084641281>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1084649473>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1084674049>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1084690433>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1084813313>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1084911617>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1084968961>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1085140993>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1085181953>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1085255681>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1085411329>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1085501441>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1085534209>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1085550593>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1085607937>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1085648897>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1085673473>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1085779969>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1085796353>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1085870081>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1085894657>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1085952001>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1086066689>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1086115841>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1086345217>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1086410753>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1086443521>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1086566401>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1086713857>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1086763009>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1086853121>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1086902273>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1086935041>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1087025153>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1087148033>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1087254529>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1087303681>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1087418369>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1087451137>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1087475713>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1087492097>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1087762433>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1087836161>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1087860737>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1087885313>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1088311297>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1088376833>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1088401409>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1088409601>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1088458753>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1088606209>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1088647169>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1088679937>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1088778241>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1088802817>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1088851969>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1088868353>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1088966657>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1089220609>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1089458177>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1089540097>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1089835009>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1089949697>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1090170881>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1090179073>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1090203649>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1090293761>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1090400257>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1090490369>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1090498561>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1090646017>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1090768897>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1090867201>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1091014657>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1091104769>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1091178497>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1091399681>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1091571713>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1091850241>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1092022273>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1092038657>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1092210689>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1092268033>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1092333569>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1092636673>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1092653057>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1092661249>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1092734977>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1092882433>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1092923393>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1092997121>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1093005313>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1093152769>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1093292033>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1093414913>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1093439489>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1093513217>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1093537793>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1093570561>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1093939201>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1094184961>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1094250497>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1094258689>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1094299649>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1094356993>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1094381569>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1094430721>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1094471681>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1094504449>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1094725633>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1094889473>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1094914049>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1094946817>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1094963201>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1094995969>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1095012353>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1095045121>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1095331841>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1095462913>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1095536641>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1095585793>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1095700481>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1095708673>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1095774209>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1095847937>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1096101889>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1096142849>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1096175617>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1096216577>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1096224769>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1096339457>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1096388609>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1096396801>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1096486913>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1096544257>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1096609793>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1096716289>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1096765441>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1096880129>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1096937473>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1096953857>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1096962049>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1097076737>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1097175041>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1097183233>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1097199617>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1097256961>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1097306113>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1097322497>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1097453569>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1097469953>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1097527297>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1097691137>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1097715713>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1097748481>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1097895937>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1098035201>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1098084353>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1098231809>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1098280961>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1098313729>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1098387457>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1098403841>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1098485761>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1098731521>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1098756097>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1098780673>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1098805249>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1098854401>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1098919937>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1099042817>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1099067393>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1099272193>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1099296769>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1099370497>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1099411457>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1099591681>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1099665409>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1099755521>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1099763713>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1100001281>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1100132353>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1100173313>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1100296193>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1100451841>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1100492801>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1100500993>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1100574721>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1100623873>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1100689409>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1100697601>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1100812289>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1100820481>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1100861441>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1100894209>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1101107201>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1101139969>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1101189121>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1101213697>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1101352961>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1101361153>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1101385729>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1101434881>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1101549569>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1101557761>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1101598721>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1101623297>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1101672449>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1101729793>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1101852673>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1101926401>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1102041089>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1102163969>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1102295041>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1102360577>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1102483457>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1102532609>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1102565377>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1102712833>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1102860289>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1102934017>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1103147009>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1103196161>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1103245313>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1103343617>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1103548417>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1103835137>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1103843329>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1103917057>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1103966209>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1104007169>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1104261121>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1104408577>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1104457729>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1104654337>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1104695297>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1104703489>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1104719873>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1104867329>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1105195009>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1105309697>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1105367041>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1105408001>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1105457153>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1105489921>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1105514497>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1105555457>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1105580033>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1105604609>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1105686529>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1105784833>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1105825793>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1105883137>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1105907713>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1105981441>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1106030593>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1106071553>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1106227201>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1106300929>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1106350081>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1106374657>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1106399233>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1106464769>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1106513921>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1106538497>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1106546689>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1106710529>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1106931713>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1107030017>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1107054593>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1107521537>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1107619841>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1107668993>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1107816449>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1108013057>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1108021249>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1108062209>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1108135937>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1108144129>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1108217857>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1108381697>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1108430849>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1108439041>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1108463617>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1108488193>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1108553729>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1108586497>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1108611073>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1108750337>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1108774913>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1108922369>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1108979713>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1109004289>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1109094401>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1109127169>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1109217281>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1109299201>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1109323777>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1109618689>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1109692417>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1109708801>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1109880833>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1109962753>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1110085633>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1110151169>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1110224897>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1110249473>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1110282241>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1110306817>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1110454273>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1110716417>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1111109633>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1111166977>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1111183361>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1111216129>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1111232513>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1111257089>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1111412737>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1111461889>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1111502849>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1111560193>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1111584769>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1111625729>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1111658497>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1111683073>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1111756801>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1111797761>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1111822337>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1111928833>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1111994369>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1112043521>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1112174593>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1112289281>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1112338433>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1112363009>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1112371201>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1112494081>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1112567809>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1112682497>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1112739841>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1112887297>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1112952833>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1112977409>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1113059329>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1113346049>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1113403393>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1113567233>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1113600001>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1113747457>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1113886721>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1113894913>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1113935873>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1114034177>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1114165249>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1114238977>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1114451969>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1114632193>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1114746881>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1114771457>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1114894337>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1115025409>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1115074561>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1115148289>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1115410433>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1115492353>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1115590657>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1115615233>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1115631617>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1115713537>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1115729921>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1115762689>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1115803649>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1115901953>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1116131329>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1116270593>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1116418049>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1116549121>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1116639233>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1116794881>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1116917761>,
+            Self::cyclotomic_mul_finalize_ith_limb::<1116991489>,
+        ];
+
+        let num_limbs = self.coefficients[0].limbs.len();
+        for (i, function) in cyclotomic_mul_finalize_ith_limbs_p
+            .iter()
+            .enumerate()
+            .take(num_limbs)
+        {
+            function(self, i);
+        }
+    }
+
+    pub(crate) fn cyclotomic_mul_hadamard(&self, other: &Self) -> Self {
+        Self::new(
+            self.coefficients
+                .iter()
+                .zip(other.coefficients.iter())
+                .map(|(l, r)| l.clone() * r.clone())
+                .collect_vec(),
+        )
     }
 
     /// Compute the product of two polynomials over multimodular integers and
@@ -1019,6 +2078,7 @@ pub(crate) mod test {
     use std::str::FromStr;
 
     use itertools::Itertools;
+    use num::Zero;
     use num::{BigInt, BigUint, Integer, One};
     use proptest::arbitrary::Arbitrary;
     use proptest::collection::vec;
@@ -1134,9 +2194,10 @@ pub(crate) mod test {
         #[strategy(arbitrary_bigint(1000))] c: BigInt,
     ) {
         let d = a.clone() * b.clone() - c.clone();
-        let d_mmi = MultiModInt::try_from(d).unwrap();
-        let mmi_d = MultiModInt::try_from(a).unwrap() * MultiModInt::try_from(b).unwrap()
-            - MultiModInt::try_from(c).unwrap();
+        let d_mmi = MultiModInt::from_bigint_with_capacity(&d, 2000);
+        let mmi_d = MultiModInt::from_bigint_with_capacity(&a, 2000)
+            * MultiModInt::from_bigint_with_capacity(&b, 2000)
+            - MultiModInt::from_bigint_with_capacity(&c, 2000);
         prop_assert_eq!(d_mmi, mmi_d);
     }
 
@@ -1169,87 +2230,35 @@ pub(crate) mod test {
     }
 
     #[strategy_proptest]
-    fn multimodint_polynomial_arithmetic_a(
-        #[strategy(0usize..5)] _logn: usize,
-        #[strategy(Just(1<<#_logn))] _n: usize,
-        #[strategy(Just(70))] _bitlen: usize,
-        #[strategy(arbitrary_bigint_polynomial(#_bitlen, #_n))] a: Polynomial<BigInt>,
-        #[strategy(arbitrary_bigint_polynomial(#_bitlen, #_n))] b: Polynomial<BigInt>,
-    ) {
-        let mut bigint_terms = vec![];
-        let mut multimod_terms = vec![];
-        for (ai, ac) in a.coefficients.iter().enumerate() {
-            for (bi, bc) in b.coefficients.iter().enumerate() {
-                if ai + bi == 11 {
-                    bigint_terms.push(ac.clone() * bc);
-                    multimod_terms.push(
-                        MultiModInt::try_from(ac.clone()).unwrap()
-                            * MultiModInt::try_from(bc.clone()).unwrap(),
-                    );
-                }
-            }
-        }
-        prop_assert_eq!(
-            bigint_terms
-                .iter()
-                .map(|bi| MultiModInt::try_from(bi.clone()).unwrap())
-                .collect_vec(),
-            multimod_terms.clone()
-        );
-        let bigint_sum = bigint_terms.into_iter().sum::<BigInt>();
-        let multimod_sum = multimod_terms.into_iter().sum();
-        prop_assert_eq!(MultiModInt::try_from(bigint_sum).unwrap(), multimod_sum);
-        let d = a.clone() * b.clone();
-        let mmi_d = Polynomial::<MultiModInt>::try_from(d.clone()).unwrap();
-
-        let d_mmi = Polynomial::<MultiModInt>::try_from(a.clone()).unwrap()
-            * Polynomial::<MultiModInt>::try_from(b.clone()).unwrap();
-
-        prop_assert_eq!(mmi_d, d_mmi);
-    }
-
-    #[strategy_proptest]
-    fn multimodint_polynomial_arithmetic_b(
-        #[strategy(0usize..4)] _logn: usize,
-        #[strategy(Just(1 << #_logn))] _n: usize,
-        #[strategy(Just(70))] _bitlen: usize,
-        #[strategy(arbitrary_bigint_polynomial(#_bitlen, #_n))] a: Polynomial<BigInt>,
-        #[strategy(arbitrary_bigint_polynomial(#_bitlen, #_n))] b: Polynomial<BigInt>,
-        #[strategy(arbitrary_bigint_polynomial(#_bitlen, #_n))] c: Polynomial<BigInt>,
-    ) {
-        let d = (a.clone() * b.clone()) - c.clone();
-        let mmi_d = Polynomial::<MultiModInt>::try_from(d.clone()).unwrap();
-
-        let d_mmi = Polynomial::<MultiModInt>::try_from(a.clone()).unwrap()
-            * Polynomial::<MultiModInt>::try_from(b.clone()).unwrap()
-            - Polynomial::<MultiModInt>::try_from(c).unwrap();
-
-        prop_assert_eq!(mmi_d, d_mmi);
-    }
-
-    #[strategy_proptest]
     fn cyclotomic_multiplication(
         #[strategy(0usize..5)] _logn: usize,
         #[strategy(Just(1<<#_logn))] n: usize,
         #[strategy(0usize..567)] _bitlen: usize,
         #[strategy(arbitrary_multimodint_polynomial_with_capacity(#_bitlen, #n, 1 + 2*#_bitlen + #_logn))]
-        a: Polynomial<MultiModInt>,
+        mut a: Polynomial<MultiModInt>,
         #[strategy(arbitrary_multimodint_polynomial_with_capacity(#_bitlen, #n, 1 + 2*#_bitlen + #_logn))]
-        b: Polynomial<MultiModInt>,
+        mut b: Polynomial<MultiModInt>,
     ) {
         let product = a.clone() * b.clone();
         let c_trad = product.reduce_by_cyclotomic(n);
 
         let c_fast = a.cyclotomic_mul(&b);
         assert_eq!(c_trad, c_fast);
+
+        a.cyclotomic_mul_prepare();
+        b.cyclotomic_mul_prepare();
+        let mut c_stepwise = a.cyclotomic_mul_hadamard(&b);
+        c_stepwise.cyclotomic_mul_finalize();
+
+        prop_assert_eq!(c_fast, c_stepwise);
     }
 
     #[strategy_proptest]
     fn cyclotomic_multiplication_lopsided(
-        #[strategy(arbitrary_multimodint_polynomial_with_capacity(4, 4, 6000))] a: Polynomial<
+        #[strategy(arbitrary_multimodint_polynomial_with_capacity(4, 4, 200))] mut a: Polynomial<
             MultiModInt,
         >,
-        #[strategy(arbitrary_multimodint_polynomial_with_capacity(5461, 4, 6000))] b: Polynomial<
+        #[strategy(arbitrary_multimodint_polynomial_with_capacity(50, 4, 200))] mut b: Polynomial<
             MultiModInt,
         >,
     ) {
@@ -1257,7 +2266,82 @@ pub(crate) mod test {
         let c_trad = product.reduce_by_cyclotomic(4);
 
         let c_fast = a.cyclotomic_mul(&b);
+
         assert_eq!(c_trad, c_fast);
+
+        a.cyclotomic_mul_prepare();
+        b.cyclotomic_mul_prepare();
+        let mut c_stepwise = a.cyclotomic_mul_hadamard(&b);
+        c_stepwise.cyclotomic_mul_finalize();
+
+        prop_assert_eq!(c_fast, c_stepwise);
+    }
+
+    #[test]
+    fn cyclotomic_multiplication_unit2() {
+        let mut a = Polynomial::<MultiModInt>::new(vec![
+            MultiModInt::from_bigint_with_capacity(&BigInt::from_str("0").unwrap(), 6000),
+            MultiModInt::from_bigint_with_capacity(&BigInt::from_str("0").unwrap(), 6000),
+            MultiModInt::from_bigint_with_capacity(&BigInt::from_str("537133056").unwrap(), 6000),
+            MultiModInt::from_bigint_with_capacity(&BigInt::from_str("0").unwrap(), 6000),
+        ]);
+        let mut b = Polynomial::<MultiModInt>::new(vec![
+            MultiModInt::from_bigint_with_capacity(&BigInt::from_str("0").unwrap(), 6000),
+            MultiModInt::from_bigint_with_capacity(&BigInt::from_str("0").unwrap(), 6000),
+            MultiModInt::from_bigint_with_capacity(&BigInt::from_str("537133056").unwrap(), 6000),
+            MultiModInt::from_bigint_with_capacity(&BigInt::from_str("0").unwrap(), 6000),
+        ]);
+
+        let product = a.clone() * b.clone();
+        let c_trad = product.reduce_by_cyclotomic(4);
+
+        let c_fast = a.cyclotomic_mul(&b);
+
+        assert_eq!(c_trad, c_fast);
+
+        a.cyclotomic_mul_prepare();
+        b.cyclotomic_mul_prepare();
+        let mut c_stepwise = a.cyclotomic_mul_hadamard(&b);
+        c_stepwise.cyclotomic_mul_finalize();
+
+        assert_eq!(c_trad, c_stepwise);
+    }
+
+    #[test]
+    fn cyclotomic_multiplication_unit() {
+        let mut a = Polynomial::<MultiModInt>::new(vec![
+            MultiModInt::from_bigint_with_capacity(&BigInt::one(), 6000),
+            -MultiModInt::from_bigint_with_capacity(&BigInt::one(), 6000),
+            MultiModInt::from_bigint_with_capacity(&BigInt::one(), 6000),
+            MultiModInt::from_bigint_with_capacity(&BigInt::one(), 6000),
+        ]);
+        let mut b = Polynomial::<MultiModInt>::new(vec![
+            MultiModInt::from_bigint_with_capacity(&BigInt::zero(), 6000),
+            MultiModInt::from_bigint_with_capacity(&BigInt::one(), 6000),
+            MultiModInt::from_bigint_with_capacity(&BigInt::zero(), 6000),
+            MultiModInt::from_bigint_with_capacity(&BigInt::one(), 6000),
+        ]);
+        let two = MultiModInt::from_bigint_with_capacity(&BigInt::from_str("2").unwrap(), 6000);
+        let expected = Polynomial::<MultiModInt>::new(vec![
+            MultiModInt::from_bigint_with_capacity(&BigInt::zero(), 6000),
+            MultiModInt::from_bigint_with_capacity(&BigInt::zero(), 6000),
+            -two.clone(),
+            two,
+        ]);
+        let product = a.clone() * b.clone();
+        let c_trad = product.reduce_by_cyclotomic(4);
+
+        let c_fast = a.cyclotomic_mul(&b);
+
+        assert_eq!(expected, c_fast.clone());
+        assert_eq!(c_trad, c_fast);
+
+        a.cyclotomic_mul_prepare();
+        b.cyclotomic_mul_prepare();
+        let mut c_stepwise = a.cyclotomic_mul_hadamard(&b);
+        c_stepwise.cyclotomic_mul_finalize();
+
+        assert_eq!(c_trad, c_stepwise);
     }
 
     #[strategy_proptest(cases = 10)]
