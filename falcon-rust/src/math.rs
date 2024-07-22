@@ -1,14 +1,11 @@
 use std::io::{Read, Write};
 
-use hex::ToHex;
 use itertools::Itertools;
-use num::Signed;
 use num::{BigInt, FromPrimitive, One, Zero};
 use num_complex::Complex64;
-use rand::{rngs::StdRng, RngCore, SeedableRng};
 use sha3::{
-    digest::{crypto_common::KeyInit, ExtendableOutput, Update},
-    Shake256, Shake256Core,
+    digest::{ExtendableOutput, Update},
+    Shake256,
 };
 
 use crate::{
@@ -165,11 +162,12 @@ pub fn babai_reduce_mmi(
     .max()
     .unwrap();
 
-    let n = f.coefficients.len();
     let required_capacity = size as usize + 10;
 
-    let f_mmip = f.map(|c| MultiModInt::from_bigint_with_capacity(c, required_capacity));
-    let g_mmip = g.map(|c| MultiModInt::from_bigint_with_capacity(c, required_capacity));
+    let mut f_mmip = f.map(|c| MultiModInt::from_bigint_with_capacity(c, required_capacity));
+    f_mmip.cyclotomic_mul_prepare();
+    let mut g_mmip = g.map(|c| MultiModInt::from_bigint_with_capacity(c, required_capacity));
+    g_mmip.cyclotomic_mul_prepare();
 
     // let f_mmip = Polynomial::<MultiModInt>::try_from(f.clone()).unwrap();
     // let g_mmip = Polynomial::<MultiModInt>::try_from(g.clone()).unwrap();
@@ -229,11 +227,14 @@ pub fn babai_reduce_mmi(
 
         // let k_mmip = Polynomial::<MultiModInt>::try_from(k).unwrap();
 
-        let k_mmip = k.map(|c| MultiModInt::from_bigint_with_capacity(c, required_capacity));
+        let mut k_mmip = k.map(|c| MultiModInt::from_bigint_with_capacity(c, required_capacity));
+        k_mmip.cyclotomic_mul_prepare();
 
-        let kf_mmip = f_mmip.cyclotomic_mul(&k_mmip);
+        let mut kf_mmip = f_mmip.cyclotomic_mul_hadamard(&k_mmip);
+        kf_mmip.cyclotomic_mul_finalize();
         let kf = kf_mmip.map(|m| BigInt::from(m.clone()));
-        let kg_mmip = g_mmip.cyclotomic_mul(&k_mmip);
+        let mut kg_mmip = g_mmip.cyclotomic_mul_hadamard(&k_mmip);
+        kg_mmip.cyclotomic_mul_finalize();
         let kg = kg_mmip.map(|m| BigInt::from(m.clone()));
 
         // println!(
@@ -478,18 +479,12 @@ mod test {
 
     use itertools::Itertools;
     use num::{BigInt, FromPrimitive};
-    use proptest::arbitrary::Arbitrary;
-    use proptest::collection::vec;
     use proptest::prop_assert_eq;
-    use proptest::proptest;
-    use proptest::strategy::BoxedStrategy;
     use proptest::strategy::Just;
-    use proptest::strategy::Strategy;
-    use rand::{thread_rng, Rng};
     use test_strategy::proptest as strategy_proptest;
 
     use crate::{
-        math::{gen_poly, gram_schmidt_norm_squared, ntru_gen, ntru_solve},
+        math::{gram_schmidt_norm_squared, ntru_gen, ntru_solve},
         multimod::test::arbitrary_bigint_polynomial,
         polynomial::Polynomial,
     };
