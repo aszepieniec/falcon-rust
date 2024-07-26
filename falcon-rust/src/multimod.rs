@@ -1459,7 +1459,10 @@ impl Polynomial<MultiModInt> {
     /// function assumes that all multimod ints have the same number of limbs,
     /// and that multimod ints with this number of ints have enough capacity to
     /// store every coefficient of the product.
-    pub(crate) fn cyclotomic_mul(&self, other: &Self) -> Self {
+    ///
+    /// Marked `pub` for benchmarking. Not part of the public API.
+    #[doc(hidden)]
+    pub fn cyclotomic_mul(&self, other: &Self) -> Self {
         let num_limbs = self.coefficients[0].limbs.len();
         let n = self.coefficients.len();
         let mut result =
