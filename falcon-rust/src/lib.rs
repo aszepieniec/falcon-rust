@@ -65,7 +65,7 @@ pub(crate) mod ffsampling;
 pub(crate) mod field;
 pub(crate) mod inverse;
 pub mod math; // pub for benching
-pub(crate) mod multimod;
+pub mod multimod; // pub for benching
 pub mod polynomial; // pub for benching
 pub(crate) mod product_tree;
 pub(crate) mod residue_number_system;

@@ -28,3 +28,7 @@ harness = false
 [[bench]]
 name = "babai_reduce"
 harness = false
+
+[[bench]]
+name = "cyclomul"
+harness = false
