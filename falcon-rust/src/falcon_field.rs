@@ -191,7 +191,7 @@ mod test {
 
     use crate::{
         cyclotomic_fourier::CyclotomicFourier,
-        field::{Felt, Q},
+        falcon_field::{Felt, Q},
         inverse::Inverse,
         polynomial::Polynomial,
     };

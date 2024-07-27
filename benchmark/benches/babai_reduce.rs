@@ -71,20 +71,6 @@ pub fn babai_reduce(c: &mut Criterion) {
     }
 
     group.finish();
-
-    let mut group = c.benchmark_group("babai reduce mmi");
-
-    for (&n, (&small, large)) in N.iter().zip(BITSIZE_SMALL.iter().zip(BITSIZE_LARGE)) {
-        group.bench_function(format!("{small}/{large}/{n}"), |b| {
-            b.iter(|| {
-                let (f, g, mut capital_f, mut capital_g) =
-                    generate_reducible_polynomials(small, large, n, &mut rng);
-                let _ = falcon_rust::math::babai_reduce_mmi(&f, &g, &mut capital_f, &mut capital_g);
-            })
-        });
-    }
-
-    group.finish();
 }
 
 criterion_group!(benches, babai_reduce);

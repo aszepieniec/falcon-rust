@@ -274,7 +274,7 @@ mod test {
 
     use crate::{
         encoding::{compress, compress_slow, decompress, decompress_slow},
-        field::Q,
+        falcon_field::Q,
     };
     use bit_vec::BitVec;
     use itertools::Itertools;

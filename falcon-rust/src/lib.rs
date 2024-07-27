@@ -60,13 +60,11 @@ pub(crate) mod encoding;
 pub(crate) mod falcon;
 pub mod falcon1024;
 pub mod falcon512;
+pub(crate) mod falcon_field;
 pub(crate) mod fast_fft;
 pub(crate) mod ffsampling;
-pub(crate) mod field;
 pub(crate) mod inverse;
 pub mod math; // pub for benching
-pub mod multimod; // pub for benching
 pub mod polynomial; // pub for benching
-pub(crate) mod product_tree;
-pub(crate) mod residue_number_system;
 pub(crate) mod samplerz;
+pub(crate) mod u32_field;
