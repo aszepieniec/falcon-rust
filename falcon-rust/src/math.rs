@@ -1,4 +1,7 @@
-use std::io::{Read, Write};
+use std::{
+    io::{Read, Write},
+    vec::IntoIter,
+};
 
 use itertools::Itertools;
 use num::{BigInt, FromPrimitive, One, Zero};
@@ -9,11 +12,13 @@ use sha3::{
 };
 
 use crate::{
+    cyclotomic_fourier::CyclotomicFourier,
+    falcon_field::{Felt, Q},
     fast_fft::FastFft,
-    field::{Felt, Q},
-    multimod::MultiModInt,
+    inverse::Inverse,
     polynomial::Polynomial,
     samplerz::sampler_z,
+    u32_field::U32Field,
 };
 
 /// Reduce the vector (F,G) relative to (f,g). This method follows the python
@@ -128,56 +133,44 @@ pub fn babai_reduce_bigint(
 /// This function is marked pub for the purpose of benchmarking; it is not
 /// considered part of the public API.
 #[doc(hidden)]
-pub fn babai_reduce_mmi(
-    f: &Polynomial<BigInt>,
-    g: &Polynomial<BigInt>,
-    capital_f: &mut Polynomial<BigInt>,
-    capital_g: &mut Polynomial<BigInt>,
+pub fn babai_reduce_i32(
+    f: &Polynomial<i32>,
+    g: &Polynomial<i32>,
+    capital_f: &mut Polynomial<i32>,
+    capital_g: &mut Polynomial<i32>,
 ) -> Result<(), String> {
-    // println!(
-    //     "\nbabai reduce called on integers of size ({}, {}, {}, {}) and len {}",
-    //     f.coefficients.iter().map(|c| c.bits()).max().unwrap(),
-    //     g.coefficients.iter().map(|c| c.bits()).max().unwrap(),
-    //     capital_f
-    //         .coefficients
-    //         .iter()
-    //         .map(|c| c.bits())
-    //         .max()
-    //         .unwrap(),
-    //     capital_g
-    //         .coefficients
-    //         .iter()
-    //         .map(|c| c.bits())
-    //         .max()
-    //         .unwrap(),
-    //     f.coefficients.len()
-    // );
-    let bitsize = |bi: &BigInt| (bi.bits() + 7) & (u64::MAX ^ 7);
-    let size = [
-        f.map(bitsize).fold(0, |a, &b| u64::max(a, b)),
-        g.map(bitsize).fold(0, |a, &b| u64::max(a, b)),
+    let n = f.coefficients.len();
+    let bitreversed_powers = U32Field::bitreversed_powers(n);
+    let bitreversed_powers_inv = U32Field::bitreversed_powers_inverse(n);
+    let ninv = U32Field::new(n as i32).inverse_or_zero();
+    let mut f_ntt: Polynomial<U32Field> = f.map(|&i| U32Field::new(i));
+    let mut g_ntt: Polynomial<U32Field> = g.map(|&i| U32Field::new(i));
+    U32Field::fft(&mut f_ntt.coefficients, &bitreversed_powers);
+    U32Field::fft(&mut g_ntt.coefficients, &bitreversed_powers);
+
+    let bitsize = |itr: IntoIter<i32>| {
+        (itr.map(|i| i.abs()).max().unwrap() * 2)
+            .ilog2()
+            .next_multiple_of(8) as usize
+    };
+    let size = usize::max(
+        bitsize(
+            f.coefficients
+                .iter()
+                .chain(g.coefficients.iter())
+                .cloned()
+                .collect_vec()
+                .into_iter(),
+        ),
         53,
-    ]
-    .into_iter()
-    .max()
-    .unwrap();
-
-    let required_capacity = size as usize + 10;
-
-    let mut f_mmip = f.map(|c| MultiModInt::from_bigint_with_capacity(c, required_capacity));
-    f_mmip.cyclotomic_mul_prepare();
-    let mut g_mmip = g.map(|c| MultiModInt::from_bigint_with_capacity(c, required_capacity));
-    g_mmip.cyclotomic_mul_prepare();
-
-    // let f_mmip = Polynomial::<MultiModInt>::try_from(f.clone()).unwrap();
-    // let g_mmip = Polynomial::<MultiModInt>::try_from(g.clone()).unwrap();
+    );
 
     let shift = (size as i64) - 53;
     let f_adjusted = f
-        .map(|bi| Complex64::new(i64::try_from(bi >> shift).unwrap() as f64, 0.0))
+        .map(|i| Complex64::new(i64::try_from(i >> shift).unwrap() as f64, 0.0))
         .fft();
     let g_adjusted = g
-        .map(|bi| Complex64::new(i64::try_from(bi >> shift).unwrap() as f64, 0.0))
+        .map(|i| Complex64::new(i64::try_from(i >> shift).unwrap() as f64, 0.0))
         .fft();
 
     let f_star_adjusted = f_adjusted.map(|c| c.conj());
@@ -188,8 +181,15 @@ pub fn babai_reduce_mmi(
     let mut counter = 0;
     loop {
         let capital_size = [
-            capital_f.map(bitsize).fold(0, |a, &b| u64::max(a, b)),
-            capital_g.map(bitsize).fold(0, |a, &b| u64::max(a, b)),
+            bitsize(
+                capital_f
+                    .coefficients
+                    .iter()
+                    .chain(capital_g.coefficients.iter())
+                    .copied()
+                    .collect_vec()
+                    .into_iter(),
+            ),
             53,
         ]
         .into_iter()
@@ -211,55 +211,24 @@ pub fn babai_reduce_mmi(
             + capital_g_adjusted.hadamard_mul(&g_star_adjusted);
         let quotient = numerator.hadamard_div(&denominator_fft).ifft();
 
-        let k = quotient.map(|f| Into::<BigInt>::into(f.re.round() as i64));
+        let mut k_ntt = quotient.map(|f| U32Field::new(f.re.round() as i32));
+        U32Field::fft(&mut k_ntt.coefficients, &bitreversed_powers);
 
-        if k.is_zero() {
+        if k_ntt.is_zero() {
             break;
         }
-        // let kf = (k.clone().karatsuba(f))
-        //     .reduce_by_cyclotomic(n)
-        //     .map(|bi| bi << (capital_size - size));
-        // let kg = (k.clone().karatsuba(g))
-        //     .reduce_by_cyclotomic(n)
-        //     .map(|bi| bi << (capital_size - size));
-        // *capital_f -= kf;
-        // *capital_g -= kg;
 
-        // let k_mmip = Polynomial::<MultiModInt>::try_from(k).unwrap();
+        let mut kf_ntt = k_ntt.hadamard_mul(&f_ntt);
+        let mut kg_ntt = k_ntt.hadamard_mul(&g_ntt);
 
-        let mut k_mmip = k.map(|c| MultiModInt::from_bigint_with_capacity(c, required_capacity));
-        k_mmip.cyclotomic_mul_prepare();
+        U32Field::ifft(&mut kf_ntt.coefficients, &bitreversed_powers_inv, ninv);
+        U32Field::ifft(&mut kg_ntt.coefficients, &bitreversed_powers_inv, ninv);
 
-        let mut kf_mmip = f_mmip.cyclotomic_mul_hadamard(&k_mmip);
-        kf_mmip.cyclotomic_mul_finalize();
-        let kf = kf_mmip.map(|m| BigInt::from(m.clone()));
-        let mut kg_mmip = g_mmip.cyclotomic_mul_hadamard(&k_mmip);
-        kg_mmip.cyclotomic_mul_finalize();
-        let kg = kg_mmip.map(|m| BigInt::from(m.clone()));
+        let kf = kf_ntt.map(|p| p.balanced_value());
+        let kg = kg_ntt.map(|p| p.balanced_value());
 
-        // println!(
-        //     "product has {} bits",
-        //     kf.coefficients
-        //         .iter()
-        //         .chain(kg.coefficients.iter())
-        //         .map(|c| c.bits())
-        //         .max()
-        //         .unwrap()
-        // );
-
-        let shifted_kf = kf.map(|bi| bi << (capital_size - size));
-        let shifted_kg = kg.map(|bi| bi << (capital_size - size));
-
-        *capital_f -= shifted_kf;
-        *capital_g -= shifted_kg;
-
-        // println!("kf: {}", kf.coefficients.iter().join(","));
-        // println!("kf[0] len: {}", kf.coefficients[0].bits());
-        // println!("kf_mmip: {}", kf_mmip);
-        // println!(
-        //     "kf_mmip len: {}",
-        //     BigUint::from(kf_mmip.coefficients[0].clone()).bits()
-        // );
+        *capital_f -= kf;
+        *capital_g -= kg;
 
         counter += 1;
         if counter > 1000 {
@@ -329,6 +298,7 @@ fn ntru_solve(
     let f_prime = f.field_norm();
     let g_prime = g.field_norm();
     let (capital_f_prime, capital_g_prime) = ntru_solve(&f_prime, &g_prime)?;
+
     let capital_f_prime_xsq = capital_f_prime.lift_next_cyclotomic();
     let capital_g_prime_xsq = capital_g_prime.lift_next_cyclotomic();
     let f_minx = f.galois_adjoint();
@@ -337,7 +307,87 @@ fn ntru_solve(
     let mut capital_f = (capital_f_prime_xsq.karatsuba(&g_minx)).reduce_by_cyclotomic(n);
     let mut capital_g = (capital_g_prime_xsq.karatsuba(&f_minx)).reduce_by_cyclotomic(n);
 
-    match babai_reduce_mmi(f, g, &mut capital_f, &mut capital_g) {
+    match babai_reduce_bigint(f, g, &mut capital_f, &mut capital_g) {
+        Ok(_) => Some((capital_f, capital_g)),
+        Err(_e) => {
+            #[cfg(test)]
+            {
+                panic!("{}", _e);
+            }
+            #[cfg(not(test))]
+            {
+                None
+            }
+        }
+    }
+}
+
+fn ntru_solve_entrypoint(
+    f: Polynomial<i32>,
+    g: Polynomial<i32>,
+) -> Option<(Polynomial<i32>, Polynomial<i32>)> {
+    let n = f.coefficients.len();
+
+    let g_prime = g.field_norm().map(|c| BigInt::from(*c));
+    let f_prime = f.field_norm().map(|c| BigInt::from(*c));
+    let (capital_f_prime_bi, capital_g_prime_bi) = ntru_solve(&f_prime, &g_prime)?;
+
+    let capital_f_prime_coefficients = capital_f_prime_bi
+        .coefficients
+        .into_iter()
+        .map(|c| i32::try_from(c))
+        .collect_vec();
+    let capital_g_prime_coefficients = capital_g_prime_bi
+        .coefficients
+        .into_iter()
+        .map(|c| i32::try_from(c))
+        .collect_vec();
+
+    if !capital_f_prime_coefficients
+        .iter()
+        .chain(capital_g_prime_coefficients.iter())
+        .all(|c| c.is_ok())
+    {
+        return None;
+    }
+    let capital_f_prime = Polynomial::new(
+        capital_f_prime_coefficients
+            .into_iter()
+            .map(|c| c.unwrap().clone())
+            .collect_vec(),
+    );
+    let capital_g_prime = Polynomial::new(
+        capital_g_prime_coefficients
+            .into_iter()
+            .map(|c| c.unwrap().clone())
+            .collect_vec(),
+    );
+
+    let capital_f_prime_xsq = capital_f_prime.lift_next_cyclotomic();
+    let capital_g_prime_xsq = capital_g_prime.lift_next_cyclotomic();
+    let f_minx = f.galois_adjoint();
+    let g_minx = g.galois_adjoint();
+
+    let psi_rev = U32Field::bitreversed_powers(n);
+    let psi_rev_inv = U32Field::bitreversed_powers_inverse(n);
+    let ninv = U32Field::new(n as i32).inverse_or_zero();
+    let mut cfp_ntt = capital_f_prime_xsq.map(|c| U32Field::new(*c as i32));
+    let mut cgp_ntt = capital_g_prime_xsq.map(|c| U32Field::new(*c as i32));
+    let mut gm_ntt = g_minx.map(|c| U32Field::new(*c as i32));
+    let mut fm_ntt = f_minx.map(|c| U32Field::new(*c as i32));
+    U32Field::fft(&mut cfp_ntt.coefficients, &psi_rev);
+    U32Field::fft(&mut cgp_ntt.coefficients, &psi_rev);
+    U32Field::fft(&mut gm_ntt.coefficients, &psi_rev);
+    U32Field::fft(&mut fm_ntt.coefficients, &psi_rev);
+    let mut cf_ntt = cfp_ntt.hadamard_mul(&gm_ntt);
+    let mut cg_ntt = cgp_ntt.hadamard_mul(&fm_ntt);
+    U32Field::ifft(&mut cf_ntt.coefficients, &psi_rev_inv, ninv);
+    U32Field::ifft(&mut cg_ntt.coefficients, &psi_rev_inv, ninv);
+
+    let mut capital_f = cf_ntt.map(|c| c.balanced_value());
+    let mut capital_g = cg_ntt.map(|c| c.balanced_value());
+
+    match babai_reduce_i32(&f, &g, &mut capital_f, &mut capital_g) {
         Ok(_) => Some((capital_f, capital_g)),
         Err(_e) => {
             #[cfg(test)]
@@ -391,13 +441,13 @@ pub fn ntru_gen(
         }
 
         if let Some((capital_f, capital_g)) =
-            ntru_solve(&f.map(|&i| i.into()), &g.map(|&i| i.into()))
+            ntru_solve_entrypoint(f.map(|&i| i as i32), g.map(|&i| i as i32))
         {
             return (
                 f,
                 g,
-                capital_f.map(|i| i.try_into().unwrap()),
-                capital_g.map(|i| i.try_into().unwrap()),
+                capital_f.map(|&i| i as i16),
+                capital_g.map(|&i| i as i16),
             );
         }
     }
@@ -479,17 +529,17 @@ mod test {
 
     use itertools::Itertools;
     use num::{BigInt, FromPrimitive};
+    use proptest::collection::vec;
     use proptest::prop_assert_eq;
     use proptest::strategy::Just;
     use test_strategy::proptest as strategy_proptest;
 
     use crate::{
-        math::{gram_schmidt_norm_squared, ntru_gen, ntru_solve},
-        multimod::test::arbitrary_bigint_polynomial,
+        math::{babai_reduce_i32, gram_schmidt_norm_squared, ntru_gen, ntru_solve},
         polynomial::Polynomial,
     };
 
-    use super::{babai_reduce_bigint, babai_reduce_mmi};
+    use super::babai_reduce_bigint;
     fn babai_infinite_loop_polynomials() -> (
         Polynomial<BigInt>,
         Polynomial<BigInt>,
@@ -569,12 +619,6 @@ mod test {
         assert!(babai_reduce_bigint(&f, &g, &mut capital_f, &mut capital_g).is_ok())
     }
 
-    #[test]
-    fn babai_infinite_loop_mmi() {
-        let (f, g, mut capital_f, mut capital_g) = babai_infinite_loop_polynomials();
-        assert!(babai_reduce_mmi(&f, &g, &mut capital_f, &mut capital_g).is_ok())
-    }
-
     // #[test]
     // fn test_gen_poly() {
     //     let mut rng = thread_rng();
@@ -643,21 +687,35 @@ mod test {
     }
 
     #[strategy_proptest]
-    fn bigint_and_multimodint_babai_reduce_agree(
-        #[strategy(0usize..5)] _logn: usize,
+    fn bigint_and_smallint_babai_reduce_agree(
+        #[strategy(1usize..5)] _logn: usize,
         #[strategy(Just(1<<#_logn))] _n: usize,
-        #[strategy(arbitrary_bigint_polynomial(1000, #_n))] f: Polynomial<BigInt>,
-        #[strategy(arbitrary_bigint_polynomial(1000, #_n))] g: Polynomial<BigInt>,
-        #[strategy(arbitrary_bigint_polynomial(1000, #_n))] mut bi_capital_f: Polynomial<BigInt>,
-        #[strategy(arbitrary_bigint_polynomial(1000, #_n))] mut bi_capital_g: Polynomial<BigInt>,
+        #[strategy(vec(-5..5, #_n))] f_coefficients: Vec<i32>,
+        #[strategy(vec(-5..5, #_n))] g_coefficients: Vec<i32>,
+        #[strategy(vec(-115..115, #_n))] capital_f_coefficients: Vec<i32>,
+        #[strategy(vec(-115..115, #_n))] capital_g_coefficients: Vec<i32>,
     ) {
-        let mut mmi_capital_f = bi_capital_f.clone();
-        let mut mmi_capital_g = bi_capital_g.clone();
+        let f_i32 = Polynomial::new(f_coefficients);
+        let g_i32 = Polynomial::new(g_coefficients);
+        let mut capital_f_i32 = Polynomial::new(capital_f_coefficients);
+        let mut capital_g_i32 = Polynomial::new(capital_g_coefficients);
+        let f_bigint = f_i32.map(|i| BigInt::from(*i));
+        let g_bigint = g_i32.map(|i| BigInt::from(*i));
+        let mut capital_f_bigint = capital_f_i32.map(|i| BigInt::from(*i));
+        let mut capital_g_bigint = capital_g_i32.map(|i| BigInt::from(*i));
 
-        babai_reduce_bigint(&f, &g, &mut bi_capital_f, &mut bi_capital_g).unwrap();
-        babai_reduce_mmi(&f, &g, &mut mmi_capital_f, &mut mmi_capital_g).unwrap();
-        prop_assert_eq!(bi_capital_f, mmi_capital_f);
-        prop_assert_eq!(bi_capital_g, mmi_capital_g);
+        let small_int_result =
+            babai_reduce_i32(&f_i32, &g_i32, &mut capital_f_i32, &mut capital_g_i32);
+        let big_int_result = babai_reduce_bigint(
+            &f_bigint,
+            &g_bigint,
+            &mut capital_f_bigint,
+            &mut capital_g_bigint,
+        );
+
+        prop_assert_eq!(small_int_result.is_err(), big_int_result.is_err());
+        prop_assert_eq!(capital_f_i32.map(|c| BigInt::from(*c)), capital_f_bigint);
+        prop_assert_eq!(capital_g_i32.map(|c| BigInt::from(*c)), capital_g_bigint);
     }
 
     #[test]

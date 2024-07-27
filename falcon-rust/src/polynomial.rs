@@ -6,7 +6,7 @@ use std::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 
 use itertools::Itertools;
 
-use crate::field::{Felt, Q};
+use crate::falcon_field::{Felt, Q};
 use crate::inverse::Inverse;
 
 /// Marked pub for benchmarking; not considered part of the public API.
@@ -262,7 +262,7 @@ impl<
     }
 
     /// Lift an element from a cyclotomic polynomial ring to one of double the
-    /// size.
+    /// size. Do this by interleaving zeros.
     pub fn lift_next_cyclotomic(&self) -> Self {
         let n = self.coefficients.len();
         let mut coefficients = vec![F::zero(); n * 2];
@@ -273,7 +273,8 @@ impl<
     }
 
     /// Compute the galois adjoint of the polynomial in the cyclotomic ring
-    /// F[ X ] / < X^n + 1 > , which corresponds to f(x^2).
+    /// F[ X ] / < X^n + 1 > , which corresponds to flipping the sign of all
+    /// odd coefficients.
     pub fn galois_adjoint(&self) -> Self {
         Self::new(
             self.coefficients
@@ -649,7 +650,7 @@ impl<T: Display> Display for Polynomial<T> {
 mod test {
     use std::default::Default;
 
-    use crate::field::Felt;
+    use crate::falcon_field::Felt;
     use crate::polynomial::hash_to_point;
     use crate::polynomial::Polynomial;
     use itertools::Itertools;

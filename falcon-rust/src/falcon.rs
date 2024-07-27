@@ -7,7 +7,7 @@ use crate::{
     encoding::{compress, decompress},
     fast_fft::FastFft,
     ffsampling::{ffldl, ffsampling, gram, normalize_tree, LdlTree},
-    field::{Felt, Q},
+    falcon_field::{Felt, Q},
     math::ntru_gen,
     polynomial::{hash_to_point, Polynomial},
 };
@@ -567,7 +567,7 @@ mod test {
     use crate::{
         encoding::compress,
         falcon::{keygen, sign, verify, FalconVariant, Signature},
-        field::Felt,
+        falcon_field::Felt,
         polynomial::{hash_to_point, Polynomial},
     };
 

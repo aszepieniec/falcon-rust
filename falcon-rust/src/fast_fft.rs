@@ -4,7 +4,7 @@ use itertools::Itertools;
 use num::{One, Zero};
 use num_complex::Complex64;
 
-use crate::{cyclotomic_fourier::CyclotomicFourier, field::Felt, polynomial::Polynomial};
+use crate::{cyclotomic_fourier::CyclotomicFourier, falcon_field::Felt, polynomial::Polynomial};
 
 /// Implements Cyclotomic FFT without bitreversing the outputs, and using
 /// precomputed powers of the 2nth primitive root of unity.

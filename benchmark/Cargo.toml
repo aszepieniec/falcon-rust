@@ -29,6 +29,3 @@ harness = false
 name = "babai_reduce"
 harness = false
 
-[[bench]]
-name = "cyclomul"
-harness = false
