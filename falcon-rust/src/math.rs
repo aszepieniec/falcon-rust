@@ -133,14 +133,8 @@ pub fn babai_reduce_i32(
     capital_f: &mut Polynomial<i32>,
     capital_g: &mut Polynomial<i32>,
 ) -> Result<(), String> {
-    let n = f.coefficients.len();
-    let bitreversed_powers = U32Field::bitreversed_powers(n);
-    let bitreversed_powers_inv = U32Field::bitreversed_powers_inverse(n);
-    let ninv = U32Field::new(n as i32).inverse_or_zero();
-    let mut f_ntt: Polynomial<U32Field> = f.map(|&i| U32Field::new(i));
-    let mut g_ntt: Polynomial<U32Field> = g.map(|&i| U32Field::new(i));
-    U32Field::fft(&mut f_ntt.coefficients, &bitreversed_powers);
-    U32Field::fft(&mut g_ntt.coefficients, &bitreversed_powers);
+    let f_ntt: Polynomial<U32Field> = f.map(|&i| U32Field::new(i)).fft();
+    let g_ntt: Polynomial<U32Field> = g.map(|&i| U32Field::new(i)).fft();
 
     let bitsize = |itr: IntoIter<i32>| {
         (itr.map(|i| i.abs()).max().unwrap() * 2)
@@ -205,18 +199,14 @@ pub fn babai_reduce_i32(
             + capital_g_adjusted.hadamard_mul(&g_star_adjusted);
         let quotient = numerator.hadamard_div(&denominator_fft).ifft();
 
-        let mut k_ntt = quotient.map(|f| U32Field::new(f.re.round() as i32));
-        U32Field::fft(&mut k_ntt.coefficients, &bitreversed_powers);
+        let k_ntt = quotient.map(|f| U32Field::new(f.re.round() as i32)).fft();
 
         if k_ntt.is_zero() {
             break;
         }
 
-        let mut kf_ntt = k_ntt.hadamard_mul(&f_ntt);
-        let mut kg_ntt = k_ntt.hadamard_mul(&g_ntt);
-
-        U32Field::ifft(&mut kf_ntt.coefficients, &bitreversed_powers_inv, ninv);
-        U32Field::ifft(&mut kg_ntt.coefficients, &bitreversed_powers_inv, ninv);
+        let kf_ntt = k_ntt.hadamard_mul(&f_ntt).ifft();
+        let kg_ntt = k_ntt.hadamard_mul(&g_ntt).ifft();
 
         let kf = kf_ntt.map(|p| p.balanced_value());
         let kg = kg_ntt.map(|p| p.balanced_value());
