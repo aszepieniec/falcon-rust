@@ -1,13 +1,13 @@
 use bit_vec::BitVec;
 use itertools::Itertools;
 use num_complex::{Complex, Complex64};
-use rand::{thread_rng, Rng, RngCore};
+use rand::{rngs::StdRng, thread_rng, Rng, RngCore, SeedableRng};
 
 use crate::{
     encoding::{compress, decompress},
+    falcon_field::{Felt, Q},
     fast_fft::FastFft,
     ffsampling::{ffldl, ffsampling, gram, normalize_tree, LdlTree},
-    falcon_field::{Felt, Q},
     math::ntru_gen,
     polynomial::{hash_to_point, Polynomial},
 };
@@ -90,7 +90,8 @@ impl<const N: usize> SecretKey<N> {
     }
 
     pub(crate) fn gen_b0(seed: [u8; 32]) -> [Polynomial<i16>; 4] {
-        let (f, g, capital_f, capital_g) = ntru_gen(N, seed);
+        let mut rng: StdRng = SeedableRng::from_seed(seed);
+        let (f, g, capital_f, capital_g) = ntru_gen(N, &mut rng);
         [g, -f, capital_g, -capital_f]
     }
 
@@ -478,7 +479,7 @@ pub fn sign<const N: usize>(m: &[u8], sk: &SecretKey<N>) -> Signature<N> {
         let mut seed = [0u8; 32];
         rng.fill_bytes(&mut seed);
         let bold_s = loop {
-            let z = ffsampling(&(t0.clone(), t1.clone()), &sk.tree, &params, seed);
+            let z = ffsampling(&(t0.clone(), t1.clone()), &sk.tree, &params, &mut rng);
             let t0_min_z0 = t0.clone() - z.0;
             let t1_min_z1 = t1.clone() - z.1;
 

@@ -1,10 +1,6 @@
-use std::{f64::consts::LN_2, io::Write};
+use std::f64::consts::LN_2;
 
 use rand::{Rng, RngCore};
-use sha3::{
-    digest::{ExtendableOutput, XofReader},
-    Shake256,
-};
 
 /// Sample an integer from {0, ..., 18} according to the distribution χ, which
 /// is close to the half-Gaussian distribution on the natural numbers with mean
@@ -30,7 +26,7 @@ fn base_sampler(bytes: [u8; 9]) -> i16 {
         198,
         1,
     ];
-    let u = u128::from_le_bytes([bytes.to_vec(), vec![0u8; 7]].concat().try_into().unwrap());
+    let u = u128::from_be_bytes([vec![0u8; 7], bytes.to_vec()].concat().try_into().unwrap());
     RCDT.into_iter().filter(|r| u < *r).count() as i16
 }
 
@@ -93,8 +89,7 @@ fn ber_exp(x: f64, ccs: f64, random_bytes: [u8; 7]) -> bool {
 
 /// Sample an integer from the Gaussian distribution with given mean (mu) and
 /// standard deviation (sigma).
-// pub(crate) fn sampler_z(mu: f64, sigma: f64, sigma_min: f64, rng: &mut dyn RngCore) -> i16 {
-pub(crate) fn sampler_z(mu: f64, sigma: f64, sigma_min: f64, mut seed: [u8; 32]) -> i16 {
+pub(crate) fn sampler_z(mu: f64, sigma: f64, sigma_min: f64, rng: &mut dyn RngCore) -> i16 {
     const SIGMA_MAX: f64 = 1.8205;
     const INV_2SIGMA_MAX_SQ: f64 = 1f64 / (2f64 * SIGMA_MAX * SIGMA_MAX);
     let isigma = 1f64 / sigma;
@@ -102,21 +97,15 @@ pub(crate) fn sampler_z(mu: f64, sigma: f64, sigma_min: f64, mut seed: [u8; 32])
     let s = f64::floor(mu);
     let r = mu - s;
     let ccs = sigma_min * isigma;
-    let mut buffer = [0u8; 49];
     loop {
-        let mut shake = Shake256::default();
-        let _ = shake.write(&seed);
-        shake.finalize_xof().read(&mut buffer);
-        seed = buffer[0..32].to_vec().try_into().unwrap();
-
-        let z0 = base_sampler(buffer[32..41].to_owned().try_into().unwrap());
-        let random_byte: u8 = buffer[41];
+        let z0 = base_sampler(rng.gen());
+        let random_byte: u8 = rng.gen();
         let b = (random_byte & 1) as i16;
         let z = b + ((b << 1) - 1) * z0;
         let zf_min_r = (z as f64) - r;
         //    x = ((z-r)^2)/(2*sigma^2) - ((z-b)^2)/(2*sigma0^2)
         let x = zf_min_r * zf_min_r * dss - (z0 * z0) as f64 * INV_2SIGMA_MAX_SQ;
-        if ber_exp(x, ccs, buffer[42..49].to_owned().try_into().unwrap()) {
+        if ber_exp(x, ccs, rng.gen()) {
             return z + (s as i16);
         }
     }
@@ -125,7 +114,8 @@ pub(crate) fn sampler_z(mu: f64, sigma: f64, sigma_min: f64, mut seed: [u8; 32])
 #[cfg(test)]
 mod test {
     use itertools::Itertools;
-    use rand::RngCore;
+    use rand::Rng;
+    use rand::{thread_rng, RngCore};
     use std::{thread::sleep, time::Duration};
 
     use crate::samplerz::{approx_exp, ber_exp, sampler_z};
@@ -280,40 +270,56 @@ mod test {
         }
     }
 
-    // #[test]
-    // fn test_sampler_z() {
-    //     let sigma_min = 1.277833697;
-    //     // known answers from the doc, table 3.2, page 44
-    //     // https://falcon-sign.info/falcon.pdf
-    //     // The zeros were added to account for dropped bytes.
-    //     let kats = [
-    //         (-91.90471153063714,1.7037990414754918,hex::decode("0fc5442ff043d66e91d1ea000000000000cac64ea5450a22941edc6c").unwrap(),-92),
-    //         (-8.322564895434937,1.7037990414754918,hex::decode("f4da0f8d8444d1a77265c2000000000000ef6f98bbbb4bee7db8d9b3").unwrap(),-8),
-    //         (-19.096516109216804,1.7035823083824078,hex::decode("db47f6d7fb9b19f25c36d6000000000000b9334d477a8bc0be68145d").unwrap(),-20),
-    //         (-11.335543982423326, 1.7035823083824078, hex::decode("ae41b4f5209665c74d00dc000000000000c1a8168a7bb516b3190cb42c1ded26cd52000000000000aed770eca7dd334e0547bcc3c163ce0b").unwrap(), -12),
-    //         (7.9386734193997555, 1.6984647769450156, hex::decode("31054166c1012780c603ae0000000000009b833cec73f2f41ca5807c000000000000c89c92158834632f9b1555").unwrap(), 8),
-    //         (-28.990850086867255, 1.6984647769450156, hex::decode("737e9d68a50a06dbbc6477").unwrap(), -30),
-    //         (-9.071257914091655, 1.6980782114808988, hex::decode("a98ddd14bf0bf22061d632").unwrap(), -10),
-    //         (-43.88754568839566, 1.6980782114808988, hex::decode("3cbf6818a68f7ab9991514").unwrap(), -41),
-    //         (-58.17435547946095,1.7010983419195522,hex::decode("6f8633f5bfa5d26848668e0000000000003d5ddd46958e97630410587c").unwrap(),-61),
-    //         (-43.58664906684732, 1.7010983419195522, hex::decode("272bc6c25f5c5ee53f83c40000000000003a361fbc7cc91dc783e20a").unwrap(), -46),
-    //         (-34.70565203313315, 1.7009387219711465, hex::decode("45443c59574c2c3b07e2e1000000000000d9071e6d133dbe32754b0a").unwrap(), -34),
-    //         (-44.36009577368896, 1.7009387219711465, hex::decode("6ac116ed60c258e2cbaeab000000000000728c4823e6da36e18d08da0000000000005d0cc104e21cc7fd1f5ca8000000000000d9dbb675266c928448059e").unwrap(), -44),
-    //         (-21.783037079346236, 1.6958406126012802, hex::decode("68163bc1e2cbf3e18e7426").unwrap(), -23),
-    //         (-39.68827784633828, 1.6958406126012802, hex::decode("d6a1b51d76222a705a0259").unwrap(), -40),
-    //         (-18.488607061056847, 1.6955259305261838, hex::decode("f0523bfaa8a394bf4ea5c10000000000000f842366fde286d6a30803").unwrap(), -22),
-    //         (-48.39610939101591, 1.6955259305261838, hex::decode("87bd87e63374cee62127fc0000000000006931104aab64f136a0485b").unwrap(), -50),
-    //     ];
-    //     for (mu, sigma, random_bytes, answer) in kats {
-    //         assert_eq!(
-    //             sampler_z(
-    //                 mu,
-    //                 sigma,
-    //                 sigma_min,
-    //                 &mut UnsafeBufferRng::new(&random_bytes)
-    //             ),
-    //             answer
-    //         );
-    //     }
-    // }
+    #[test]
+    fn test_sampler_z() {
+        let sigma_min = 1.277833697;
+        // known answers from the doc, table 3.2, page 44
+        // https://falcon-sign.info/falcon.pdf
+        // The zeros were added to account for dropped bytes.
+        let kats = [
+            (-91.90471153063714,1.7037990414754918,hex::decode("0fc5442ff043d66e91d1ea000000000000cac64ea5450a22941edc6c").unwrap(),-92),
+            (-8.322564895434937,1.7037990414754918,hex::decode("f4da0f8d8444d1a77265c2000000000000ef6f98bbbb4bee7db8d9b3").unwrap(),-8),
+            (-19.096516109216804,1.7035823083824078,hex::decode("db47f6d7fb9b19f25c36d6000000000000b9334d477a8bc0be68145d").unwrap(),-20),
+            (-11.335543982423326, 1.7035823083824078, hex::decode("ae41b4f5209665c74d00dc000000000000c1a8168a7bb516b3190cb42c1ded26cd52000000000000aed770eca7dd334e0547bcc3c163ce0b").unwrap(), -12),
+            (7.9386734193997555, 1.6984647769450156, hex::decode("31054166c1012780c603ae0000000000009b833cec73f2f41ca5807c000000000000c89c92158834632f9b1555").unwrap(), 8),
+            (-28.990850086867255, 1.6984647769450156, hex::decode("737e9d68a50a06dbbc6477").unwrap(), -30),
+            (-9.071257914091655, 1.6980782114808988, hex::decode("a98ddd14bf0bf22061d632").unwrap(), -10),
+            (-43.88754568839566, 1.6980782114808988, hex::decode("3cbf6818a68f7ab9991514").unwrap(), -41),
+            (-58.17435547946095,1.7010983419195522,hex::decode("6f8633f5bfa5d26848668e0000000000003d5ddd46958e97630410587c").unwrap(),-61),
+            (-43.58664906684732, 1.7010983419195522, hex::decode("272bc6c25f5c5ee53f83c40000000000003a361fbc7cc91dc783e20a").unwrap(), -46),
+            (-34.70565203313315, 1.7009387219711465, hex::decode("45443c59574c2c3b07e2e1000000000000d9071e6d133dbe32754b0a").unwrap(), -34),
+            (-44.36009577368896, 1.7009387219711465, hex::decode("6ac116ed60c258e2cbaeab000000000000728c4823e6da36e18d08da0000000000005d0cc104e21cc7fd1f5ca8000000000000d9dbb675266c928448059e").unwrap(), -44),
+            (-21.783037079346236, 1.6958406126012802, hex::decode("68163bc1e2cbf3e18e7426").unwrap(), -23),
+            (-39.68827784633828, 1.6958406126012802, hex::decode("d6a1b51d76222a705a0259").unwrap(), -40),
+            (-18.488607061056847, 1.6955259305261838, hex::decode("f0523bfaa8a394bf4ea5c10000000000000f842366fde286d6a30803").unwrap(), -22),
+            (-48.39610939101591, 1.6955259305261838, hex::decode("87bd87e63374cee62127fc0000000000006931104aab64f136a0485b").unwrap(), -50),
+        ];
+        for (i, (mu, sigma, random_bytes, answer)) in kats.into_iter().enumerate() {
+            assert_eq!(
+                sampler_z(
+                    mu,
+                    sigma,
+                    sigma_min,
+                    &mut UnsafeBufferRng::new(&random_bytes)
+                ),
+                answer,
+                "error in kat {i}"
+            );
+        }
+    }
+
+    #[test]
+    fn endianness() {
+        let bytes: [u8; 9] = thread_rng().gen();
+        let u0 = u128::from_le_bytes(
+            [bytes.into_iter().rev().collect_vec(), vec![0u8; 7]]
+                .concat()
+                .try_into()
+                .unwrap(),
+        );
+        let u1 = u128::from_be_bytes([vec![0u8; 7], bytes.to_vec()].concat().try_into().unwrap());
+        assert_eq!(u0, u1);
+
+        assert!(u0 % (1u128 << 64) != 0); // vanishingly small false positive prob
+    }
 }

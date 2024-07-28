@@ -1,15 +1,9 @@
-use std::{
-    io::{Read, Write},
-    vec::IntoIter,
-};
+use std::vec::IntoIter;
 
 use itertools::Itertools;
 use num::{BigInt, FromPrimitive, One, Zero};
 use num_complex::Complex64;
-use sha3::{
-    digest::{ExtendableOutput, Update},
-    Shake256,
-};
+use rand::RngCore;
 
 use crate::{
     cyclotomic_fourier::CyclotomicFourier,
@@ -412,7 +406,7 @@ fn ntru_solve_entrypoint(
 #[doc(hidden)]
 pub fn ntru_gen(
     n: usize,
-    mut seed: [u8; 32],
+    rng: &mut dyn RngCore,
 ) -> (
     Polynomial<i16>,
     Polynomial<i16>,
@@ -422,14 +416,8 @@ pub fn ntru_gen(
     // let mut rng: StdRng = SeedableRng::from_seed(seed);
 
     loop {
-        let mut buffer = [0u8; 96];
-        let mut shake = Shake256::default();
-        shake.update(&seed);
-        let _ = shake.finalize_xof().read(&mut buffer);
-        seed = buffer[0..32].to_vec().try_into().unwrap();
-
-        let f = gen_poly(n, buffer[32..64].to_owned().try_into().unwrap());
-        let g = gen_poly(n, buffer[64..96].to_owned().try_into().unwrap());
+        let f = gen_poly(n, rng);
+        let g = gen_poly(n, rng);
 
         let f_ntt = f.map(|&i| Felt::new(i)).fft();
         if f_ntt.coefficients.iter().any(|e| e.is_zero()) {
@@ -457,24 +445,13 @@ pub fn ntru_gen(
 /// distributed according to a discrete Gaussian with mu = 0 and
 /// sigma = 1.17 * sqrt(Q / (2n)).
 // fn gen_poly(n: usize, rng: &mut dyn RngCore) -> Polynomial<i16> {
-fn gen_poly(n: usize, seed: [u8; 32]) -> Polynomial<i16> {
+fn gen_poly(n: usize, rng: &mut dyn RngCore) -> Polynomial<i16> {
     let mu = 0.0;
     let sigma_star = 1.43300980528773;
     const NUM_COEFFICIENTS: usize = 4096;
-    let mut buffer = [0u8; NUM_COEFFICIENTS * 32];
-    let mut shake = Shake256::default();
-    shake.write(&seed).unwrap();
-    let _ = shake.finalize_xof().read(&mut buffer);
     Polynomial {
         coefficients: (0..NUM_COEFFICIENTS)
-            .map(|i| {
-                sampler_z(
-                    mu,
-                    sigma_star,
-                    sigma_star - 0.001,
-                    buffer[i * 32..(i + 1) * 32].to_owned().try_into().unwrap(),
-                )
-            })
+            .map(|_| sampler_z(mu, sigma_star, sigma_star - 0.001, rng))
             .collect_vec()
             .chunks(NUM_COEFFICIENTS / n)
             .map(|ch| ch.iter().sum())
@@ -532,6 +509,7 @@ mod test {
     use proptest::collection::vec;
     use proptest::prop_assert_eq;
     use proptest::strategy::Just;
+    use rand::{rngs::StdRng, SeedableRng};
     use test_strategy::proptest as strategy_proptest;
 
     use crate::{
@@ -721,13 +699,13 @@ mod test {
     #[test]
     fn test_ntru_gen() {
         let n = 512;
-        // let mut rng = thread_rng();
         let seed: [u8; 32] =
             hex::decode("deadbeef00000000deadbeef00000000deadbeef00000000deadbeef00000000")
                 .unwrap()
                 .try_into()
                 .unwrap();
-        let (f, g, capital_f, capital_g) = ntru_gen(n, seed);
+        let mut rng: StdRng = SeedableRng::from_seed(seed);
+        let (f, g, capital_f, capital_g) = ntru_gen(n, &mut rng);
 
         println!("f: {}", f);
         println!("g: {}", g);
