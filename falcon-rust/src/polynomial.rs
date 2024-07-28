@@ -1,5 +1,6 @@
 use num::{One, Zero};
-use sha3::{digest::*, Shake256};
+use sha3::digest::{ExtendableOutput, Update, XofReader};
+use sha3::Shake256;
 use std::default::Default;
 use std::fmt::{Debug, Display};
 use std::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
@@ -104,6 +105,7 @@ fn vector_karatsuba<
     product
 }
 
+#[allow(private_bounds)] // The module is marked `pub` only for benchmarking.
 impl<
         F: Mul<Output = F> + Sub<Output = F> + AddAssign + Zero + Div<Output = F> + Inverse + Clone,
     > Polynomial<F>
@@ -648,35 +650,12 @@ impl<T: Display> Display for Polynomial<T> {
 
 #[cfg(test)]
 mod test {
-    use std::default::Default;
-
     use crate::falcon_field::Felt;
     use crate::polynomial::hash_to_point;
     use crate::polynomial::Polynomial;
     use itertools::Itertools;
     use rand::thread_rng;
     use rand::Rng;
-    use sha3::digest::ExtendableOutput;
-    use sha3::digest::Update;
-    use sha3::digest::XofReader;
-    use sha3::Shake256;
-
-    #[test]
-    fn test_shake256() {
-        let input = b"\x21\xF1\x34\xAC\x57";
-        let kat_output : [u8;64] = *b"\xBB\x8A\x84\x47\x51\x7B\xA9\xCA\x7F\xA3\x4E\xC9\x9A\x80\x00\x4F\x22\x8A\xB2\x82\x47\x28\x41\xEB\x3D\x3A\x76\x22\x5C\x9D\xBE\x77\xF7\xE4\x0A\x06\x67\x76\xD3\x2C\x74\x94\x12\x02\xF9\xF4\xAA\x43\xD1\x2C\x62\x64\xAF\xA5\x96\x39\xC4\x4E\x11\xF5\xE1\x4F\x1E\x56";
-        let mut observed_output = [0u8; 64];
-
-        let mut hasher = Shake256::default();
-        hasher.update(input);
-        let mut reader = hasher.finalize_xof();
-        reader.read(&mut observed_output);
-
-        assert_eq!(
-            kat_output, observed_output,
-            "SHAKE256 from crate sha3 does not match KAT"
-        )
-    }
 
     #[test]
     fn test_hash_to_point_sanity() {

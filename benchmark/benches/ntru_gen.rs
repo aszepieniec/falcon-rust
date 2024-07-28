@@ -1,5 +1,5 @@
 use criterion::{criterion_group, criterion_main, Criterion};
-use rand::{thread_rng, Rng};
+use rand::thread_rng;
 
 pub fn ntru_gen(c: &mut Criterion) {
     let mut rng = thread_rng();
@@ -8,13 +8,13 @@ pub fn ntru_gen(c: &mut Criterion) {
 
     group.bench_function("ntru-gen-512", |b| {
         b.iter(|| {
-            let _ = falcon_rust::math::ntru_gen(512, rng.gen());
+            let _ = falcon_rust::math::ntru_gen(512, &mut rng);
         })
     });
 
     group.bench_function("ntru-gen-1024", |b| {
         b.iter(|| {
-            let _ = falcon_rust::math::ntru_gen(1024, rng.gen());
+            let _ = falcon_rust::math::ntru_gen(1024, &mut rng);
         })
     });
     group.finish();
