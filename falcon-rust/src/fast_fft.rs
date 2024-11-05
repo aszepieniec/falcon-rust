@@ -1073,7 +1073,7 @@ impl FastFft for Polynomial<Complex64> {
             .map(|c| Complex64::new(c.re, -c.im))
             .collect_vec();
         let ninv = Complex64::new(1.0 / (n as f64), 0.0);
-        Complex64::ifft(&mut self.coefficients, &psi_inv_rev, ninv);
+        Complex64::ifft(&mut self.coefficients, psi_inv_rev, ninv);
     }
 
     fn merge_fft(a: &Self, b: &Self) -> Self {
@@ -1093,7 +1093,7 @@ impl FastFft for Polynomial<Complex64> {
             .take(n)
             .map(|c| Complex64::new(c.re, -c.im))
             .collect_vec();
-        let (a, b) = Self::Field::split_fft(&self.coefficients, &psi_inv_rev);
+        let (a, b) = Self::Field::split_fft(&self.coefficients, psi_inv_rev);
         (Self { coefficients: a }, Self { coefficients: b })
     }
 }
@@ -5363,10 +5363,10 @@ mod test {
     fn u32_field_ninv_is_correct() {
         let mut powers_of_two_inverse = vec![];
         let two_inverse = U32Field::new(2).inverse_or_zero();
-        let mut acc = two_inverse.clone();
+        let mut acc = two_inverse;
         for _ in 0..10 {
             powers_of_two_inverse.push(acc);
-            acc = acc * two_inverse;
+            acc *= two_inverse;
         }
         assert_eq!(
             powers_of_two_inverse,

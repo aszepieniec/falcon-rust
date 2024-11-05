@@ -17,8 +17,8 @@ fn random_integer(bitsize: usize, rng: &mut StdRng) -> BigInt {
         true => Sign::Minus,
         false => Sign::Plus,
     };
-    let int = BigInt::from_bytes_be(sign, &bytes);
-    int
+
+    BigInt::from_bytes_be(sign, &bytes)
 }
 
 fn generate_reducible_polynomials(

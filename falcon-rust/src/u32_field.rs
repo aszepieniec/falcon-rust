@@ -136,9 +136,9 @@ impl Inverse for U32Field {
         for _ in 0..32 {
             acc = acc * acc;
             if mask & q_minus_two != 0 {
-                acc = acc * self;
+                acc *= self;
             }
-            mask = mask >> 1;
+            mask >>= 1;
         }
         acc
     }

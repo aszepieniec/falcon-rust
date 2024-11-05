@@ -155,10 +155,10 @@ pub fn babai_reduce_i32(
 
     let shift = (size as i64) - 53;
     let f_adjusted = f
-        .map(|i| Complex64::new(i64::try_from(i >> shift).unwrap() as f64, 0.0))
+        .map(|i| Complex64::new(i64::from(i >> shift) as f64, 0.0))
         .fft();
     let g_adjusted = g
-        .map(|i| Complex64::new(i64::try_from(i >> shift).unwrap() as f64, 0.0))
+        .map(|i| Complex64::new(i64::from(i >> shift) as f64, 0.0))
         .fft();
 
     let f_star_adjusted = f_adjusted.map(|c| c.conj());
@@ -189,10 +189,10 @@ pub fn babai_reduce_i32(
         }
         let capital_shift = (capital_size as i64) - 53;
         let capital_f_adjusted = capital_f
-            .map(|bi| Complex64::new(i64::try_from(bi >> capital_shift).unwrap() as f64, 0.0))
+            .map(|bi| Complex64::new(i64::from(bi >> capital_shift) as f64, 0.0))
             .fft();
         let capital_g_adjusted = capital_g
-            .map(|bi| Complex64::new(i64::try_from(bi >> capital_shift).unwrap() as f64, 0.0))
+            .map(|bi| Complex64::new(i64::from(bi >> capital_shift) as f64, 0.0))
             .fft();
 
         let numerator = capital_f_adjusted.hadamard_mul(&f_star_adjusted)
@@ -319,12 +319,12 @@ fn ntru_solve_entrypoint(
     let capital_f_prime_coefficients = capital_f_prime_bi
         .coefficients
         .into_iter()
-        .map(|c| i32::try_from(c))
+        .map(i32::try_from)
         .collect_vec();
     let capital_g_prime_coefficients = capital_g_prime_bi
         .coefficients
         .into_iter()
-        .map(|c| i32::try_from(c))
+        .map(i32::try_from)
         .collect_vec();
 
     if !capital_f_prime_coefficients
@@ -337,13 +337,13 @@ fn ntru_solve_entrypoint(
     let capital_f_prime = Polynomial::new(
         capital_f_prime_coefficients
             .into_iter()
-            .map(|c| c.unwrap().clone())
+            .map(|c| c.unwrap())
             .collect_vec(),
     );
     let capital_g_prime = Polynomial::new(
         capital_g_prime_coefficients
             .into_iter()
-            .map(|c| c.unwrap().clone())
+            .map(|c| c.unwrap())
             .collect_vec(),
     );
 
@@ -355,10 +355,10 @@ fn ntru_solve_entrypoint(
     let psi_rev = U32Field::bitreversed_powers(n);
     let psi_rev_inv = U32Field::bitreversed_powers_inverse(n);
     let ninv = U32Field::new(n as i32).inverse_or_zero();
-    let mut cfp_ntt = capital_f_prime_xsq.map(|c| U32Field::new(*c as i32));
-    let mut cgp_ntt = capital_g_prime_xsq.map(|c| U32Field::new(*c as i32));
-    let mut gm_ntt = g_minx.map(|c| U32Field::new(*c as i32));
-    let mut fm_ntt = f_minx.map(|c| U32Field::new(*c as i32));
+    let mut cfp_ntt = capital_f_prime_xsq.map(|c| U32Field::new(*c));
+    let mut cgp_ntt = capital_g_prime_xsq.map(|c| U32Field::new(*c));
+    let mut gm_ntt = g_minx.map(|c| U32Field::new(*c));
+    let mut fm_ntt = f_minx.map(|c| U32Field::new(*c));
     U32Field::fft(&mut cfp_ntt.coefficients, &psi_rev);
     U32Field::fft(&mut cgp_ntt.coefficients, &psi_rev);
     U32Field::fft(&mut gm_ntt.coefficients, &psi_rev);
