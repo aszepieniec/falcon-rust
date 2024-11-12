@@ -161,8 +161,8 @@ impl CyclotomicFourier for U32Field {
     fn primitive_root_of_unity(n: usize) -> Self {
         let log2n = n.ilog2();
         assert!(log2n <= 12);
-        // and 48440u32 is a twelfth root of unity
-        let mut a = U32Field::new(48440i32);
+        // and 872548469u32 is a twelfth root of unity
+        let mut a = U32Field::new(872548469i32);
         let num_squarings = 12 - n.ilog2();
         for _ in 0..num_squarings {
             a *= a;
