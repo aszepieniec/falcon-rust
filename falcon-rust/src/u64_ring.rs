@@ -1,6 +1,7 @@
 use std::fmt::Display;
 use std::ops::{Add, AddAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 
+use num::traits::ConstZero;
 use rand_distr::{
     num_traits::{One, Zero},
     Distribution, Standard,
@@ -8,25 +9,40 @@ use rand_distr::{
 
 use crate::cyclotomic_fourier::CyclotomicFourier;
 use crate::inverse::Inverse;
+use crate::u32_field::{U32Field, P};
 
-/// Square of [`u32_field::Q`].
-const Q2: u64 = 1152947895184416769_u64;
+/// Square of [`u32_field::P`].
+pub(crate) const P2: u64 = 1152947895184416769_u64;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct U64Ring(pub(crate) u64);
 
 impl U64Ring {
-    pub const fn new(value: i64) -> Self {
+    pub(crate) const fn new(value: i64) -> Self {
         let gtz_bool = value >= 0;
         let gtz_int = gtz_bool as i64;
         let gtz_sign = gtz_int - ((!gtz_bool) as i64);
-        let reduced = gtz_sign * ((gtz_sign * value) % (Q2 as i64));
-        let canonical_representative = (reduced + (Q2 as i64) * (1 - gtz_int)) as u64;
+        let reduced = gtz_sign * ((gtz_sign * value) % (P2 as i64));
+        let canonical_representative = (reduced + (P2 as i64) * (1 - gtz_int)) as u64;
         U64Ring(canonical_representative)
     }
 
-    pub const fn value(&self) -> i64 {
+    pub(crate) const fn value(&self) -> i64 {
         self.0 as i64
+    }
+
+    pub(crate) fn lo(&self) -> U32Field {
+        U32Field::new((self.0 % (P as u64)).try_into().unwrap())
+    }
+
+    pub(crate) fn hi(&self) -> U32Field {
+        U32Field::new((self.0 / (P as u64)).try_into().unwrap())
+    }
+}
+
+impl From<bool> for U64Ring {
+    fn from(value: bool) -> Self {
+        U64Ring::from(usize::from(value))
     }
 }
 
@@ -36,16 +52,33 @@ impl From<usize> for U64Ring {
     }
 }
 
+impl From<U32Field> for U64Ring {
+    fn from(value: U32Field) -> Self {
+        Self::new(value.value().into())
+    }
+}
+
+impl ConstZero for U64Ring {
+    const ZERO: Self = Self::new(0);
+}
+
 #[allow(clippy::suspicious_arithmetic_impl)]
 impl Add for U64Ring {
     fn add(self, rhs: Self) -> Self::Output {
         let (s, _) = self.0.overflowing_add(rhs.0);
-        let (d, n) = s.overflowing_sub(Q2);
-        let (r, _) = d.overflowing_add(Q2 * (n as u64));
+        let (d, n) = s.overflowing_sub(P2);
+        let (r, _) = d.overflowing_add(P2 * (n as u64));
         U64Ring(r)
     }
 
     type Output = Self;
+}
+
+impl Add<U32Field> for U64Ring {
+    type Output = Self;
+    fn add(self, rhs: U32Field) -> Self::Output {
+        self + Self::from(rhs)
+    }
 }
 
 impl AddAssign for U64Ring {
@@ -73,14 +106,14 @@ impl Neg for U64Ring {
 
     fn neg(self) -> Self::Output {
         let is_nonzero = self.0 != 0;
-        let r = Q2 - self.0;
+        let r = P2 - self.0;
         U64Ring(r * (is_nonzero as u64))
     }
 }
 
 impl Mul for U64Ring {
     fn mul(self, rhs: Self) -> Self::Output {
-        U64Ring((((self.0 as u128) * (rhs.0 as u128)) % (Q2 as u128)) as u64)
+        U64Ring((((self.0 as u128) * (rhs.0 as u128)) % (P2 as u128)) as u64)
     }
 
     type Output = Self;
@@ -109,7 +142,7 @@ impl One for U64Ring {
 
 impl Distribution<U64Ring> for Standard {
     fn sample<R: rand::Rng + ?Sized>(&self, rng: &mut R) -> U64Ring {
-        U64Ring::new(((rng.next_u64() >> 1) % Q2) as i64)
+        U64Ring::new(((rng.next_u64() >> 1) % P2) as i64)
     }
 }
 
@@ -136,7 +169,7 @@ fn xgcd(a: i64, b: i64) -> (i64, i64, i64) {
 
 impl Inverse for U64Ring {
     fn inverse_or_zero(self) -> Self {
-        let (a, _b, _g) = xgcd(self.0.try_into().unwrap(), Q2.try_into().unwrap());
+        let (a, _b, _g) = xgcd(self.0.try_into().unwrap(), P2.try_into().unwrap());
         Self::new(a)
     }
 }
@@ -165,7 +198,7 @@ mod test {
         cyclotomic_fourier::CyclotomicFourier,
         inverse::Inverse,
         polynomial::Polynomial,
-        u64_ring::{U64Ring, Q2},
+        u64_ring::{U64Ring, P2},
     };
     use num::Zero;
 
@@ -180,7 +213,7 @@ mod test {
             let uf = U64Ring::new(value);
             assert_eq!(
                 0,
-                (uf.value() - value) % (Q2 as i64),
+                (uf.value() - value) % (P2 as i64),
                 "value: {value} but got {}",
                 uf.value()
             );
@@ -198,7 +231,7 @@ mod test {
             a + b,
             U64Ring::new(a.value() + b.value()),
             "a: {a_value}, b: {b_value}, c: {}",
-            ((a_value + b_value) as u64) % Q2
+            ((a_value + b_value) as u64) % P2
         );
     }
 
@@ -208,7 +241,7 @@ mod test {
         for _ in 0..1000 {
             let a_value = (rng.next_u64() % 0x3fffffffffff) as i64;
             let b_value = (rng.next_u64() % 0x3fffffffffff) as i64;
-            let product = (((a_value as u128) * (b_value as u128)) % (Q2 as u128)) as i64;
+            let product = (((a_value as u128) * (b_value as u128)) % (P2 as u128)) as i64;
             let a = U64Ring::new(a_value);
             let b = U64Ring::new(b_value);
             assert_eq!(

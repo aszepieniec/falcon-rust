@@ -1,6 +1,7 @@
 use std::fmt::Display;
 use std::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 
+use num::traits::ConstZero;
 use rand_distr::{
     num_traits::{One, Zero},
     Distribution, Standard,
@@ -9,7 +10,7 @@ use rand_distr::{
 use crate::cyclotomic_fourier::CyclotomicFourier;
 use crate::inverse::Inverse;
 
-const Q: u32 = 1073754113u32;
+pub(crate) const P: u32 = 1073754113u32;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct U32Field(pub(crate) u32);
@@ -19,8 +20,8 @@ impl U32Field {
         let gtz_bool = value >= 0;
         let gtz_int = gtz_bool as i32;
         let gtz_sign = gtz_int - ((!gtz_bool) as i32);
-        let reduced = gtz_sign * ((gtz_sign * value) % (Q as i32));
-        let canonical_representative = (reduced + (Q as i32) * (1 - gtz_int)) as u32;
+        let reduced = gtz_sign * ((gtz_sign * value) % (P as i32));
+        let canonical_representative = (reduced + (P as i32) * (1 - gtz_int)) as u32;
         U32Field(canonical_representative)
     }
 
@@ -30,13 +31,17 @@ impl U32Field {
 
     pub fn balanced_value(&self) -> i32 {
         let value = self.value();
-        let g = (value > ((Q as i32) / 2)) as i32;
-        value - (Q as i32) * g
+        let g = (value > ((P as i32) / 2)) as i32;
+        value - (P as i32) * g
     }
 
     pub const fn multiply(&self, other: Self) -> Self {
-        U32Field((((self.0 as u64) * (other.0 as u64)) % (Q as u64)) as u32)
+        U32Field((((self.0 as u64) * (other.0 as u64)) % (P as u64)) as u32)
     }
+}
+
+impl ConstZero for U32Field {
+    const ZERO: Self = Self::new(0);
 }
 
 impl From<usize> for U32Field {
@@ -49,8 +54,8 @@ impl From<usize> for U32Field {
 impl Add for U32Field {
     fn add(self, rhs: Self) -> Self::Output {
         let (s, _) = self.0.overflowing_add(rhs.0);
-        let (d, n) = s.overflowing_sub(Q);
-        let (r, _) = d.overflowing_add(Q * (n as u32));
+        let (d, n) = s.overflowing_sub(P);
+        let (r, _) = d.overflowing_add(P * (n as u32));
         U32Field(r)
     }
 
@@ -82,14 +87,14 @@ impl Neg for U32Field {
 
     fn neg(self) -> Self::Output {
         let is_nonzero = self.0 != 0;
-        let r = Q - self.0;
+        let r = P - self.0;
         U32Field(r * (is_nonzero as u32))
     }
 }
 
 impl Mul for U32Field {
     fn mul(self, rhs: Self) -> Self::Output {
-        U32Field((((self.0 as u64) * (rhs.0 as u64)) % (Q as u64)) as u32)
+        U32Field((((self.0 as u64) * (rhs.0 as u64)) % (P as u64)) as u32)
     }
 
     type Output = Self;
@@ -118,7 +123,7 @@ impl One for U32Field {
 
 impl Distribution<U32Field> for Standard {
     fn sample<R: rand::Rng + ?Sized>(&self, rng: &mut R) -> U32Field {
-        U32Field::new(((rng.next_u32() >> 1) % Q) as i32)
+        U32Field::new(((rng.next_u32() >> 1) % P) as i32)
     }
 }
 
@@ -130,7 +135,7 @@ impl Display for U32Field {
 
 impl Inverse for U32Field {
     fn inverse_or_zero(self) -> Self {
-        let q_minus_two = Q - 2;
+        let q_minus_two = P - 2;
         let mut acc = U32Field(1);
         let mut mask = u32::MAX - (u32::MAX >> 1);
         for _ in 0..32 {
@@ -181,7 +186,7 @@ mod test {
         cyclotomic_fourier::CyclotomicFourier,
         inverse::Inverse,
         polynomial::Polynomial,
-        u32_field::{U32Field, Q},
+        u32_field::{U32Field, P},
     };
     use num::Zero;
 
@@ -196,7 +201,7 @@ mod test {
             let uf = U32Field::new(value);
             assert_eq!(
                 0,
-                (uf.value() - value) % (Q as i32),
+                (uf.value() - value) % (P as i32),
                 "value: {value} but got {}",
                 uf.value()
             );
@@ -214,7 +219,7 @@ mod test {
             a + b,
             U32Field::new(a.value() + b.value()),
             "a: {a_value}, b: {b_value}, c: {}",
-            ((a_value + b_value) as u32) % Q
+            ((a_value + b_value) as u32) % P
         );
     }
 
@@ -224,7 +229,7 @@ mod test {
         for _ in 0..1000 {
             let a_value = (rng.next_u32() % 0x3fff) as i32;
             let b_value = (rng.next_u32() % 0x3fff) as i32;
-            let product = (((a_value as u32) * (b_value as u32)) % Q) as i32;
+            let product = (((a_value as u32) * (b_value as u32)) % P) as i32;
             let a = U32Field::new(a_value);
             let b = U32Field::new(b_value);
             assert_eq!(
