@@ -41,6 +41,16 @@ impl From<BigUint> for PadicInteger {
     }
 }
 
+impl From<PadicInteger> for BigUint {
+    fn from(value: PadicInteger) -> Self {
+        let mut acc = BigUint::zero();
+        for limb in value.limbs.into_iter().rev() {
+            acc = acc * P + limb.0;
+        }
+        acc
+    }
+}
+
 impl PadicInteger {
     pub(crate) fn from_bigint(value: BigInt, num_limbs: usize) -> Self {
         let mut borrow = value.is_negative();
@@ -191,14 +201,14 @@ impl PartialEq for PadicPolynomial {
 
 impl From<Polynomial<BigInt>> for PadicPolynomial {
     fn from(value: Polynomial<BigInt>) -> Self {
-        let num_coefficients = value.coefficients.len();
+        let num_coefficients = value.coefficients.len().next_power_of_two();
         let max_bitsize = value
             .coefficients
             .iter()
             .map(|c| c.bits())
             .max()
             .unwrap_or(0);
-        let num_limbs = 2 * ((max_bitsize + 30) / 31).next_power_of_two() as usize;
+        let num_limbs = 2 * ((max_bitsize + 18) / 19).next_power_of_two() as usize;
 
         let psi_rev_num_limbs = PadicExtensionRing::bitreversed_powers(num_limbs);
         let mut coefficient_limbs = vec![PadicExtensionRing::ZERO; num_coefficients * num_limbs];
@@ -258,10 +268,11 @@ impl From<PadicPolynomial> for Polynomial<BigInt> {
             }
             PadicExtensionRing::ifft(&mut limbs, &psi_inv_rev_num_limbs, num_limbs_inv);
 
-            let mut carry = PadicField::ZERO;
+            let mut carry: PadicExtensionRing = PadicField::ZERO.into();
             for limb in limbs.iter_mut() {
-                let temp = *limb + carry;
-                carry = temp.hi();
+                let temp: PadicExtensionRing = *limb + carry;
+                carry = PadicExtensionRing::from(temp.mid())
+                    + PadicExtensionRing::from(temp.hi()) * PadicExtensionRing::new(P as i64);
                 *limb = temp.lo().into();
             }
 
@@ -271,8 +282,10 @@ impl From<PadicPolynomial> for Polynomial<BigInt> {
                 PadicInteger::negate(&mut limbs, PadicExtensionRing::new(P as i64));
             }
 
-            let slice = limbs.into_iter().map(|limb| limb.lo().0).collect_vec();
-            let mut bi = BigInt::from(BigUint::from_slice(&slice));
+            let padic_integer = PadicInteger {
+                limbs: limbs.into_iter().map(|limb| limb.lo()).collect_vec(),
+            };
+            let mut bi = BigInt::from(BigUint::from(padic_integer));
 
             if was_negative {
                 bi = -bi;
@@ -287,10 +300,14 @@ impl From<PadicPolynomial> for Polynomial<BigInt> {
 
 #[cfg(test)]
 mod test {
+    use std::str::FromStr;
+
     use itertools::Itertools;
+    use num::bigint::Sign;
     use num::BigInt;
     use num::Zero;
     use proptest::collection::vec;
+    use proptest::prop_assert;
     use test_strategy::proptest;
 
     use crate::padic_extension_ring::P3;
@@ -299,11 +316,8 @@ mod test {
     use super::{PadicExtensionRing, PadicInteger, PadicPolynomial};
 
     fn can_convert_to_and_fro(big_integer_polynomial: Polynomial<BigInt>) -> bool {
-        println!("big integer poly: {:?}", big_integer_polynomial);
         let padic_polynomial = PadicPolynomial::from(big_integer_polynomial.clone());
-        println!("padic polynomial: {:?}", padic_polynomial);
         let big_integer_polynomial_again = Polynomial::<BigInt>::from(padic_polynomial);
-        println!("big int poly again: {:?}", big_integer_polynomial_again);
         big_integer_polynomial == big_integer_polynomial_again
     }
 
@@ -327,6 +341,23 @@ mod test {
         assert!(can_convert_to_and_fro(bip(vec![-5, 11])));
         assert!(can_convert_to_and_fro(bip(vec![5, -11])));
         assert!(can_convert_to_and_fro(bip(vec![-5, -11])));
+        assert!(can_convert_to_and_fro(bip(vec![0, 0, 0, 0, 1])));
+        assert!(can_convert_to_and_fro(Polynomial {
+            coefficients: vec![BigInt::from_str("340282366920938463463374607431768211456").unwrap()]
+        }))
+    }
+    #[proptest]
+    fn test_conversion_proptest(
+        #[strategy(vec(vec(0u32..=u32::MAX, 5), 1..10))] bi_limbs: Vec<Vec<u32>>,
+    ) {
+        let integers = bi_limbs
+            .into_iter()
+            .map(|limbs| BigInt::from_slice(Sign::Plus, &limbs))
+            .collect_vec();
+        let polynomial = Polynomial {
+            coefficients: integers,
+        };
+        prop_assert!(can_convert_to_and_fro(polynomial));
     }
 
     #[proptest(cases = 10000)]
