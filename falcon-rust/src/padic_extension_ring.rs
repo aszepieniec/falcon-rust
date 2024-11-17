@@ -9,85 +9,95 @@ use rand_distr::{
 
 use crate::cyclotomic_fourier::CyclotomicFourier;
 use crate::inverse::Inverse;
-use crate::u32_field::{U32Field, P};
+use crate::padic_field::{PadicField, P};
 
-/// Square of [`u32_field::P`].
-pub(crate) const P2: u64 = 1152947895184416769_u64;
+/// Cube of [`padic_field::P`].
+pub(crate) const P3: u64 = 172861751008264193_u64;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct U64Ring(pub(crate) u64);
+pub(crate) struct PadicExtensionRing(pub(crate) u64);
 
-impl U64Ring {
+impl PadicExtensionRing {
     pub(crate) const fn new(value: i64) -> Self {
         let gtz_bool = value >= 0;
         let gtz_int = gtz_bool as i64;
         let gtz_sign = gtz_int - ((!gtz_bool) as i64);
-        let reduced = gtz_sign * ((gtz_sign * value) % (P2 as i64));
-        let canonical_representative = (reduced + (P2 as i64) * (1 - gtz_int)) as u64;
-        U64Ring(canonical_representative)
+        let reduced = gtz_sign * ((gtz_sign * value) % (P3 as i64));
+        let canonical_representative = (reduced + (P3 as i64) * (1 - gtz_int)) as u64;
+        PadicExtensionRing(canonical_representative)
     }
 
     pub(crate) const fn value(&self) -> i64 {
         self.0 as i64
     }
 
-    pub(crate) fn lo(&self) -> U32Field {
-        U32Field::new((self.0 % (P as u64)).try_into().unwrap())
+    pub(crate) fn lo(&self) -> PadicField {
+        PadicField::new((self.0 % (P as u64)).try_into().unwrap())
     }
 
-    pub(crate) fn hi(&self) -> U32Field {
-        U32Field::new((self.0 / (P as u64)).try_into().unwrap())
+    pub(crate) fn mid(&self) -> PadicField {
+        let lo = self.lo().into();
+        PadicField::new(((*self - lo).0 / (P as u64)).try_into().unwrap())
+    }
+
+    pub(crate) fn hi(&self) -> PadicField {
+        let mid = self.mid().into();
+        PadicField::new(
+            ((*self - mid).0 / ((P as u64) * (P as u64)))
+                .try_into()
+                .unwrap(),
+        )
     }
 }
 
-impl From<bool> for U64Ring {
+impl From<bool> for PadicExtensionRing {
     fn from(value: bool) -> Self {
-        U64Ring::from(usize::from(value))
+        PadicExtensionRing::from(usize::from(value))
     }
 }
 
-impl From<usize> for U64Ring {
+impl From<usize> for PadicExtensionRing {
     fn from(value: usize) -> Self {
-        U64Ring::new(value as i64)
+        PadicExtensionRing::new(value as i64)
     }
 }
 
-impl From<U32Field> for U64Ring {
-    fn from(value: U32Field) -> Self {
+impl From<PadicField> for PadicExtensionRing {
+    fn from(value: PadicField) -> Self {
         Self::new(value.value().into())
     }
 }
 
-impl ConstZero for U64Ring {
+impl ConstZero for PadicExtensionRing {
     const ZERO: Self = Self::new(0);
 }
 
 #[allow(clippy::suspicious_arithmetic_impl)]
-impl Add for U64Ring {
+impl Add for PadicExtensionRing {
     fn add(self, rhs: Self) -> Self::Output {
         let (s, _) = self.0.overflowing_add(rhs.0);
-        let (d, n) = s.overflowing_sub(P2);
-        let (r, _) = d.overflowing_add(P2 * (n as u64));
-        U64Ring(r)
+        let (d, n) = s.overflowing_sub(P3);
+        let (r, _) = d.overflowing_add(P3 * (n as u64));
+        PadicExtensionRing(r)
     }
 
     type Output = Self;
 }
 
-impl Add<U32Field> for U64Ring {
+impl Add<PadicField> for PadicExtensionRing {
     type Output = Self;
-    fn add(self, rhs: U32Field) -> Self::Output {
+    fn add(self, rhs: PadicField) -> Self::Output {
         self + Self::from(rhs)
     }
 }
 
-impl AddAssign for U64Ring {
+impl AddAssign for PadicExtensionRing {
     fn add_assign(&mut self, rhs: Self) {
         *self = *self + rhs;
     }
 }
 
-impl Sub for U64Ring {
+impl Sub for PadicExtensionRing {
     type Output = Self;
 
     fn sub(self, rhs: Self) -> Self::Output {
@@ -95,58 +105,58 @@ impl Sub for U64Ring {
     }
 }
 
-impl SubAssign for U64Ring {
+impl SubAssign for PadicExtensionRing {
     fn sub_assign(&mut self, rhs: Self) {
         *self = *self - rhs;
     }
 }
 
-impl Neg for U64Ring {
-    type Output = U64Ring;
+impl Neg for PadicExtensionRing {
+    type Output = PadicExtensionRing;
 
     fn neg(self) -> Self::Output {
         let is_nonzero = self.0 != 0;
-        let r = P2 - self.0;
-        U64Ring(r * (is_nonzero as u64))
+        let r = P3 - self.0;
+        PadicExtensionRing(r * (is_nonzero as u64))
     }
 }
 
-impl Mul for U64Ring {
+impl Mul for PadicExtensionRing {
     fn mul(self, rhs: Self) -> Self::Output {
-        U64Ring((((self.0 as u128) * (rhs.0 as u128)) % (P2 as u128)) as u64)
+        PadicExtensionRing((((self.0 as u128) * (rhs.0 as u128)) % (P3 as u128)) as u64)
     }
 
     type Output = Self;
 }
 
-impl MulAssign for U64Ring {
+impl MulAssign for PadicExtensionRing {
     fn mul_assign(&mut self, rhs: Self) {
         *self = *self * rhs;
     }
 }
 
-impl Zero for U64Ring {
+impl Zero for PadicExtensionRing {
     fn zero() -> Self {
-        U64Ring::new(0)
+        PadicExtensionRing::new(0)
     }
 
     fn is_zero(&self) -> bool {
         self.0 == 0
     }
 }
-impl One for U64Ring {
+impl One for PadicExtensionRing {
     fn one() -> Self {
-        U64Ring::new(1)
+        PadicExtensionRing::new(1)
     }
 }
 
-impl Distribution<U64Ring> for Standard {
-    fn sample<R: rand::Rng + ?Sized>(&self, rng: &mut R) -> U64Ring {
-        U64Ring::new(((rng.next_u64() >> 1) % P2) as i64)
+impl Distribution<PadicExtensionRing> for Standard {
+    fn sample<R: rand::Rng + ?Sized>(&self, rng: &mut R) -> PadicExtensionRing {
+        PadicExtensionRing::new(((rng.next_u64() >> 1) % P3) as i64)
     }
 }
 
-impl Display for U64Ring {
+impl Display for PadicExtensionRing {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_fmt(format_args!("{}", self.value()))
     }
@@ -167,19 +177,19 @@ fn xgcd(a: i64, b: i64) -> (i64, i64, i64) {
     (old_s, old_t, old_r)
 }
 
-impl Inverse for U64Ring {
+impl Inverse for PadicExtensionRing {
     fn inverse_or_zero(self) -> Self {
-        let (a, _b, _g) = xgcd(self.0.try_into().unwrap(), P2.try_into().unwrap());
+        let (a, _b, _g) = xgcd(self.0.try_into().unwrap(), P3.try_into().unwrap());
         Self::new(a)
     }
 }
 
-impl CyclotomicFourier for U64Ring {
+impl CyclotomicFourier for PadicExtensionRing {
     fn primitive_root_of_unity(n: usize) -> Self {
         let log2n = n.ilog2();
         assert!(log2n <= 12);
-        // and 765470292790715721_i64 is a twelfth root of unity
-        let mut a = U64Ring::new(765470292790715721_i64);
+        // and 6408494027267741 is a (2^12)th root of unity
+        let mut a = PadicExtensionRing::new(6408494027267741_i64);
         let num_squarings = 12 - n.ilog2();
         for _ in 0..num_squarings {
             a *= a;
@@ -197,8 +207,8 @@ mod test {
     use crate::{
         cyclotomic_fourier::CyclotomicFourier,
         inverse::Inverse,
+        padic_extension_ring::{PadicExtensionRing, P3},
         polynomial::Polynomial,
-        u64_ring::{U64Ring, P2},
     };
     use num::Zero;
 
@@ -210,10 +220,10 @@ mod test {
             if rng.next_u32() % 2 == 1 {
                 value *= -1;
             }
-            let uf = U64Ring::new(value);
+            let uf = PadicExtensionRing::new(value);
             assert_eq!(
                 0,
-                (uf.value() - value) % (P2 as i64),
+                (uf.value() - value) % (P3 as i64),
                 "value: {value} but got {}",
                 uf.value()
             );
@@ -225,13 +235,13 @@ mod test {
         let mut rng = thread_rng();
         let a_value = (rng.next_u64() % 0x0fffffffffff) as i64;
         let b_value = (rng.next_u64() % 0x0fffffffffff) as i64;
-        let a = U64Ring::new(a_value);
-        let b = U64Ring::new(b_value);
+        let a = PadicExtensionRing::new(a_value);
+        let b = PadicExtensionRing::new(b_value);
         assert_eq!(
             a + b,
-            U64Ring::new(a.value() + b.value()),
+            PadicExtensionRing::new(a.value() + b.value()),
             "a: {a_value}, b: {b_value}, c: {}",
-            ((a_value + b_value) as u64) % P2
+            ((a_value + b_value) as u64) % P3
         );
     }
 
@@ -241,15 +251,15 @@ mod test {
         for _ in 0..1000 {
             let a_value = (rng.next_u64() % 0x3fffffffffff) as i64;
             let b_value = (rng.next_u64() % 0x3fffffffffff) as i64;
-            let product = (((a_value as u128) * (b_value as u128)) % (P2 as u128)) as i64;
-            let a = U64Ring::new(a_value);
-            let b = U64Ring::new(b_value);
+            let product = (((a_value as u128) * (b_value as u128)) % (P3 as u128)) as i64;
+            let a = PadicExtensionRing::new(a_value);
+            let b = PadicExtensionRing::new(b_value);
             assert_eq!(
                 a * b,
-                U64Ring::new(product),
+                PadicExtensionRing::new(product),
                 "{} =/= {}",
                 a * b,
-                U64Ring::new(product)
+                PadicExtensionRing::new(product)
             );
         }
     }
@@ -257,8 +267,9 @@ mod test {
     #[test]
     fn test_batch_inverse() {
         let mut rng = thread_rng();
-        let a: [U64Ring; 64] = (0..64).map(|_| rng.gen()).collect_vec().try_into().unwrap();
-        let b_batch = U64Ring::batch_inverse_or_zero(&a);
+        let a: [PadicExtensionRing; 64] =
+            (0..64).map(|_| rng.gen()).collect_vec().try_into().unwrap();
+        let b_batch = PadicExtensionRing::batch_inverse_or_zero(&a);
         let b_regular = a.iter().map(|e| e.inverse_or_zero()).collect_vec();
         assert_eq!(b_batch.to_vec(), b_regular);
     }
@@ -266,7 +277,7 @@ mod test {
     #[test]
     fn test_inverse() {
         let mut rng = thread_rng();
-        let a: U64Ring = rng.gen();
+        let a: PadicExtensionRing = rng.gen();
         let b = a.inverse_or_zero();
 
         assert_eq!(a * b * a, a);
@@ -277,12 +288,12 @@ mod test {
     fn test_primitive_nth_root_of_unity() {
         for log2n in 0..=12 {
             let n = 1 << log2n;
-            let mut root = U64Ring::primitive_root_of_unity(n);
+            let mut root = PadicExtensionRing::primitive_root_of_unity(n);
             for i in 0..log2n {
-                assert_ne!(root, U64Ring::one(), "log2n: {log2n} and i: {i}");
+                assert_ne!(root, PadicExtensionRing::one(), "log2n: {log2n} and i: {i}");
                 root *= root;
             }
-            assert_eq!(root, U64Ring::one());
+            assert_eq!(root, PadicExtensionRing::one());
         }
     }
 
@@ -296,8 +307,8 @@ mod test {
         for (i, vector) in test_vectors.into_iter().enumerate() {
             let n = 1 << (i + 1);
             for (a, b) in vector.into_iter() {
-                assert_eq!(U64Ring::bitreverse_index(a, n), b);
-                assert_eq!(U64Ring::bitreverse_index(b, n), a);
+                assert_eq!(PadicExtensionRing::bitreverse_index(a, n), b);
+                assert_eq!(PadicExtensionRing::bitreverse_index(b, n), a);
             }
         }
     }
@@ -308,29 +319,29 @@ mod test {
         let mut rng = thread_rng();
         let mut a = (0..n)
             .map(|_| rng.next_u64() as i64)
-            .map(U64Ring::new)
+            .map(PadicExtensionRing::new)
             .collect_vec();
         let mut b = a.clone();
         assert_eq!(a, b);
 
-        let psi_rev = U64Ring::bitreversed_powers(n);
-        let psi_inv_rev = U64Ring::bitreversed_powers_inverse(n);
-        let ninv = U64Ring::inverse_or_zero(U64Ring::new(n as i64));
-        U64Ring::fft(&mut a, &psi_rev);
-        U64Ring::ifft(&mut a, &psi_inv_rev, ninv);
+        let psi_rev = PadicExtensionRing::bitreversed_powers(n);
+        let psi_inv_rev = PadicExtensionRing::bitreversed_powers_inverse(n);
+        let ninv = PadicExtensionRing::inverse_or_zero(PadicExtensionRing::new(n as i64));
+        PadicExtensionRing::fft(&mut a, &psi_rev);
+        PadicExtensionRing::ifft(&mut a, &psi_inv_rev, ninv);
         assert_eq!(a, b);
 
-        let x = U64Ring::new(rng.next_u32() as i64);
-        let y = U64Ring::new(rng.next_u32() as i64);
+        let x = PadicExtensionRing::new(rng.next_u32() as i64);
+        let y = PadicExtensionRing::new(rng.next_u32() as i64);
         let mut c = a
             .iter()
             .zip(b.iter())
             .map(|(&l, &r)| x * l + y * r)
             .collect_vec();
 
-        U64Ring::fft(&mut a, &psi_rev);
-        U64Ring::fft(&mut b, &psi_rev);
-        U64Ring::fft(&mut c, &psi_rev);
+        PadicExtensionRing::fft(&mut a, &psi_rev);
+        PadicExtensionRing::fft(&mut b, &psi_rev);
+        PadicExtensionRing::fft(&mut c, &psi_rev);
 
         let c_alt = a
             .iter()
@@ -346,28 +357,28 @@ mod test {
         let n = 32;
         let mut rng = thread_rng();
         let mut a = (0..n)
-            .map(|_| U64Ring::new(rng.gen_range(-20..20)))
+            .map(|_| PadicExtensionRing::new(rng.gen_range(-20..20)))
             .collect_vec();
         let mut b = (0..n)
-            .map(|_| U64Ring::new(rng.gen_range(-20..20)))
+            .map(|_| PadicExtensionRing::new(rng.gen_range(-20..20)))
             .collect_vec();
 
         let c = (Polynomial::new(a.clone()) * Polynomial::new(b.clone()))
             .reduce_by_cyclotomic(n)
             .coefficients;
 
-        let psi_rev = U64Ring::bitreversed_powers(n);
-        U64Ring::fft(&mut a, &psi_rev);
-        U64Ring::fft(&mut b, &psi_rev);
+        let psi_rev = PadicExtensionRing::bitreversed_powers(n);
+        PadicExtensionRing::fft(&mut a, &psi_rev);
+        PadicExtensionRing::fft(&mut b, &psi_rev);
         let mut d = a.iter().zip(b.iter()).map(|(&l, &r)| l * r).collect_vec();
-        let psi_inv_rev = U64Ring::bitreversed_powers_inverse(n);
-        let ninv = U64Ring::new(n as i64).inverse_or_zero();
-        U64Ring::ifft(&mut d, &psi_inv_rev, ninv);
+        let psi_inv_rev = PadicExtensionRing::bitreversed_powers_inverse(n);
+        let ninv = PadicExtensionRing::new(n as i64).inverse_or_zero();
+        PadicExtensionRing::ifft(&mut d, &psi_inv_rev, ninv);
 
-        let diff = |u: &[U64Ring], v: &[U64Ring]| {
+        let diff = |u: &[PadicExtensionRing], v: &[PadicExtensionRing]| {
             u.iter().zip(v.iter()).map(|(&l, &r)| l - r).collect_vec()
         };
 
-        assert_eq!(diff(&c, &d), vec![U64Ring::zero(); n]);
+        assert_eq!(diff(&c, &d), vec![PadicExtensionRing::zero(); n]);
     }
 }

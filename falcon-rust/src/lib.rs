@@ -65,8 +65,9 @@ pub(crate) mod fast_fft;
 pub(crate) mod ffsampling;
 pub(crate) mod inverse;
 pub mod math; // pub for benching
-pub(crate) mod padic;
+pub(crate) mod padic_extension_ring;
+pub(crate) mod padic_field;
+pub(crate) mod padic_polynomial;
 pub mod polynomial; // pub for benching
 pub(crate) mod samplerz;
 pub(crate) mod u32_field;
-pub(crate) mod u64_ring;

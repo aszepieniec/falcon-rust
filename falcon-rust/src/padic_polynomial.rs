@@ -12,15 +12,14 @@ use std::ops::Sub;
 
 use crate::cyclotomic_fourier::CyclotomicFourier;
 use crate::inverse::Inverse;
+use crate::padic_extension_ring::PadicExtensionRing;
+use crate::padic_field::PadicField;
+use crate::padic_field::P;
 use crate::polynomial::Polynomial;
-use crate::u32_field::U32Field;
-use crate::u32_field::P;
-use crate::u64_ring::U64Ring;
-use crate::u64_ring::P2;
 
 #[derive(Debug, Clone)]
 pub(crate) struct PadicInteger {
-    pub(crate) limbs: Vec<U32Field>,
+    pub(crate) limbs: Vec<PadicField>,
 }
 
 impl From<BigUint> for PadicInteger {
@@ -28,7 +27,7 @@ impl From<BigUint> for PadicInteger {
         let mut limbs = vec![];
         while !value.is_zero() {
             let limb = value.clone().rem(&P);
-            limbs.push(U32Field::new(
+            limbs.push(PadicField::new(
                 limb.to_u32_digits()
                     .first()
                     .copied()
@@ -47,11 +46,11 @@ impl PadicInteger {
         let mut borrow = value.is_negative();
         let mut padic_integer = PadicInteger::from(BigUint::try_from(value.abs()).unwrap());
         while padic_integer.limbs.len() < num_limbs {
-            padic_integer.limbs.push(U32Field::ZERO);
+            padic_integer.limbs.push(PadicField::ZERO);
         }
         if borrow {
             for limb in &mut padic_integer.limbs {
-                (*limb, borrow) = (-*limb + U32Field::new(borrow.into()), limb.is_zero());
+                (*limb, borrow) = (-*limb + PadicField::new(borrow.into()), limb.is_zero());
             }
         }
         padic_integer
@@ -81,20 +80,20 @@ impl PadicInteger {
 
 #[derive(Debug, Clone)]
 pub(crate) struct PadicPolynomial {
-    pub(crate) coefficient_limbs: Vec<U64Ring>,
+    pub(crate) coefficient_limbs: Vec<PadicExtensionRing>,
     pub(crate) num_coeffs: usize,
     pub(crate) limbs_per_coeff: usize,
 }
 
 impl PadicPolynomial {
-    pub(crate) fn new<const N: usize, const M: usize, T: Into<U64Ring> + Copy>(
+    pub(crate) fn new<const N: usize, const M: usize, T: Into<PadicExtensionRing> + Copy>(
         coeff_limbs: [[T; N]; M],
     ) -> Self {
         PadicPolynomial {
             coefficient_limbs: coeff_limbs
                 .as_flattened()
                 .iter()
-                .map(|t| std::convert::Into::<U64Ring>::into(*t))
+                .map(|t| std::convert::Into::<PadicExtensionRing>::into(*t))
                 .collect_vec(),
             num_coeffs: N,
             limbs_per_coeff: M,
@@ -127,29 +126,50 @@ impl PadicPolynomial {
     }
 
     fn normalize(&mut self) {
-        let mut limbs = vec![U64Ring::ZERO; self.limbs_per_coeff];
-        let psi_inverse_num_limbs = U64Ring::bitreversed_powers_inverse(self.limbs_per_coeff);
-        let num_limbs_inverse = U64Ring::new(self.limbs_per_coeff.try_into().unwrap());
-        let psi_rev_num_limbs = U64Ring::bitreversed_powers(self.limbs_per_coeff);
+        let psi_rev_inverse_num_coeffs =
+            PadicExtensionRing::bitreversed_powers_inverse(self.num_coeffs);
+        let psi_rev_num_coeffs = PadicExtensionRing::bitreversed_powers(self.num_coeffs);
+        let num_coeffs_inverse = PadicExtensionRing::new(self.num_coeffs as i64).inverse_or_zero();
+
+        for i in 0..self.limbs_per_coeff {
+            PadicExtensionRing::ifft(
+                &mut self.coefficient_limbs[i * self.num_coeffs..(i + 1) * self.num_coeffs],
+                &psi_rev_inverse_num_coeffs,
+                num_coeffs_inverse,
+            );
+        }
+
+        let mut limbs = vec![PadicExtensionRing::ZERO; self.limbs_per_coeff];
+        let psi_inverse_num_limbs =
+            PadicExtensionRing::bitreversed_powers_inverse(self.limbs_per_coeff);
+        let num_limbs_inverse = PadicExtensionRing::new(self.limbs_per_coeff.try_into().unwrap());
+        let psi_rev_num_limbs = PadicExtensionRing::bitreversed_powers(self.limbs_per_coeff);
         for i in 0..self.num_coeffs {
             for (j, limb) in limbs.iter_mut().enumerate() {
                 *limb = self.coefficient_limbs[j * self.num_coeffs + i];
             }
 
-            U64Ring::ifft(&mut limbs, &psi_inverse_num_limbs, num_limbs_inverse);
+            PadicExtensionRing::ifft(&mut limbs, &psi_inverse_num_limbs, num_limbs_inverse);
 
-            let mut carry = U32Field::zero();
+            let mut carry = PadicField::zero();
             for limb in limbs.iter_mut() {
                 let temp = *limb + carry;
                 carry = temp.hi();
                 *limb = temp.lo().into();
             }
 
-            U64Ring::fft(&mut limbs, &psi_rev_num_limbs);
+            PadicExtensionRing::fft(&mut limbs, &psi_rev_num_limbs);
 
             for (j, limb) in limbs.iter().enumerate() {
                 self.coefficient_limbs[j * self.num_coeffs + i] = *limb;
             }
+        }
+
+        for i in 0..self.limbs_per_coeff {
+            PadicExtensionRing::fft(
+                &mut self.coefficient_limbs[i * self.num_coeffs..(i + 1) * self.num_coeffs],
+                &psi_rev_num_coeffs,
+            );
         }
     }
 
@@ -180,28 +200,24 @@ impl From<Polynomial<BigInt>> for PadicPolynomial {
             .unwrap_or(0);
         let num_limbs = 2 * ((max_bitsize + 30) / 31).next_power_of_two() as usize;
 
-        let psi_rev_num_limbs = U64Ring::bitreversed_powers(num_limbs);
-        let mut coefficient_limbs = vec![U64Ring::ZERO; num_coefficients * num_limbs];
+        let psi_rev_num_limbs = PadicExtensionRing::bitreversed_powers(num_limbs);
+        let mut coefficient_limbs = vec![PadicExtensionRing::ZERO; num_coefficients * num_limbs];
         for (i, coefficient) in value.coefficients.into_iter().enumerate() {
             let was_negative = coefficient.is_negative();
             let expansion = PadicInteger::from_bigint(coefficient.abs(), num_limbs);
-            println!("expansion: {:?}", expansion);
             let mut limbs = expansion.limbs.into_iter().map(|l| l.into()).collect_vec();
-            println!("limbs: {:?}", limbs);
             if was_negative {
-                PadicInteger::negate(&mut limbs, U64Ring::new(P as i64));
+                PadicInteger::negate(&mut limbs, PadicExtensionRing::new(P as i64));
             }
-            println!("negated: {:?}", limbs);
-            U64Ring::fft(&mut limbs, &psi_rev_num_limbs);
-            println!("after fft: {:?}", limbs);
+            PadicExtensionRing::fft(&mut limbs, &psi_rev_num_limbs);
             for (j, limb) in limbs.into_iter().enumerate() {
                 coefficient_limbs[j * num_coefficients + i] = limb;
             }
         }
 
-        let psi_rev_num_coefficients = U64Ring::bitreversed_powers(num_coefficients);
+        let psi_rev_num_coefficients = PadicExtensionRing::bitreversed_powers(num_coefficients);
         for i in 0..num_limbs {
-            U64Ring::fft(
+            PadicExtensionRing::fft(
                 &mut coefficient_limbs[i * num_coefficients..(i + 1) * num_coefficients],
                 &psi_rev_num_coefficients,
             );
@@ -217,45 +233,43 @@ impl From<Polynomial<BigInt>> for PadicPolynomial {
 
 impl From<PadicPolynomial> for Polynomial<BigInt> {
     fn from(mut value: PadicPolynomial) -> Self {
-        println!("---");
         let num_coefficients = value.num_coeffs;
         let num_limbs = value.limbs_per_coeff;
 
-        let psi_inv_rev_num_coefficients = U64Ring::bitreversed_powers_inverse(num_coefficients);
-        let num_coefficients_inv = U64Ring::new(num_coefficients as i64).inverse_or_zero();
+        let psi_inv_rev_num_coefficients =
+            PadicExtensionRing::bitreversed_powers_inverse(num_coefficients);
+        let num_coefficients_inv =
+            PadicExtensionRing::new(num_coefficients as i64).inverse_or_zero();
         for i in 0..num_limbs {
-            U64Ring::ifft(
+            PadicExtensionRing::ifft(
                 &mut value.coefficient_limbs[i * num_coefficients..(i + 1) * num_coefficients],
                 &psi_inv_rev_num_coefficients,
                 num_coefficients_inv,
             );
         }
 
-        let psi_inv_rev_num_limbs = U64Ring::bitreversed_powers_inverse(num_limbs);
-        let num_limbs_inv = U64Ring::new(num_limbs as i64).inverse_or_zero();
+        let psi_inv_rev_num_limbs = PadicExtensionRing::bitreversed_powers_inverse(num_limbs);
+        let num_limbs_inv = PadicExtensionRing::new(num_limbs as i64).inverse_or_zero();
         let mut coefficients = vec![];
         for i in 0..num_coefficients {
-            let mut limbs = vec![U64Ring::ZERO; num_limbs];
+            let mut limbs = vec![PadicExtensionRing::ZERO; num_limbs];
             for (j, limb) in limbs.iter_mut().enumerate() {
                 *limb = value.coefficient_limbs[j * num_coefficients + i];
             }
-            println!("before ifft: {:?}", limbs);
-            U64Ring::ifft(&mut limbs, &psi_inv_rev_num_limbs, num_limbs_inv);
-            println!("after ifft: {:?}", limbs);
+            PadicExtensionRing::ifft(&mut limbs, &psi_inv_rev_num_limbs, num_limbs_inv);
 
-            let mut carry = U32Field::ZERO;
+            let mut carry = PadicField::ZERO;
             for limb in limbs.iter_mut() {
                 let temp = *limb + carry;
                 carry = temp.hi();
                 *limb = temp.lo().into();
             }
-            println!("after carry: {:?}", limbs);
 
-            let was_negative = *limbs.last().unwrap() == U64Ring::from(-U32Field::one());
+            let was_negative =
+                *limbs.last().unwrap() == PadicExtensionRing::from(-PadicField::one());
             if was_negative {
-                PadicInteger::negate(&mut limbs, U64Ring::new(P as i64));
+                PadicInteger::negate(&mut limbs, PadicExtensionRing::new(P as i64));
             }
-            println!("after negating: {:?}", limbs);
 
             let slice = limbs.into_iter().map(|limb| limb.lo().0).collect_vec();
             let mut bi = BigInt::from(BigUint::from_slice(&slice));
@@ -279,10 +293,10 @@ mod test {
     use proptest::collection::vec;
     use test_strategy::proptest;
 
+    use crate::padic_extension_ring::P3;
     use crate::polynomial::Polynomial;
-    use crate::u64_ring::P2;
 
-    use super::{PadicInteger, PadicPolynomial, U64Ring};
+    use super::{PadicExtensionRing, PadicInteger, PadicPolynomial};
 
     fn can_convert_to_and_fro(big_integer_polynomial: Polynomial<BigInt>) -> bool {
         println!("big integer poly: {:?}", big_integer_polynomial);
@@ -317,18 +331,18 @@ mod test {
 
     #[proptest(cases = 10000)]
     fn test_negate_padic_integer(#[strategy(vec(-10_i64..10, 1..10))] limbs: Vec<i64>) {
-        let pos_limbs = limbs.into_iter().map(U64Ring::new).collect_vec();
+        let pos_limbs = limbs.into_iter().map(PadicExtensionRing::new).collect_vec();
         let mut neg_limbs = pos_limbs.clone();
-        PadicInteger::negate(&mut neg_limbs, U64Ring::zero());
+        PadicInteger::negate(&mut neg_limbs, PadicExtensionRing::zero());
         let mut carry = false;
         for (i, (p, n)) in pos_limbs.into_iter().zip(neg_limbs.into_iter()).enumerate() {
             assert_eq!(
-                p + n + U64Ring::from(carry),
-                U64Ring::zero(),
+                p + n + PadicExtensionRing::from(carry),
+                PadicExtensionRing::zero(),
                 "test failed for limb {i}.\np: {:?}\nn: {:?}\nexpected: 0\nobserved: {}\ncarry: {carry}",
-                p, n, (p + n + U64Ring::from(carry)).0,
+                p, n, (p + n + PadicExtensionRing::from(carry)).0,
             );
-            carry = (p.0 + n.0 + u64::from(carry)) == P2;
+            carry = (p.0 + n.0 + u64::from(carry)) == P3;
         }
     }
 }
