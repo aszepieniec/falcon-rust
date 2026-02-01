@@ -654,7 +654,7 @@ mod test {
     use crate::polynomial::hash_to_point;
     use crate::polynomial::Polynomial;
     use itertools::Itertools;
-    use rand::thread_rng;
+    use rand::rng;
     use rand::Rng;
 
     #[test]
@@ -716,11 +716,11 @@ mod test {
 
     #[test]
     fn test_div() {
-        let mut rng = thread_rng();
-        let n = rng.gen_range(1..100);
-        let m = rng.gen_range(1..100);
-        let expected_coefficients = (0..n).map(|_| rng.gen_range(-5..5)).collect_vec();
-        let cofactor_coefficients = (0..m).map(|_| rng.gen_range(-5..5)).collect_vec();
+        let mut rng = rng();
+        let n = rng.random_range(1..100);
+        let m = rng.random_range(1..100);
+        let expected_coefficients = (0..n).map(|_| rng.random_range(-5..5)).collect_vec();
+        let cofactor_coefficients = (0..m).map(|_| rng.random_range(-5..5)).collect_vec();
         let cofactor_polynomial = Polynomial::new(cofactor_coefficients);
         let product = Polynomial::new(expected_coefficients.clone()) * cofactor_polynomial.clone();
         let quotient = product / cofactor_polynomial;
@@ -729,11 +729,11 @@ mod test {
 
     #[test]
     fn test_karatsuba() {
-        let mut rng = thread_rng();
+        let mut rng = rng();
         let n = 64;
-        let coefficients_lhs = (0..n).map(|_| rng.gen_range(-5..5) as f64).collect_vec();
+        let coefficients_lhs = (0..n).map(|_| rng.random_range(-5..5) as f64).collect_vec();
         let lhs = Polynomial::new(coefficients_lhs);
-        let coefficients_rhs = (0..n).map(|_| rng.gen_range(-5..5) as f64).collect_vec();
+        let coefficients_rhs = (0..n).map(|_| rng.random_range(-5..5) as f64).collect_vec();
         let rhs = Polynomial::new(coefficients_rhs);
 
         let schoolbook = lhs.clone() * rhs.clone();

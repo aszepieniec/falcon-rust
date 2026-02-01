@@ -2,38 +2,6 @@ use bit_vec::BitVec;
 use itertools::Itertools;
 use num::Integer;
 
-/// Compression and decompression routines for signatures.
-
-/// This is a deprecated compress routine used now only for testing
-/// compatibility with the new, faster implementation (below).
-#[allow(dead_code)]
-pub(crate) fn compress_slow(v: &[i16], slen: usize) -> Option<Vec<u8>> {
-    let mut bitvector: BitVec = BitVec::with_capacity(slen);
-    for coeff in v {
-        // encode sign
-        bitvector.push(*coeff < 0);
-        // encode low bits
-        let s = (*coeff).abs();
-        for i in (0..7).rev() {
-            bitvector.push(((s >> i) & 1) != 0);
-        }
-        // encode high bits
-        for _ in 0..(s >> 7) {
-            bitvector.push(false);
-        }
-        bitvector.push(true);
-    }
-    // return failure if encoding is too long
-    if bitvector.len() > slen {
-        return None;
-    }
-    // pad
-    while bitvector.len() < slen {
-        bitvector.push(false);
-    }
-    Some(bitvector.to_bytes())
-}
-
 /// Take as input a list of integers v and a byte length `byte_length``, and
 /// return a bytestring of length `byte_length` that encode/compress v.
 /// If this is not possible, return False.
@@ -272,28 +240,53 @@ pub(crate) fn decompress(x: &[u8], n: usize) -> Option<Vec<i16>> {
 #[cfg(test)]
 mod test {
 
-    use crate::{
-        encoding::{compress, compress_slow, decompress, decompress_slow},
-        falcon_field::Q,
-    };
+    use crate::encoding::{compress, decompress, decompress_slow};
+    use crate::falcon_field::Q;
     use bit_vec::BitVec;
     use itertools::Itertools;
-    use rand::{thread_rng, Rng};
-    use rand_distr::{num_traits::ToPrimitive, Distribution, Normal};
+    use rand::distr::Distribution;
+    use rand::{rng, Rng};
 
     use proptest::prelude::*;
 
+    /// Compression and decompression routines for signatures.
+    ///
+    /// This is a deprecated compress routine used now only for testing
+    /// compatibility with the new, faster implementation, `compress`.
+    #[allow(dead_code)]
+    pub(crate) fn compress_slow(v: &[i16], slen: usize) -> Option<Vec<u8>> {
+        let mut bitvector: BitVec = BitVec::with_capacity(slen);
+        for coeff in v {
+            // encode sign
+            bitvector.push(*coeff < 0);
+            // encode low bits
+            let s = (*coeff).abs();
+            for i in (0..7).rev() {
+                bitvector.push(((s >> i) & 1) != 0);
+            }
+            // encode high bits
+            for _ in 0..(s >> 7) {
+                bitvector.push(false);
+            }
+            bitvector.push(true);
+        }
+        // return failure if encoding is too long
+        if bitvector.len() > slen {
+            return None;
+        }
+        // pad
+        while bitvector.len() < slen {
+            bitvector.push(false);
+        }
+        Some(bitvector.to_bytes())
+    }
+
     fn short_elements(n: usize) -> Vec<i16> {
-        let sigma = 1.5 * (Q.to_f64().unwrap()).sqrt();
-        let distribution = Normal::<f64>::new(0.0, sigma).unwrap();
-        let mut rng = thread_rng();
+        let sigma = 1.5 * f64::from(Q).sqrt();
+        let distribution = rand_distr::Normal::<f64>::new(0.0, sigma).unwrap();
+        let mut rng = rng();
         (0..n)
-            .map(|_| {
-                (distribution.sample(&mut rng) + 0.5)
-                    .floor()
-                    .to_i32()
-                    .unwrap() as i16
-            })
+            .map(|_| (distribution.sample(&mut rng) + 0.5).floor() as i16)
             .collect::<Vec<_>>()
     }
     proptest! {
@@ -325,9 +318,9 @@ mod test {
     fn test_compress_decompress() {
         let num_iterations = 1000;
 
-        let sigma = 1.5 * (Q.to_f64().unwrap()).sqrt();
-        let distribution = Normal::<f64>::new(0.0, sigma).unwrap();
-        let mut rng = thread_rng();
+        let sigma = 1.5 * f64::from(Q).sqrt();
+        let distribution = rand_distr::Normal::<f64>::new(0.0, sigma).unwrap();
+        let mut rng = rng();
 
         let mut num_successes_512 = 0;
         let mut num_successes_1024 = 0;
@@ -342,12 +335,7 @@ mod test {
                 let slen = SIG_BYTELEN - SALT_LEN - HEAD_LEN;
 
                 let initial: [i16; N] = (0..N)
-                    .map(|_| {
-                        (distribution.sample(&mut rng) + 0.5)
-                            .floor()
-                            .to_i32()
-                            .unwrap() as i16
-                    })
+                    .map(|_| (distribution.sample(&mut rng) + 0.5).floor() as i16)
                     .collect::<Vec<_>>()
                     .try_into()
                     .unwrap();
@@ -366,12 +354,7 @@ mod test {
                 let slen = SIG_BYTELEN - SALT_LEN - HEAD_LEN;
 
                 let initial: [i16; 1024] = (0..N)
-                    .map(|_| {
-                        (distribution.sample(&mut rng) + 0.5)
-                            .floor()
-                            .to_i32()
-                            .unwrap() as i16
-                    })
+                    .map(|_| (distribution.sample(&mut rng) + 0.5).floor() as i16)
                     .collect::<Vec<_>>()
                     .try_into()
                     .unwrap();
@@ -389,18 +372,13 @@ mod test {
 
     #[test]
     fn test_compress_equiv() {
-        let sigma = 1.5 * (Q.to_f64().unwrap()).sqrt();
-        let distribution = Normal::<f64>::new(0.0, sigma).unwrap();
-        let mut rng = thread_rng();
+        let sigma = 1.5 * f64::from(Q).sqrt();
+        let distribution = rand_distr::Normal::<f64>::new(0.0, sigma).unwrap();
+        let mut rng = rng();
 
         let n = 200;
         let initial = (0..n)
-            .map(|_| {
-                (distribution.sample(&mut rng) + 0.5)
-                    .floor()
-                    .to_i32()
-                    .unwrap() as i16
-            })
+            .map(|_| (distribution.sample(&mut rng) + 0.5).floor() as i16)
             .collect::<Vec<_>>();
         let slen = 2 * n * 8;
         let compressed = compress_slow(&initial, slen).unwrap();
@@ -416,21 +394,16 @@ mod test {
 
     #[test]
     fn test_decompress_equiv() {
-        let sigma = 1.5 * (Q.to_f64().unwrap()).sqrt();
-        let distribution = Normal::<f64>::new(0.0, sigma).unwrap();
-        let mut rng = thread_rng();
+        let sigma = 1.5 * f64::from(Q).sqrt();
+        let distribution = rand_distr::Normal::<f64>::new(0.0, sigma).unwrap();
+        let mut rng = rng();
 
         let num_iterations = 1000;
 
         for _ in 0..num_iterations {
-            let n = rng.gen_range(1..100);
+            let n = rng.random_range(1..100);
             let initial = (0..n)
-                .map(|_| {
-                    (distribution.sample(&mut rng) + 0.5)
-                        .floor()
-                        .to_i32()
-                        .unwrap() as i16
-                })
+                .map(|_| (distribution.sample(&mut rng) + 0.5).floor() as i16)
                 .collect::<Vec<_>>();
             let slen = 2 * n * 8;
             let compressed = compress(&initial, slen).unwrap();
@@ -444,21 +417,16 @@ mod test {
 
     #[test]
     fn test_decompress_failures() {
-        let sigma = 1.5 * (Q.to_f64().unwrap()).sqrt();
-        let distribution = Normal::<f64>::new(0.0, sigma).unwrap();
-        let mut rng = thread_rng();
+        let sigma = 1.5 * f64::from(Q).sqrt();
+        let distribution = rand_distr::Normal::<f64>::new(0.0, sigma).unwrap();
+        let mut rng = rng();
 
         let num_iterations = 1000;
 
         for _ in 0..num_iterations {
-            let n = rng.gen_range(1..100);
+            let n = rng.random_range(1..100);
             let initial = (0..n)
-                .map(|_| {
-                    (distribution.sample(&mut rng) + 0.5)
-                        .floor()
-                        .to_i32()
-                        .unwrap() as i16
-                })
+                .map(|_| (distribution.sample(&mut rng) + 0.5).floor() as i16)
                 .collect::<Vec<_>>();
             let slen = 2 * n * 8;
             let compressed = compress(&initial, slen).unwrap();
@@ -478,7 +446,7 @@ mod test {
 
             // try random string -- might fail, but if not must re-encode to the same
             // let random = (0..compressed.len()).map(|_| rng.gen::<u8>()).collect_vec();
-            let mut random = compressed.iter().map(|_| rng.gen::<u8>()).collect_vec();
+            let mut random = compressed.iter().map(|_| rng.random::<u8>()).collect_vec();
             let num_trailing_zeros = compressed
                 .iter()
                 .cloned()

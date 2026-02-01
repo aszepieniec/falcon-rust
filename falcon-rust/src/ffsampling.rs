@@ -1,6 +1,6 @@
+use num::{One, Zero};
 use num_complex::{Complex, Complex64};
 use rand::RngCore;
-use rand_distr::num_traits::{One, Zero};
 
 use crate::{falcon, fast_fft::FastFft, polynomial::Polynomial, samplerz::sampler_z};
 
@@ -127,20 +127,20 @@ pub(crate) fn ffsampling(
 #[cfg(test)]
 mod test {
     use itertools::Itertools;
+    use num::Zero;
     use num_complex::{Complex, Complex64};
-    use rand::{thread_rng, Rng};
-    use rand_distr::num_traits::Zero;
+    use rand::{rng, Rng};
 
     use crate::{ffsampling::gram, polynomial::Polynomial};
 
     #[test]
     fn test_gram() {
-        let mut rng = thread_rng();
-        let n = rng.gen_range(2..10);
+        let mut rng = rng();
+        let n = rng.random_range(2..10);
         let a: [Polynomial<Complex64>; 4] = (0..4)
             .map(|_| {
                 (0..n)
-                    .map(|_| Complex::new(rng.gen(), rng.gen()))
+                    .map(|_| Complex::new(rng.random(), rng.random()))
                     .collect_vec()
             })
             .map(Polynomial::new)

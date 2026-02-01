@@ -1,10 +1,8 @@
 use std::fmt::Display;
 use std::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 
-use rand_distr::{
-    num_traits::{One, Zero},
-    Distribution, Standard,
-};
+use num::{One, Zero};
+use rand::distr::{Distribution, StandardUniform};
 
 use crate::cyclotomic_fourier::CyclotomicFourier;
 use crate::inverse::Inverse;
@@ -117,7 +115,7 @@ impl One for Felt {
     }
 }
 
-impl Distribution<Felt> for Standard {
+impl Distribution<Felt> for StandardUniform {
     fn sample<R: rand::Rng + ?Sized>(&self, rng: &mut R) -> Felt {
         Felt::new(((rng.next_u32() >> 1) % Q) as i16)
     }
@@ -187,7 +185,7 @@ impl CyclotomicFourier for Felt {
 mod test {
     use itertools::Itertools;
     use num::One;
-    use rand::{thread_rng, Rng, RngCore};
+    use rand::{rng, Rng, RngCore};
 
     use crate::{
         cyclotomic_fourier::CyclotomicFourier,
@@ -199,7 +197,7 @@ mod test {
 
     #[test]
     fn test_value() {
-        let mut rng = thread_rng();
+        let mut rng = rng();
         for _ in 0..1000 {
             let mut value = (rng.next_u32() & 0x3fff) as i16;
             if rng.next_u32() % 2 == 1 {
@@ -217,7 +215,7 @@ mod test {
 
     #[test]
     fn test_add() {
-        let mut rng = thread_rng();
+        let mut rng = rng();
         let a_value = (rng.next_u32() % 0x0fff) as i16;
         let b_value = (rng.next_u32() % 0x0fff) as i16;
         let a = Felt::new(a_value);
@@ -239,7 +237,7 @@ mod test {
 
     #[test]
     fn test_mul() {
-        let mut rng = thread_rng();
+        let mut rng = rng();
         for _ in 0..1000 {
             let a_value = (rng.next_u32() % 0x3fff) as i16;
             let b_value = (rng.next_u32() % 0x3fff) as i16;
@@ -258,8 +256,12 @@ mod test {
 
     #[test]
     fn test_batch_inverse() {
-        let mut rng = thread_rng();
-        let a: [Felt; 64] = (0..64).map(|_| rng.gen()).collect_vec().try_into().unwrap();
+        let mut rng = rng();
+        let a: [Felt; 64] = (0..64)
+            .map(|_| rng.random())
+            .collect_vec()
+            .try_into()
+            .unwrap();
         let b_batch = Felt::batch_inverse_or_zero(&a);
         let b_regular = a.iter().map(|e| e.inverse_or_zero()).collect_vec();
         assert_eq!(b_batch.to_vec(), b_regular);
@@ -267,8 +269,8 @@ mod test {
 
     #[test]
     fn test_inverse() {
-        let mut rng = thread_rng();
-        let a: Felt = rng.gen();
+        let mut rng = rng();
+        let a: Felt = rng.random();
         let b = a.inverse_or_zero();
 
         assert_eq!(a * b * a, a);
@@ -307,7 +309,7 @@ mod test {
     #[test]
     fn test_ntt() {
         let n = 32;
-        let mut rng = thread_rng();
+        let mut rng = rng();
         let mut a = (0..n)
             .map(|_| rng.next_u32() as i16)
             .map(Felt::new)
@@ -346,12 +348,12 @@ mod test {
     #[test]
     fn test_multiply_reduce() {
         let n = 32;
-        let mut rng = thread_rng();
+        let mut rng = rng();
         let mut a = (0..n)
-            .map(|_| Felt::new(rng.gen_range(-20..20)))
+            .map(|_| Felt::new(rng.random_range(-20..20)))
             .collect_vec();
         let mut b = (0..n)
-            .map(|_| Felt::new(rng.gen_range(-20..20)))
+            .map(|_| Felt::new(rng.random_range(-20..20)))
             .collect_vec();
 
         let c = (Polynomial::new(a.clone()) * Polynomial::new(b.clone()))

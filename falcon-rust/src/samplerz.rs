@@ -98,14 +98,14 @@ pub(crate) fn sampler_z(mu: f64, sigma: f64, sigma_min: f64, rng: &mut dyn RngCo
     let r = mu - s;
     let ccs = sigma_min * isigma;
     loop {
-        let z0 = base_sampler(rng.gen());
-        let random_byte: u8 = rng.gen();
+        let z0 = base_sampler(rng.random());
+        let random_byte: u8 = rng.random();
         let b = (random_byte & 1) as i16;
         let z = b + ((b << 1) - 1) * z0;
         let zf_min_r = (z as f64) - r;
         //    x = ((z-r)^2)/(2*sigma^2) - ((z-b)^2)/(2*sigma0^2)
         let x = zf_min_r * zf_min_r * dss - (z0 * z0) as f64 * INV_2SIGMA_MAX_SQ;
-        if ber_exp(x, ccs, rng.gen()) {
+        if ber_exp(x, ccs, rng.random()) {
             return z + (s as i16);
         }
     }
@@ -115,7 +115,7 @@ pub(crate) fn sampler_z(mu: f64, sigma: f64, sigma_min: f64, rng: &mut dyn RngCo
 mod test {
     use itertools::Itertools;
     use rand::Rng;
-    use rand::{thread_rng, RngCore};
+    use rand::{rng, RngCore};
     use std::{thread::sleep, time::Duration};
 
     use crate::samplerz::{approx_exp, ber_exp, sampler_z};
@@ -174,13 +174,6 @@ mod test {
             for d in dest.iter_mut() {
                 *d = self.next();
             }
-        }
-
-        fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), rand::Error> {
-            for d in dest.iter_mut() {
-                *d = self.next();
-            }
-            Ok(())
         }
     }
 
@@ -310,7 +303,7 @@ mod test {
 
     #[test]
     fn endianness() {
-        let bytes: [u8; 9] = thread_rng().gen();
+        let bytes: [u8; 9] = rng().random();
         let u0 = u128::from_le_bytes(
             [bytes.into_iter().rev().collect_vec(), vec![0u8; 7]]
                 .concat()

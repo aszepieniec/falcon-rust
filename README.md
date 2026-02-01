@@ -16,9 +16,9 @@ This implementation adheres to the [specification](https://falcon-sign.info/falc
 ## Example
 
 ```rust
-let mut rng = thread_rng();
-let mut msg : [u8; 5] = rng.gen();
-let (sk, pk) = falcon512::keygen(rng.gen());
+let mut rng = rng();
+let mut msg : [u8; 5] = rng.random();
+let (sk, pk) = falcon512::keygen(rng.random());
 let sig = falcon512::sign(&msg, &sk);
 assert!(falcon512::verify(&msg, &sig, &pk));
 ```

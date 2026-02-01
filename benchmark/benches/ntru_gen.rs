@@ -1,8 +1,8 @@
 use criterion::{criterion_group, criterion_main, Criterion};
-use rand::thread_rng;
+use rand::rng;
 
 pub fn ntru_gen(c: &mut Criterion) {
-    let mut rng = thread_rng();
+    let mut rng = rng();
     let mut group = c.benchmark_group("ntru-gen");
     group.sample_size(10);
 

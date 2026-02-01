@@ -2,7 +2,7 @@ use criterion::{criterion_group, criterion_main, Criterion};
 use falcon_rust::polynomial::Polynomial;
 use itertools::Itertools;
 use num::{bigint::Sign, BigInt};
-use rand::{rngs::StdRng, thread_rng, Rng, SeedableRng};
+use rand::{rng, rngs::StdRng, Rng, SeedableRng};
 
 const BITSIZE_SMALL: [usize; 10] = [4, 11, 24, 51, 100, 199, 399, 792, 1580, 3151];
 const BITSIZE_LARGE: [usize; 10] = [
@@ -11,9 +11,9 @@ const BITSIZE_LARGE: [usize; 10] = [
 const N: [usize; 10] = [1024, 512, 256, 128, 64, 32, 16, 8, 4, 2];
 
 fn random_integer(bitsize: usize, rng: &mut StdRng) -> BigInt {
-    let num_bytes = (bitsize + 7) / 8;
-    let bytes = (0..num_bytes).map(|_| rng.gen::<u8>()).collect_vec();
-    let sign = match rng.gen() {
+    let num_bytes = bitsize.div_ceil(8);
+    let bytes = (0..num_bytes).map(|_| rng.random::<u8>()).collect_vec();
+    let sign = match rng.random() {
         true => Sign::Minus,
         false => Sign::Plus,
     };
@@ -56,7 +56,7 @@ fn generate_reducible_polynomials(
 }
 
 pub fn babai_reduce(c: &mut Criterion) {
-    let mut rng: StdRng = SeedableRng::from_seed(thread_rng().gen());
+    let mut rng: StdRng = SeedableRng::from_seed(rng().random());
     let mut group = c.benchmark_group("babai reduce bigint");
 
     for (&n, (&small, large)) in N.iter().zip(BITSIZE_SMALL.iter().zip(BITSIZE_LARGE)) {

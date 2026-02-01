@@ -589,7 +589,7 @@ mod test {
 
     // #[test]
     // fn test_gen_poly() {
-    //     let mut rng = thread_rng();
+    //     let mut rng = rng();
     //     let n = 1024;
     //     let mut sum_norms = 0.0;
     //     let num_iterations = 100;

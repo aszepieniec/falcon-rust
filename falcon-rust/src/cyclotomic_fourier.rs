@@ -232,7 +232,7 @@ mod test {
     use itertools::Itertools;
     use num::One;
     use num_complex::Complex64;
-    use rand::{thread_rng, Rng, RngCore};
+    use rand::{rng, Rng, RngCore};
 
     fn diff(u: &[Complex64], v: &[Complex64]) -> f64 {
         u.iter()
@@ -259,9 +259,9 @@ mod test {
     #[test]
     fn test_fft() {
         let n = 32;
-        let mut rng = thread_rng();
+        let mut rng = rng();
         let mut a = (0..n)
-            .map(|_| Complex64::new(rng.gen_range(0..2) as f64, rng.gen_range(0..2) as f64))
+            .map(|_| Complex64::new(rng.random_range(0..2) as f64, rng.random_range(0..2) as f64))
             .collect_vec();
         let mut b = a.clone();
 
@@ -308,12 +308,12 @@ mod test {
     #[test]
     fn test_multiply_reduce() {
         let n = 32;
-        let mut rng = thread_rng();
+        let mut rng = rng();
         let mut a = (0..n)
-            .map(|_| Complex64::new(rng.gen_range(0..2) as f64, 0.0))
+            .map(|_| Complex64::new(rng.random_range(0..2) as f64, 0.0))
             .collect_vec();
         let mut b = (0..n)
-            .map(|_| Complex64::new(rng.gen_range(0..2) as f64, 0.0))
+            .map(|_| Complex64::new(rng.random_range(0..2) as f64, 0.0))
             .collect_vec();
 
         let c = (Polynomial::new(a.clone()) * Polynomial::new(b.clone()))
@@ -340,9 +340,9 @@ mod test {
     #[test]
     fn test_split_fft() {
         let n = 32;
-        let mut rng = thread_rng();
+        let mut rng = rng();
         let mut a = (0..n)
-            .map(|_| Complex64::new(rng.gen_range(0..2) as f64, 0.0))
+            .map(|_| Complex64::new(rng.random_range(0..2) as f64, 0.0))
             .collect_vec();
 
         let mut e = a.chunks(2).map(|ch| ch[0]).collect_vec();
@@ -370,12 +370,12 @@ mod test {
     #[test]
     fn test_merge_fft() {
         let n = 32;
-        let mut rng = thread_rng();
+        let mut rng = rng();
         let mut e = (0..n)
-            .map(|_| Complex64::new(rng.gen_range(-50..50) as f64, 0.0))
+            .map(|_| Complex64::new(rng.random_range(-50..50) as f64, 0.0))
             .collect_vec();
         let mut o = (0..n)
-            .map(|_| Complex64::new(rng.gen_range(-50..50) as f64, 0.0))
+            .map(|_| Complex64::new(rng.random_range(-50..50) as f64, 0.0))
             .collect_vec();
 
         let mut ab = Complex64::merge_fft(&e, &o, &Complex64::bitreversed_powers(2 * n));

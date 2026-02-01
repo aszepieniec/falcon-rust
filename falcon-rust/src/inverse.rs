@@ -57,11 +57,11 @@ impl Inverse for f64 {
 #[cfg(test)]
 mod test {
     use super::*;
-    use rand::{thread_rng, RngCore};
+    use rand::{rng, RngCore};
 
     #[test]
     fn test_complex_inverse() {
-        let mut rng = thread_rng();
+        let mut rng = rng();
         let c = Complex64::new(rng.next_u32() as f64, rng.next_u32() as f64);
         let i = c.inverse_or_zero();
         let diff = c * i - Complex64::one();

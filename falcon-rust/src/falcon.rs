@@ -1,7 +1,7 @@
 use bit_vec::BitVec;
 use itertools::Itertools;
 use num_complex::{Complex, Complex64};
-use rand::{rngs::StdRng, thread_rng, Rng, RngCore, SeedableRng};
+use rand::{rng, rngs::StdRng, Rng, RngCore, SeedableRng};
 
 use crate::{
     encoding::{compress, decompress},
@@ -75,11 +75,11 @@ pub struct SecretKey<const N: usize> {
 impl<const N: usize> SecretKey<N> {
     /// Generate a secret key using randomness supplied by the operating system.
     pub fn generate() -> Self {
-        // According to the docs [1], `thread_rng` uses entropy supplied
+        // According to the docs [1], `rng` uses entropy supplied
         // by the operating system and ChaCha12 to extend it. So it is
         // cryptographically secure, afaict.
         // [1]: https://rust-random.github.io/rand/rand/rngs/struct.ThreadRng.html
-        Self::generate_from_seed(thread_rng().gen())
+        Self::generate_from_seed(rng().random())
     }
 
     /// Generate a secret key pseudorandomly by expanding a given seed.
@@ -451,7 +451,7 @@ pub fn keygen<const N: usize>(seed: [u8; 32]) -> (SecretKey<N>, PublicKey<N>) {
 ///
 /// [1]: https://falcon-sign.info/falcon.pdf
 pub fn sign<const N: usize>(m: &[u8], sk: &SecretKey<N>) -> Signature<N> {
-    let mut rng = thread_rng();
+    let mut rng = rng();
     let mut r = [0u8; 40];
     rng.fill_bytes(&mut r);
 
@@ -554,16 +554,16 @@ pub fn verify<const N: usize>(m: &[u8], sig: &Signature<N>, pk: &PublicKey<N>) -
         .coefficients
         .iter()
         .map(|i| i.balanced_value() as i64)
-        .map(|i| (i * i))
+        .map(|i| i * i)
         .sum::<i64>()
-        + s2.iter().map(|&i| i as i64).map(|i| (i * i)).sum::<i64>();
+        + s2.iter().map(|&i| i as i64).map(|i| i * i).sum::<i64>();
     length_squared < params.sig_bound
 }
 
 #[cfg(test)]
 mod test {
     use itertools::Itertools;
-    use rand::{rngs::StdRng, thread_rng, Rng, RngCore, SeedableRng};
+    use rand::{rng, rngs::StdRng, Rng, RngCore, SeedableRng};
 
     use crate::{
         encoding::compress,
@@ -576,14 +576,14 @@ mod test {
 
     #[test]
     fn test_operation_falcon_512() {
-        let mut rng = thread_rng();
+        let mut rng = rng();
         let mut msg = [0u8; 5];
         rng.fill_bytes(&mut msg);
 
         println!("testing small scheme ...");
         const N: usize = 512;
         println!("-> keygen ...");
-        let (sk, pk) = keygen::<N>(rng.gen());
+        let (sk, pk) = keygen::<N>(rng.random());
         println!("-> sign ...");
         let sig = sign::<N>(&msg, &sk);
         println!("-> verify ...");
@@ -597,7 +597,7 @@ mod test {
         //     119, 186, 1, 120, 0, 255, 165, 121, 56, 149, 105, 255, 53, 63, 192, 102, 231, 197, 233,
         //     249, 212, 179, 1, 18, 33, 42, 137, 10, 172, 179, 168, 35,
         // ];
-        let seed: [u8; 32] = thread_rng().gen();
+        let seed: [u8; 32] = rng().random();
         println!("seed: {:2?}", seed);
         let mut rng: StdRng = SeedableRng::from_seed(seed);
 
@@ -606,7 +606,7 @@ mod test {
         println!("testing big scheme ...");
         const N: usize = 1024;
         println!("-> keygen ...");
-        let (sk, pk) = keygen::<N>(rng.gen());
+        let (sk, pk) = keygen::<N>(rng.random());
         println!("-> sign ...");
         let sig = sign::<N>(&msg, &sk);
         println!("-> verify ...");
@@ -1367,11 +1367,11 @@ mod test {
 
     #[test]
     fn test_secret_key_field_element_serialization() {
-        let mut rng = thread_rng();
+        let mut rng = rng();
         for polynomial_index in [0, 1, 2] {
             let width = SecretKey::<512>::field_element_width(512, polynomial_index);
             for _ in 0..100000 {
-                let int = rng.gen_range(-(1 << (width - 1))..(1 << (width - 1)));
+                let int = rng.random_range(-(1 << (width - 1))..(1 << (width - 1)));
                 if int == -(1i16 << (width - 1)) {
                     continue;
                 }
@@ -1387,7 +1387,7 @@ mod test {
         for polynomial_index in [0, 1, 2] {
             let width = SecretKey::<1024>::field_element_width(1024, polynomial_index);
             for _ in 0..100000 {
-                let int = rng.gen_range(-(1 << (width - 1))..(1 << (width - 1)));
+                let int = rng.random_range(-(1 << (width - 1))..(1 << (width - 1)));
                 if int == -(1i16 << (width - 1)) {
                     continue;
                 }

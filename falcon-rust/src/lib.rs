@@ -27,11 +27,11 @@
 //! ```
 //! use falcon_rust::falcon512;
 //!
-//! use rand::thread_rng;
+//! use rand::rng;
 //! use rand::Rng;
 //!
 //! let msg = b"Hello, world!";
-//! let (sk, pk) = falcon512::keygen(thread_rng().gen());
+//! let (sk, pk) = falcon512::keygen(rng().random());
 //! let sig = falcon512::sign(msg, &sk);
 //! assert!(falcon512::verify(msg, &sig, &pk));
 //! ```
@@ -40,11 +40,11 @@
 //! ```
 //! use falcon_rust::falcon512;
 //!
-//! use rand::thread_rng;
+//! use rand::rng;
 //! use rand::Rng;
 //!
 //! let msg = b"Hello, world!";
-//! let (sk, pk) = falcon512::keygen(thread_rng().gen());
+//! let (sk, pk) = falcon512::keygen(rng().random());
 //! let sig = falcon512::sign(msg, &sk);
 //!
 //! let sk_buffer = sk.to_bytes();

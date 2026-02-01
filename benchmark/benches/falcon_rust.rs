@@ -1,31 +1,29 @@
 #![allow(unused)]
 
-use std::{
-    fs::File,
-    io::{Read, Write},
-};
+use std::fs::File;
+use std::io::{Read, Write};
 
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{criterion_group, criterion_main, Criterion};
 use itertools::Itertools;
 use pqcrypto_falcon::*;
-use rand::{thread_rng, Rng};
+use rand::{rng, Rng};
 
 const NUM_KEYS: usize = 10;
 const SIGS_PER_KEY: usize = 10;
 
 pub fn falcon_rust_operation(c: &mut Criterion) {
-    let mut rng = thread_rng();
+    let mut rng = rng();
     let mut keys512 = (0..NUM_KEYS)
-        .map(|_| falcon_rust::falcon512::keygen(rng.gen()))
+        .map(|_| falcon_rust::falcon512::keygen(rng.random()))
         .collect_vec();
     let mut keys1024 = (0..NUM_KEYS)
-        .map(|_| falcon_rust::falcon1024::keygen(rng.gen()))
+        .map(|_| falcon_rust::falcon1024::keygen(rng.random()))
         .collect_vec();
     let mut msgs512 = (0..NUM_KEYS * SIGS_PER_KEY)
-        .map(|_| rng.gen::<[u8; 15]>())
+        .map(|_| rng.random::<[u8; 15]>())
         .collect_vec();
     let mut msgs1024 = (0..NUM_KEYS * SIGS_PER_KEY)
-        .map(|_| rng.gen::<[u8; 15]>())
+        .map(|_| rng.random::<[u8; 15]>())
         .collect_vec();
     let mut sigs512 = (0..NUM_KEYS * SIGS_PER_KEY)
         .map(|i| falcon_rust::falcon512::sign(&msgs512[i], &keys512[i % NUM_KEYS].0))
@@ -44,12 +42,12 @@ pub fn falcon_rust_operation(c: &mut Criterion) {
     group.sample_size(NUM_KEYS);
     group.bench_function("keygen 512", |b| {
         b.iter(|| {
-            falcon_rust::falcon512::keygen(rng.gen());
+            falcon_rust::falcon512::keygen(rng.random());
         })
     });
     group.bench_function("keygen 1024", |b| {
         b.iter(|| {
-            falcon_rust::falcon1024::keygen(rng.gen());
+            falcon_rust::falcon1024::keygen(rng.random());
         })
     });
     group.finish();
@@ -236,7 +234,7 @@ pub fn falcon_rust_operation(c: &mut Criterion) {
 }
 
 fn falcon_c_ffi_operation(c: &mut Criterion) {
-    let mut rng = thread_rng();
+    let mut rng = rng();
     let mut keys512 = (0..NUM_KEYS).map(|_| falcon512::keypair()).collect_vec();
     let mut keys1024 = (0..NUM_KEYS).map(|_| falcon1024::keypair()).collect_vec();
 
@@ -256,7 +254,7 @@ fn falcon_c_ffi_operation(c: &mut Criterion) {
 
     let mut group = c.benchmark_group("c ffi");
     let mut msgs512 = (0..NUM_KEYS * SIGS_PER_KEY)
-        .map(|_| rng.gen::<[u8; 15]>())
+        .map(|_| rng.random::<[u8; 15]>())
         .collect_vec();
     let mut sigs512 = msgs512
         .iter()
@@ -264,7 +262,7 @@ fn falcon_c_ffi_operation(c: &mut Criterion) {
         .map(|(i, msg)| falcon512::detached_sign(msg, &keys512[i % NUM_KEYS].1))
         .collect_vec();
     let mut msgs1024 = (0..NUM_KEYS * SIGS_PER_KEY)
-        .map(|_| rng.gen::<[u8; 15]>())
+        .map(|_| rng.random::<[u8; 15]>())
         .collect_vec();
     let mut sigs1024 = msgs1024
         .iter()
