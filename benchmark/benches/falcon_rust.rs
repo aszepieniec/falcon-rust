@@ -5,8 +5,8 @@ use std::io::{Read, Write};
 
 use criterion::{criterion_group, criterion_main, Criterion};
 use itertools::Itertools;
-use pqcrypto_falcon::*;
-use rand::{rng, Rng};
+use rand::rngs::{OsRng, StdRng};
+use rand::{rng, Rng, SeedableRng};
 
 const NUM_KEYS: usize = 10;
 const SIGS_PER_KEY: usize = 10;
@@ -233,21 +233,25 @@ pub fn falcon_rust_operation(c: &mut Criterion) {
     group.finish();
 }
 
-fn falcon_c_ffi_operation(c: &mut Criterion) {
+fn falcon_cffi_operation(c: &mut Criterion) {
     let mut rng = rng();
-    let mut keys512 = (0..NUM_KEYS).map(|_| falcon512::keypair()).collect_vec();
-    let mut keys1024 = (0..NUM_KEYS).map(|_| falcon1024::keypair()).collect_vec();
+    let mut keys512 = (0..NUM_KEYS)
+        .map(|_| pqcrypto_falcon::falcon512::keypair())
+        .collect_vec();
+    let mut keys1024 = (0..NUM_KEYS)
+        .map(|_| pqcrypto_falcon::falcon1024::keypair())
+        .collect_vec();
 
     let mut group = c.benchmark_group("c ffi");
     group.sample_size(NUM_KEYS);
     group.bench_function("keygen 512", |b| {
         b.iter(|| {
-            falcon512::keypair();
+            pqcrypto_falcon::falcon512::keypair();
         })
     });
     group.bench_function("keygen 1024", |b| {
         b.iter(|| {
-            falcon1024::keypair();
+            pqcrypto_falcon::falcon1024::keypair();
         })
     });
     group.finish();
@@ -259,7 +263,7 @@ fn falcon_c_ffi_operation(c: &mut Criterion) {
     let mut sigs512 = msgs512
         .iter()
         .enumerate()
-        .map(|(i, msg)| falcon512::detached_sign(msg, &keys512[i % NUM_KEYS].1))
+        .map(|(i, msg)| pqcrypto_falcon::falcon512::detached_sign(msg, &keys512[i % NUM_KEYS].1))
         .collect_vec();
     let mut msgs1024 = (0..NUM_KEYS * SIGS_PER_KEY)
         .map(|_| rng.random::<[u8; 15]>())
@@ -267,26 +271,28 @@ fn falcon_c_ffi_operation(c: &mut Criterion) {
     let mut sigs1024 = msgs1024
         .iter()
         .enumerate()
-        .map(|(i, msg)| falcon1024::detached_sign(msg, &keys1024[i % NUM_KEYS].1))
+        .map(|(i, msg)| pqcrypto_falcon::falcon1024::detached_sign(msg, &keys1024[i % NUM_KEYS].1))
         .collect_vec();
     group.sample_size(NUM_KEYS * SIGS_PER_KEY);
     let mut iterator_sign_512 = 0;
     group.bench_function("sign 512", |b| {
         b.iter(|| {
-            sigs512[iterator_sign_512 % (NUM_KEYS * SIGS_PER_KEY)] = falcon512::detached_sign(
-                &msgs512[iterator_sign_512 % (NUM_KEYS * SIGS_PER_KEY)],
-                &keys512[iterator_sign_512 % NUM_KEYS].1,
-            );
+            sigs512[iterator_sign_512 % (NUM_KEYS * SIGS_PER_KEY)] =
+                pqcrypto_falcon::falcon512::detached_sign(
+                    &msgs512[iterator_sign_512 % (NUM_KEYS * SIGS_PER_KEY)],
+                    &keys512[iterator_sign_512 % NUM_KEYS].1,
+                );
             iterator_sign_512 += 1;
         })
     });
     let mut iterator_sign_1024 = 0;
     group.bench_function("sign 1024", |b| {
         b.iter(|| {
-            sigs1024[iterator_sign_1024 % (NUM_KEYS * SIGS_PER_KEY)] = falcon1024::detached_sign(
-                &msgs1024[iterator_sign_1024 % (NUM_KEYS * SIGS_PER_KEY)],
-                &keys1024[iterator_sign_1024 % NUM_KEYS].1,
-            );
+            sigs1024[iterator_sign_1024 % (NUM_KEYS * SIGS_PER_KEY)] =
+                pqcrypto_falcon::falcon1024::detached_sign(
+                    &msgs1024[iterator_sign_1024 % (NUM_KEYS * SIGS_PER_KEY)],
+                    &keys1024[iterator_sign_1024 % NUM_KEYS].1,
+                );
             iterator_sign_1024 += 1;
         })
     });
@@ -297,7 +303,7 @@ fn falcon_c_ffi_operation(c: &mut Criterion) {
     let mut iterator_verify_512 = 0;
     group.bench_function("verify 512", |b| {
         b.iter(|| {
-            assert!(falcon512::verify_detached_signature(
+            assert!(pqcrypto_falcon::falcon512::verify_detached_signature(
                 &sigs512[iterator_verify_512 % sigs512.len()],
                 &msgs512[iterator_verify_512 % msgs512.len()],
                 &keys512[iterator_verify_512 % NUM_KEYS].0,
@@ -309,7 +315,7 @@ fn falcon_c_ffi_operation(c: &mut Criterion) {
     let mut iterator_verify_1024 = 0;
     group.bench_function("verify 1024", |b| {
         b.iter(|| {
-            assert!(falcon1024::verify_detached_signature(
+            assert!(pqcrypto_falcon::falcon1024::verify_detached_signature(
                 &sigs1024[iterator_verify_1024 % sigs1024.len()],
                 &msgs1024[iterator_verify_1024 % msgs1024.len()],
                 &keys1024[iterator_verify_1024 % NUM_KEYS].0,
@@ -321,5 +327,202 @@ fn falcon_c_ffi_operation(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, falcon_rust_operation, falcon_c_ffi_operation);
+fn falcon_fndsa_operation(c: &mut Criterion) {
+    let mut kg = fn_dsa::KeyPairGeneratorStandard::default();
+    let mut rng = StdRng::from_os_rng();
+
+    let mut keys512 = (0..NUM_KEYS)
+        .map(|_| {
+            let mut sign_key = [0u8; fn_dsa::sign_key_size(fn_dsa::FN_DSA_LOGN_512)];
+            let mut vrfy_key = [0u8; fn_dsa::vrfy_key_size(fn_dsa::FN_DSA_LOGN_512)];
+            fn_dsa::KeyPairGenerator::keygen(
+                &mut kg,
+                fn_dsa::FN_DSA_LOGN_512,
+                &mut rand_old::thread_rng(),
+                &mut sign_key,
+                &mut vrfy_key,
+            );
+            (sign_key, vrfy_key)
+        })
+        .collect_vec();
+    let mut keys1024 = (0..NUM_KEYS)
+        .map(|_| {
+            let mut sign_key = [0u8; fn_dsa::sign_key_size(fn_dsa::FN_DSA_LOGN_1024)];
+            let mut vrfy_key = [0u8; fn_dsa::vrfy_key_size(fn_dsa::FN_DSA_LOGN_1024)];
+            fn_dsa::KeyPairGenerator::keygen(
+                &mut kg,
+                fn_dsa::FN_DSA_LOGN_1024,
+                &mut rand_old::thread_rng(),
+                &mut sign_key,
+                &mut vrfy_key,
+            );
+            (sign_key, vrfy_key)
+        })
+        .collect_vec();
+
+    let mut group = c.benchmark_group("fn dsa");
+    group.sample_size(NUM_KEYS);
+    group.bench_function("keygen 512", |b| {
+        b.iter(|| {
+            let mut sign_key = [0u8; fn_dsa::sign_key_size(fn_dsa::FN_DSA_LOGN_512)];
+            let mut vrfy_key = [0u8; fn_dsa::vrfy_key_size(fn_dsa::FN_DSA_LOGN_512)];
+            fn_dsa::KeyPairGenerator::keygen(
+                &mut kg,
+                fn_dsa::FN_DSA_LOGN_512,
+                &mut rand_old::thread_rng(),
+                &mut sign_key,
+                &mut vrfy_key,
+            );
+        })
+    });
+    group.bench_function("keygen 1024", |b| {
+        b.iter(|| {
+            let mut sign_key = [0u8; fn_dsa::sign_key_size(fn_dsa::FN_DSA_LOGN_1024)];
+            let mut vrfy_key = [0u8; fn_dsa::vrfy_key_size(fn_dsa::FN_DSA_LOGN_1024)];
+            fn_dsa::KeyPairGenerator::keygen(
+                &mut kg,
+                fn_dsa::FN_DSA_LOGN_1024,
+                &mut rand_old::thread_rng(),
+                &mut sign_key,
+                &mut vrfy_key,
+            );
+        })
+    });
+    group.finish();
+
+    let mut group = c.benchmark_group("fn dsa");
+    let mut msgs512 = (0..NUM_KEYS * SIGS_PER_KEY)
+        .map(|_| rng.random::<[u8; 15]>())
+        .collect_vec();
+    let mut sigs512 = msgs512
+        .iter()
+        .enumerate()
+        .map(|(i, msg)| {
+            let mut sk = <fn_dsa::SigningKeyStandard as fn_dsa::SigningKey>::decode(
+                &keys512[i % NUM_KEYS].0,
+            )
+            .unwrap_or_else(|| panic!("cannot decode"));
+            let mut sig = vec![0u8; fn_dsa::signature_size(fn_dsa::SigningKey::get_logn(&sk))];
+            fn_dsa::SigningKey::sign(
+                &mut sk,
+                &mut rand_old::thread_rng(),
+                &fn_dsa::DOMAIN_NONE,
+                &fn_dsa::HASH_ID_RAW,
+                msg,
+                &mut sig,
+            );
+            sig
+        })
+        .collect_vec();
+    let mut msgs1024 = (0..NUM_KEYS * SIGS_PER_KEY)
+        .map(|_| rng.random::<[u8; 15]>())
+        .collect_vec();
+    let mut sigs1024 = msgs1024
+        .iter()
+        .enumerate()
+        .map(|(i, msg)| {
+            let mut sk = <fn_dsa::SigningKeyStandard as fn_dsa::SigningKey>::decode(
+                &keys1024[i % NUM_KEYS].0,
+            )
+            .unwrap_or_else(|| panic!("cannot decode"));
+            let mut sig = vec![0u8; fn_dsa::signature_size(fn_dsa::SigningKey::get_logn(&sk))];
+            fn_dsa::SigningKey::sign(
+                &mut sk,
+                &mut rand_old::thread_rng(),
+                &fn_dsa::DOMAIN_NONE,
+                &fn_dsa::HASH_ID_RAW,
+                msg,
+                &mut sig,
+            );
+            sig
+        })
+        .collect_vec();
+    group.sample_size(NUM_KEYS * SIGS_PER_KEY);
+    let mut iterator_sign_512 = 0;
+    group.bench_function("sign 512", |b| {
+        b.iter(|| {
+            let mut sk = <fn_dsa::SigningKeyStandard as fn_dsa::SigningKey>::decode(
+                &keys512[iterator_sign_512 % NUM_KEYS].0,
+            )
+            .unwrap_or_else(|| panic!("cannot decode"));
+            let mut sig = vec![0u8; fn_dsa::signature_size(fn_dsa::SigningKey::get_logn(&sk))];
+            fn_dsa::SigningKey::sign(
+                &mut sk,
+                &mut rand_old::thread_rng(),
+                &fn_dsa::DOMAIN_NONE,
+                &fn_dsa::HASH_ID_RAW,
+                &msgs512[iterator_sign_512 % (NUM_KEYS * SIGS_PER_KEY)],
+                &mut sig,
+            );
+            sigs512[iterator_sign_512 % (NUM_KEYS * SIGS_PER_KEY)] = sig;
+            iterator_sign_512 += 1;
+        })
+    });
+    let mut iterator_sign_1024 = 0;
+    group.bench_function("sign 1024", |b| {
+        b.iter(|| {
+            let mut sk = <fn_dsa::SigningKeyStandard as fn_dsa::SigningKey>::decode(
+                &keys1024[iterator_sign_1024 % NUM_KEYS].0,
+            )
+            .unwrap_or_else(|| panic!("cannot decode"));
+            let mut sig = vec![0u8; fn_dsa::signature_size(fn_dsa::SigningKey::get_logn(&sk))];
+            fn_dsa::SigningKey::sign(
+                &mut sk,
+                &mut rand_old::thread_rng(),
+                &fn_dsa::DOMAIN_NONE,
+                &fn_dsa::HASH_ID_RAW,
+                &msgs1024[iterator_sign_1024 % (NUM_KEYS * SIGS_PER_KEY)],
+                &mut sig,
+            );
+            sigs1024[iterator_sign_1024 % (NUM_KEYS * SIGS_PER_KEY)] = sig;
+            iterator_sign_1024 += 1;
+        })
+    });
+    group.finish();
+
+    let mut group = c.benchmark_group("fn dsa");
+    group.sample_size(NUM_KEYS * SIGS_PER_KEY);
+    let mut iterator_verify_512 = 0;
+    group.bench_function("verify 512", |b| {
+        b.iter(|| {
+            let vk = <fn_dsa::VerifyingKeyStandard as fn_dsa::VerifyingKey>::decode(
+                &keys512[iterator_verify_512 % NUM_KEYS].1,
+            )
+            .unwrap_or_else(|| panic!("cannot decode"));
+            assert!(fn_dsa::VerifyingKey::verify(
+                &vk,
+                &sigs512[iterator_verify_512 % sigs512.len()],
+                &fn_dsa::DOMAIN_NONE,
+                &fn_dsa::HASH_ID_RAW,
+                &msgs512[iterator_verify_512 % msgs512.len()]
+            ));
+            iterator_verify_512 += 1;
+        })
+    });
+    let mut iterator_verify_1024 = 0;
+    group.bench_function("verify 1024", |b| {
+        b.iter(|| {
+            let vk = <fn_dsa::VerifyingKeyStandard as fn_dsa::VerifyingKey>::decode(
+                &keys1024[iterator_verify_1024 % NUM_KEYS].1,
+            )
+            .unwrap_or_else(|| panic!("cannot decode"));
+            assert!(fn_dsa::VerifyingKey::verify(
+                &vk,
+                &sigs1024[iterator_verify_1024 % sigs1024.len()],
+                &fn_dsa::DOMAIN_NONE,
+                &fn_dsa::HASH_ID_RAW,
+                &msgs1024[iterator_verify_1024 % msgs1024.len()]
+            ));
+            iterator_verify_1024 += 1;
+        })
+    });
+    group.finish();
+}
+
+criterion_group!(
+    benches,
+    falcon_rust_operation,
+    falcon_cffi_operation,
+    falcon_fndsa_operation
+);
 criterion_main!(benches);

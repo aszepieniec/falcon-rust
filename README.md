@@ -16,6 +16,9 @@ This implementation adheres to the [specification](https://falcon-sign.info/falc
 ## Example
 
 ```rust
+use rand::rng;
+use falcon_rust::falcon512;
+
 let mut rng = rng();
 let mut msg : [u8; 5] = rng.random();
 let (sk, pk) = falcon512::keygen(rng.random());
@@ -25,15 +28,16 @@ assert!(falcon512::verify(&msg, &sig, &pk));
 
 ## Performance
 
-Performance is still inferior to the optimized C code accessible from rust via the [foreign function interface](https://crates.io/crates/pqcrypto-falcon) "`pqcrypto-falcon`". These measurements were taken on my Intel(R) Core(TM) i7-10750H CPU @
-2.60GHz (which supports AVX2). You can make your own by running `cargo bench`.
+If you are after performance, you are probably better off with one of the implementations by the inventors, either the foreign function interface (FFI) into the optimized C code ([`pqcrypto-falcon`](https://crates.io/crates/pqcrypto-falcon)), or the optimized rust crate ([`fn-dsa`](https://crates.io/crates/fn-dsa)). The following benchmark was produced by my 12th Gen Intel(R) Core(TM) i9-12900K (which supports AVX2). You can make your own by running `cargo bench`.
 
-|                      | Keygen      | Sign      | Verify    |
-|----------------------|-------------|-----------|-----------|
-|      falcon-rust 512 | 419.18 ms   | 692.68 µs | 41.668 µs |
-|     falcon-rust 1024 |   2.4038 **s**  | 1.3891 **ms** | 86.385 µs |
-|  pqcrypto-falcon 512 |   7.5356 ms | 253.44 µs | 48.065 µs |
-| pqcrypto-falcon 1024 |  21.454 ms  | 510.43 µs | 94.669 µs |
+|                      | Keygen          | Sign      | Verify    |
+|----------------------|-----------------|-----------|-----------|
+|      falcon-rust 512 |   226.84 ms     | 329.26 µs | 20.277 µs |
+|     falcon-rust 1024 |   1.3106 **s**  | 665.00 µs | 41.933 µs |
+|            C FFI 512 |   4.0688 ms     | 129.49 µs | 25.555 µs |
+|           C FFI 1024 |   12.048 ms     | 255.59 µs | 50.142 µs |
+|           FN DSA 512 |   2.0587 ms     | 143.86 µs | 10.486 µs |
+|          FN DSA 1024 |   9.0216 ms     | 278.71 µs | 20.793 µs |
 
 
 ## Features
