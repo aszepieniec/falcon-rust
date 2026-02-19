@@ -1,3 +1,4 @@
+use falcon_profiler::profiling;
 use num::{One, Zero};
 use sha3::digest::{ExtendableOutput, Update, XofReader};
 use sha3::Shake256;
@@ -140,6 +141,7 @@ impl<F: Mul<Output = F> + Sub<Output = F> + AddAssign + Zero + Div<Output = F> +
     Polynomial<F>
 {
     /// Multiply two polynomials using Karatsuba's divide-and-conquer algorithm.
+    #[profiling]
     pub fn karatsuba(&self, other: &Self) -> Self {
         Polynomial::new(vector_karatsuba(&self.coefficients, &other.coefficients))
     }
@@ -621,6 +623,7 @@ where
 
 /// Hash a string to a random polynomial in ZZ[ X ] mod <Phi(X), q>.
 /// Algorithm 3, "HashToPoint" in the spec (page 31).
+#[profiling]
 pub(crate) fn hash_to_point(string: &[u8], n: usize) -> Polynomial<Felt> {
     const K: u32 = (1u32 << 16) / Q;
 

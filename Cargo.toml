@@ -1,4 +1,4 @@
 [workspace]
 
-members = ["falcon-rust", "benchmark"]
+members = ["falcon-rust", "benchmark", "falcon-profiler"]
 resolver = "2"

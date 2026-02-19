@@ -1,3 +1,4 @@
+use falcon_profiler::profiling;
 use num::{One, Zero};
 use num_complex::{Complex, Complex64};
 use rand::RngCore;
@@ -76,6 +77,7 @@ pub(crate) fn ffldl(gram_matrix: [Polynomial<Complex64>; 4]) -> LdlTree {
     }
 }
 
+#[profiling]
 pub(crate) fn normalize_tree(tree: &mut LdlTree, sigma: f64) {
     match tree {
         LdlTree::Branch(_ell, left, right) => {
@@ -92,6 +94,7 @@ pub(crate) fn normalize_tree(tree: &mut LdlTree, sigma: f64) {
 /// Sample short polynomials using a Falcon tree. Algorithm 11 from the spec [1, p.40].
 ///
 /// [1]: https://falcon-sign.info/falcon.pdf
+#[profiling]
 pub(crate) fn ffsampling(
     t: &(Polynomial<Complex64>, Polynomial<Complex64>),
     tree: &LdlTree,

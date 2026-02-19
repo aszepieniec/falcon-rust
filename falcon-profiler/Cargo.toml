@@ -1,0 +1,15 @@
+[package]
+name = "falcon-profiler"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+proc-macro = true
+
+[features]
+profiling = []
+
+[dependencies]
+syn = { version = "2.0", features = ["full"] }
+quote = "1.0"
+proc-macro2 = "1.0"

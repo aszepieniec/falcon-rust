@@ -1,5 +1,6 @@
 use std::vec::IntoIter;
 
+use falcon_profiler::profiling;
 use itertools::Itertools;
 use num::{BigInt, FromPrimitive, One, Zero};
 use num_complex::Complex64;
@@ -27,6 +28,7 @@ use crate::{
 /// This function is marked pub for the purpose of benchmarking; it is not
 /// considered part of the public API.
 #[doc(hidden)]
+#[profiling]
 pub fn babai_reduce_bigint(
     f: &Polynomial<BigInt>,
     g: &Polynomial<BigInt>,
@@ -263,6 +265,7 @@ fn xgcd(a: &BigInt, b: &BigInt) -> (BigInt, BigInt, BigInt) {
 /// Algorithm 6 of the specification [1, p.35].
 ///
 /// [1]: https://falcon-sign.info/falcon.pdf
+#[profiling]
 fn ntru_solve(
     f: &Polynomial<BigInt>,
     g: &Polynomial<BigInt>,
@@ -306,6 +309,7 @@ fn ntru_solve(
     }
 }
 
+#[profiling]
 fn ntru_solve_entrypoint(
     f: Polynomial<i32>,
     g: Polynomial<i32>,
@@ -394,6 +398,7 @@ fn ntru_solve_entrypoint(
 ///
 /// [1]: https://falcon-sign.info/falcon.pdf
 #[doc(hidden)]
+#[profiling]
 pub fn ntru_gen(
     n: usize,
     rng: &mut dyn RngCore,
@@ -435,6 +440,7 @@ pub fn ntru_gen(
 /// distributed according to a discrete Gaussian with mu = 0 and
 /// sigma = 1.17 * sqrt(Q / (2n)).
 // fn gen_poly(n: usize, rng: &mut dyn RngCore) -> Polynomial<i16> {
+#[profiling]
 fn gen_poly(n: usize, rng: &mut dyn RngCore) -> Polynomial<i16> {
     let mu = 0.0;
     let sigma_star = 1.43300980528773;
@@ -453,6 +459,7 @@ fn gen_poly(n: usize, rng: &mut dyn RngCore) -> Polynomial<i16> {
 /// Corresponds to line 9 in algorithm 5 of the spec [1, p.34]
 ///
 /// [1]: https://falcon-sign.info/falcon.pdf
+#[profiling]
 fn gram_schmidt_norm_squared(f: &Polynomial<i16>, g: &Polynomial<i16>) -> f64 {
     let n = f.coefficients.len();
     let norm_f_squared = f.l2_norm_squared();

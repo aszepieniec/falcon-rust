@@ -1,4 +1,5 @@
 use bit_vec::BitVec;
+use falcon_profiler::profiling;
 use itertools::Itertools;
 use num_complex::{Complex, Complex64};
 use rand::{rng, rngs::StdRng, Rng, RngCore, SeedableRng};
@@ -74,6 +75,7 @@ pub struct SecretKey<const N: usize> {
 
 impl<const N: usize> SecretKey<N> {
     /// Generate a secret key using randomness supplied by the operating system.
+    #[profiling]
     pub fn generate() -> Self {
         // According to the docs [1], `rng` uses entropy supplied
         // by the operating system and ChaCha12 to extend it. So it is
@@ -83,18 +85,21 @@ impl<const N: usize> SecretKey<N> {
     }
 
     /// Generate a secret key pseudorandomly by expanding a given seed.
+    #[profiling]
     pub fn generate_from_seed(seed: [u8; 32]) -> Self {
         // separate sk gen for testing purposes
         let b0 = Self::gen_b0(seed);
         Self::from_b0(b0)
     }
 
+    #[profiling]
     pub(crate) fn gen_b0(seed: [u8; 32]) -> [Polynomial<i16>; 4] {
         let mut rng: StdRng = SeedableRng::from_seed(seed);
         let (f, g, capital_f, capital_g) = ntru_gen(N, &mut rng);
         [g, -f, capital_g, -capital_f]
     }
 
+    #[profiling]
     pub(crate) fn from_b0(b0: [Polynomial<i16>; 4]) -> Self {
         let b0_fft = b0
             .clone()
@@ -103,6 +108,7 @@ impl<const N: usize> SecretKey<N> {
         let g0_fft = gram(b0_fft);
         let mut tree = ffldl(g0_fft);
         let sigma = FalconVariant::from_n(N).parameters().sigma;
+
         normalize_tree(&mut tree, sigma);
 
         SecretKey { b0, tree }
@@ -301,6 +307,7 @@ pub struct PublicKey<const N: usize> {
 
 impl<const N: usize> PublicKey<N> {
     /// Compute the public key that matches with this secret key.
+    #[profiling]
     pub fn from_secret_key(sk: &SecretKey<N>) -> Self {
         let f = sk.b0[1].map(|&c| -Felt::new(c));
         let f_ntt = f.fft();
@@ -439,6 +446,7 @@ impl<const N: usize> Signature<N> {
 }
 
 // Generate a key pair pseudorandomly by expanding a seed.
+#[profiling]
 pub fn keygen<const N: usize>(seed: [u8; 32]) -> (SecretKey<N>, PublicKey<N>) {
     let sk = SecretKey::generate_from_seed(seed);
     let pk = PublicKey::from_secret_key(&sk);
@@ -450,6 +458,7 @@ pub fn keygen<const N: usize>(seed: [u8; 32]) -> (SecretKey<N>, PublicKey<N>) {
 /// Algorithm 10 of the specification [1, p.39].
 ///
 /// [1]: https://falcon-sign.info/falcon.pdf
+#[profiling]
 pub fn sign<const N: usize>(m: &[u8], sk: &SecretKey<N>) -> Signature<N> {
     let mut rng = rng();
     let mut r = [0u8; 40];
@@ -530,6 +539,7 @@ pub fn sign<const N: usize>(m: &[u8], sk: &SecretKey<N>) -> Signature<N> {
 /// Verify a signature. Algorithm 16 in the spec [1, p.45].
 ///
 /// [1]: https://falcon-sign.info/falcon.pdf
+#[profiling]
 pub fn verify<const N: usize>(m: &[u8], sig: &Signature<N>, pk: &PublicKey<N>) -> bool {
     let n = N;
     let params = FalconVariant::from_n(N).parameters();

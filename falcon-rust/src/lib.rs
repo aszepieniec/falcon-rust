@@ -68,3 +68,6 @@ pub mod math; // pub for benching
 pub mod polynomial; // pub for benching
 pub(crate) mod samplerz;
 pub(crate) mod u32_field;
+
+#[cfg(feature = "profiling")]
+pub mod profiling;

@@ -1,4 +1,5 @@
 use bit_vec::BitVec;
+use falcon_profiler::profiling;
 use itertools::Itertools;
 use num::Integer;
 
@@ -17,6 +18,7 @@ use num::Integer;
 /// Algorithm 17 p. 47 of the specification [1].
 ///
 /// [1]: https://falcon-sign.info/falcon.pdf
+#[profiling]
 pub(crate) fn compress(v: &[i16], byte_length: usize) -> Option<Vec<u8>> {
     // encode each coefficient separately; join later
     let lengths_and_coefficients = v.iter().map(|c| compress_coefficient(*c)).collect_vec();
@@ -121,6 +123,7 @@ pub(crate) fn decompress_slow(x: &[u8], n: usize) -> Option<Vec<i16>> {
 /// Algorithm 18 p. 48 of the specification [1].
 ///
 /// [1]: https://falcon-sign.info/falcon.pdf
+#[profiling]
 pub(crate) fn decompress(x: &[u8], n: usize) -> Option<Vec<i16>> {
     let bitvector = BitVec::from_bytes(x);
     let mut index = 0;
