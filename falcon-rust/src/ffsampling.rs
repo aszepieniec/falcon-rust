@@ -58,6 +58,7 @@ pub(crate) enum LdlTree {
 /// polynomials, given in FFT form.
 ///
 /// [1]: https://falcon-sign.info/falcon.pdf
+#[profiling]
 pub(crate) fn ffldl(gram_matrix: [Polynomial<Complex64>; 4]) -> LdlTree {
     let n = gram_matrix[0].coefficients.len();
     let (l, d) = ldl(gram_matrix);

@@ -53,6 +53,7 @@ where
     }
 }
 
+#[profiling]
 fn vector_karatsuba<
     F: Zero + AddAssign + Mul<Output = F> + Sub<Output = F> + Div<Output = F> + Clone,
 >(
@@ -111,6 +112,7 @@ impl<
         F: Mul<Output = F> + Sub<Output = F> + AddAssign + Zero + Div<Output = F> + Inverse + Clone,
     > Polynomial<F>
 {
+    #[profiling]
     pub fn hadamard_mul(&self, other: &Self) -> Self {
         Polynomial::new(
             self.coefficients
@@ -120,6 +122,7 @@ impl<
                 .collect_vec(),
         )
     }
+    #[profiling]
     pub fn hadamard_div(&self, other: &Self) -> Self {
         let other_coefficients_inverse = F::batch_inverse_or_zero(&other.coefficients);
         Polynomial::new(
@@ -130,7 +133,7 @@ impl<
                 .collect_vec(),
         )
     }
-
+    #[profiling]
     pub fn hadamard_inv(&self) -> Self {
         let coefficients_inverse = F::batch_inverse_or_zero(&self.coefficients);
         Polynomial::new(coefficients_inverse)
@@ -202,6 +205,7 @@ impl<
     > Polynomial<F>
 {
     /// Reduce the polynomial by X^n + 1.
+    #[profiling]
     pub fn reduce_by_cyclotomic(&self, n: usize) -> Self {
         let mut coefficients = vec![F::zero(); n];
         let mut sign = -F::one();
@@ -249,6 +253,8 @@ impl<
     /// Corresponds to formula 3.25 in the spec [1, p.30].
     ///
     /// [1]: https://falcon-sign.info/falcon.pdf
+    ///
+    #[profiling]
     pub fn field_norm(&self) -> Self {
         let n = self.coefficients.len();
         let mut f0_coefficients = vec![F::zero(); n / 2];
@@ -267,6 +273,8 @@ impl<
 
     /// Lift an element from a cyclotomic polynomial ring to one of double the
     /// size. Do this by interleaving zeros.
+    ///
+    #[profiling]
     pub fn lift_next_cyclotomic(&self) -> Self {
         let n = self.coefficients.len();
         let mut coefficients = vec![F::zero(); n * 2];
@@ -279,6 +287,8 @@ impl<
     /// Compute the galois adjoint of the polynomial in the cyclotomic ring
     /// F[ X ] / < X^n + 1 > , which corresponds to flipping the sign of all
     /// odd coefficients.
+    ///
+    #[profiling]
     pub fn galois_adjoint(&self) -> Self {
         Self::new(
             self.coefficients
@@ -316,6 +326,8 @@ impl<
     /// Implementation adapted from Wikipedia [1].
     ///
     /// [1]: https://en.wikipedia.org/wiki/Extended_Euclidean_algorithm#Pseudocode
+    ///
+    #[profiling]
     pub(crate) fn xgcd(a: &Self, b: &Self) -> (Self, Self, Self) {
         if a.is_zero() || b.is_zero() {
             return (Self::zero(), Self::zero(), Self::zero());
@@ -337,6 +349,7 @@ impl<
 
 impl<F: Clone + Into<f64>> Polynomial<F> {
     #[allow(dead_code)]
+    #[profiling]
     pub(crate) fn l2_norm(&self) -> f64 {
         self.coefficients
             .iter()
@@ -345,6 +358,7 @@ impl<F: Clone + Into<f64>> Polynomial<F> {
             .sum::<f64>()
             .sqrt()
     }
+    #[profiling]
     pub(crate) fn l2_norm_squared(&self) -> f64 {
         self.coefficients
             .iter()

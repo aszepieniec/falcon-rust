@@ -1,5 +1,6 @@
 use std::ops::{Add, AddAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 
+use falcon_profiler::profiling;
 use itertools::Itertools;
 use num::{One, Zero};
 use num_complex::Complex64;
@@ -13,7 +14,10 @@ use crate::{
 /// precomputed powers of the 2nth primitive root of unity.
 pub trait FastFft: Sized + Clone {
     type Field: Add + Mul + AddAssign + MulAssign + Neg + Sub + SubAssign + One + Zero;
+
     fn fft_inplace(&mut self);
+
+    #[profiling]
     fn fft(&self) -> Self {
         let mut a = self.clone();
         a.fft_inplace();
@@ -21,9 +25,12 @@ pub trait FastFft: Sized + Clone {
     }
 
     fn merge_fft(a: &Self, b: &Self) -> Self;
+
     fn split_fft(&self) -> (Self, Self);
 
     fn ifft_inplace(&mut self);
+
+    #[profiling]
     fn ifft(&self) -> Self {
         let mut a = self.clone();
         a.ifft_inplace();

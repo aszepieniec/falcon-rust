@@ -129,6 +129,7 @@ pub fn babai_reduce_bigint(
 /// This function is marked pub for the purpose of benchmarking; it is not
 /// considered part of the public API.
 #[doc(hidden)]
+#[profiling]
 pub fn babai_reduce_i32(
     f: &Polynomial<i32>,
     g: &Polynomial<i32>,
@@ -242,6 +243,7 @@ pub fn babai_reduce_i32(
 /// Implementation adapted from Wikipedia [1].
 ///
 /// [1]: https://en.wikipedia.org/wiki/Extended_Euclidean_algorithm#Pseudocode
+#[profiling]
 fn xgcd(a: &BigInt, b: &BigInt) -> (BigInt, BigInt, BigInt) {
     let (mut old_r, mut r) = (a.clone(), b.clone());
     let (mut old_s, mut s) = (BigInt::one(), BigInt::zero());
