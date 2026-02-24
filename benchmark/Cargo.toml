@@ -32,6 +32,10 @@ name = "babai_reduce"
 harness = false
 
 [[bench]]
+name = "field"
+harness = false
+
+[[bench]]
 name = "profile"
 harness = false
 

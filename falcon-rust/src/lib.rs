@@ -60,7 +60,7 @@ pub(crate) mod encoding;
 pub(crate) mod falcon;
 pub mod falcon1024;
 pub mod falcon512;
-pub(crate) mod falcon_field;
+pub mod falcon_field;
 pub(crate) mod fast_fft;
 pub(crate) mod ffsampling;
 pub(crate) mod inverse;
