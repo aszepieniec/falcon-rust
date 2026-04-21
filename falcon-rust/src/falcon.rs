@@ -148,7 +148,7 @@ impl<const N: usize> SecretKey<N> {
         if bits[0] {
             uint = (uint << (16 - bits.len())) >> (16 - bits.len());
         }
-        Ok(Felt::new(uint))
+        Ok(Felt::from(uint))
     }
 
     /// Serialize the secret key to a vector of bytes.
@@ -167,19 +167,19 @@ impl<const N: usize> SecretKey<N> {
         // f
         let width = Self::field_element_width(n, 0);
         for &fi in f.coefficients.iter() {
-            let mut substring = Self::serialize_field_element(width, Felt::new(-fi));
+            let mut substring = Self::serialize_field_element(width, Felt::from(-fi));
             bits.append(&mut substring);
         }
         // g
         let width = Self::field_element_width(n, 1);
         for &fi in g.coefficients.iter() {
-            let mut substring = Self::serialize_field_element(width, Felt::new(fi));
+            let mut substring = Self::serialize_field_element(width, Felt::from(fi));
             bits.append(&mut substring);
         }
         // capital_f
         let width = Self::field_element_width(n, 2);
         for &fi in capital_f.coefficients.iter() {
-            let mut substring = Self::serialize_field_element(width, Felt::new(-fi));
+            let mut substring = Self::serialize_field_element(width, Felt::from(-fi));
             bits.append(&mut substring);
         }
 
@@ -309,9 +309,9 @@ impl<const N: usize> PublicKey<N> {
     /// Compute the public key that matches with this secret key.
     #[profiling]
     pub fn from_secret_key(sk: &SecretKey<N>) -> Self {
-        let f = sk.b0[1].map(|&c| -Felt::new(c));
+        let f = sk.b0[1].map(|&c| -Felt::from(c));
         let f_ntt = f.fft();
-        let g = sk.b0[0].map(|&c| Felt::new(c));
+        let g = sk.b0[0].map(|&c| Felt::from(c));
         let g_ntt = g.fft();
         let h_ntt = g_ntt.hadamard_div(&f_ntt);
         let h = h_ntt.ifft();
@@ -357,7 +357,7 @@ impl<const N: usize> PublicKey<N> {
                     }
                     int
                 })
-                .map(Felt::new)
+                .map(Felt::from)
                 .collect_vec(),
         );
 
@@ -552,7 +552,7 @@ pub fn verify<const N: usize>(m: &[u8], sig: &Signature<N>, pk: &PublicKey<N>) -
             return false;
         }
     };
-    let s2_ntt = Polynomial::new(s2.iter().map(|a| Felt::new(*a)).collect_vec()).fft();
+    let s2_ntt = Polynomial::new(s2.iter().map(|a| Felt::from(*a)).collect_vec()).fft();
     let h_ntt = pk.h.fft();
     let c_ntt = c.fft();
 
@@ -1385,7 +1385,7 @@ mod test {
                 if int == -(1i16 << (width - 1)) {
                     continue;
                 }
-                let felt = Felt::new(int);
+                let felt = Felt::from(int);
                 let ser = SecretKey::<512>::serialize_field_element(width, felt);
                 let des = SecretKey::<512>::deserialize_field_element(&ser).unwrap();
                 let res = SecretKey::<512>::serialize_field_element(width, des);
@@ -1401,7 +1401,7 @@ mod test {
                 if int == -(1i16 << (width - 1)) {
                     continue;
                 }
-                let felt = Felt::new(int);
+                let felt = Felt::from(int);
                 let ser = SecretKey::<1024>::serialize_field_element(width, felt);
                 let des = SecretKey::<1024>::deserialize_field_element(&ser).unwrap();
                 let res = SecretKey::<1024>::serialize_field_element(width, des);

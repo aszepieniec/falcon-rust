@@ -279,8 +279,8 @@ fn ntru_solve(
             return None;
         }
         return Some((
-            (Polynomial::new(vec![-v * BigInt::from_u32(Q).unwrap()])),
-            Polynomial::new(vec![u * BigInt::from_u32(Q).unwrap()]),
+            (Polynomial::new(vec![-v * BigInt::from_u32(Q as u32).unwrap()])),
+            Polynomial::new(vec![u * BigInt::from_u32(Q as u32).unwrap()]),
         ));
     }
 
@@ -416,7 +416,7 @@ pub fn ntru_gen(
         let f = gen_poly(n, rng);
         let g = gen_poly(n, rng);
 
-        let f_ntt = f.map(|&i| Felt::new(i)).fft();
+        let f_ntt = f.map(|&i| Felt::from(i)).fft();
         if f_ntt.coefficients.iter().any(|e| e.is_zero()) {
             continue;
         }
