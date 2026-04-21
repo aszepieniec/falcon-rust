@@ -1,6 +1,5 @@
 use criterion::{criterion_group, criterion_main, Criterion};
 use falcon_rust::falcon_field::Felt;
-use falcon_rust::falcon_field::Q;
 use rand::rng;
 use rand::Rng;
 
@@ -14,8 +13,8 @@ pub fn field(c: &mut Criterion) {
     let mut b = [Felt::new(0); NUM_OPS];
     let mut c = [Felt::new(0); NUM_OPS];
     for i in 0..NUM_OPS {
-        a[i] = Felt::new(rng.random_range(0_i16..(Q as i16)));
-        b[i] = Felt::new(rng.random_range(0_i16..(Q as i16)));
+        a[i] = rng.random();
+        b[i] = rng.random();
     }
 
     group.bench_function(format!("{NUM_OPS} additions"), |bencher| {

@@ -9,40 +9,94 @@ use crate::inverse::Inverse;
 
 /// q is the integer modulus which is used in Falcon.
 #[doc(hidden)]
-pub const Q: u32 = 12 * 1024 + 1;
+pub const Q: u16 = 12 * 1024 + 1;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[doc(hidden)]
-pub struct Felt(u32);
+pub struct Felt(u16);
 
 impl Felt {
-    pub const fn new(value: i16) -> Self {
-        let gtz_bool = value >= 0;
-        let gtz_int = gtz_bool as i16;
-        let gtz_sign = gtz_int - ((!gtz_bool) as i16);
-        let reduced = gtz_sign * ((gtz_sign * value) % (Q as i16));
-        let canonical_representative = (reduced + (Q as i16) * (1 - gtz_int)) as u32;
-        Felt(canonical_representative)
+    pub(crate) const Q: u16 = super::falcon_field::Q;
+    pub(crate) const LOG2R: usize = 16;
+    pub(crate) const R_MINUS_1: u32 = 0xffff_u32;
+    pub(crate) const NEGQINV_MODR: u32 = 12287;
+    pub(crate) const R_SQ_MODQ: u16 = 10952;
+
+    pub const fn new(value: u16) -> Self {
+        let reduced = if value >= Self::Q {
+            value - Self::Q
+        } else {
+            value
+        };
+
+        Felt(Self::montyred(reduced, Self::R_SQ_MODQ))
     }
 
-    pub const fn value(&self) -> i16 {
-        self.0 as i16
+    pub const fn value(&self) -> u16 {
+        Self::montyred(self.0, 1)
     }
 
     pub fn balanced_value(&self) -> i16 {
-        let value = self.value();
-        let g = (value > ((Q as i16) / 2)) as i16;
+        let value = self.value() as i16;
+        let g = (value > ((Self::Q as i16) / 2)) as i16;
         value - (Q as i16) * g
     }
 
     pub const fn multiply(&self, other: Self) -> Self {
-        Felt((self.0 * other.0) % Q)
+        Felt(Self::montyred(self.0, other.0))
+    }
+
+    const fn montyred(a: u16, b: u16) -> u16 {
+        debug_assert!(a < Self::Q);
+        debug_assert!(b < Self::Q);
+
+        let product: u32 = (a as u32) * (b as u32);
+
+        // We want to add a magic number to this product such that
+        //  - the magic number is a multiple of q, so the residue class does not
+        //    change;
+        //  - the sum becomes divisible by r (rightmost logr bits are zero) so
+        //    that in a later step we can shift (cheap) instead of divide
+        //    (expensive).
+        //
+        // These requirements translate to
+        //  - the rightmost logr bits of a*b  is congruent to the rightmost logr
+        //    bits of -magic_number;
+        //  - magic_number = q * something.
+        //
+        // So:
+        //  something is congruent to magic_number * q^-1 modulo r
+        //                            a*b * (-q^-1) modulo r
+
+        let tail = product & Self::R_MINUS_1;
+
+        let cofactor = (Self::NEGQINV_MODR * tail) & Self::R_MINUS_1;
+
+        let magic_sum = product + cofactor * (Self::Q as u32);
+
+        let mut g = (magic_sum >> Self::LOG2R) as u16;
+
+        while g > Self::Q {
+            g -= Self::Q;
+        }
+
+        g
     }
 }
 
 impl From<usize> for Felt {
     fn from(value: usize) -> Self {
-        Felt::new(value as i16)
+        Felt::new(value as u16)
+    }
+}
+
+impl From<i16> for Felt {
+    fn from(value: i16) -> Self {
+        if value >= 0 {
+            Self::new(value as u16)
+        } else {
+            -Self::new((-value) as u16)
+        }
     }
 }
 
@@ -51,7 +105,7 @@ impl Add for Felt {
     fn add(self, rhs: Self) -> Self::Output {
         let (s, _) = self.0.overflowing_add(rhs.0);
         let (d, n) = s.overflowing_sub(Q);
-        let (r, _) = d.overflowing_add(Q * (n as u32));
+        let (r, _) = d.overflowing_add(Q * (n as u16));
         Felt(r)
     }
 
@@ -84,13 +138,13 @@ impl Neg for Felt {
     fn neg(self) -> Self::Output {
         let is_nonzero = self.0 != 0;
         let r = Q - self.0;
-        Felt(r * (is_nonzero as u32))
+        Felt(r * (is_nonzero as u16))
     }
 }
 
 impl Mul for Felt {
     fn mul(self, rhs: Self) -> Self::Output {
-        Felt((self.0 * rhs.0) % Q)
+        Felt(Self::montyred(self.0, rhs.0))
     }
 
     type Output = Self;
@@ -119,7 +173,7 @@ impl One for Felt {
 
 impl Distribution<Felt> for StandardUniform {
     fn sample<R: rand::Rng + ?Sized>(&self, rng: &mut R) -> Felt {
-        Felt::new(((rng.next_u32() >> 1) % Q) as i16)
+        Felt::new((rng.next_u32() as u16 >> 1) % Q)
     }
 }
 
@@ -197,18 +251,32 @@ mod test {
     };
     use num::Zero;
 
+    impl Felt {
+        pub(crate) const RINV_MODQ: u32 = 2304;
+    }
+
+    #[test]
+    fn test_montyred() {
+        let mut rng = rng();
+        for _ in 0..1000 {
+            let a = rng.random_range(0..Felt::Q);
+            let b = rng.random_range(0..Felt::Q);
+            let c =
+                ((((a as u64) * (b as u64)) * (Felt::RINV_MODQ as u64)) % (Felt::Q as u64)) as u16;
+            let cc = Felt::montyred(a, b);
+            assert_eq!(c, cc);
+        }
+    }
+
     #[test]
     fn test_value() {
         let mut rng = rng();
         for _ in 0..1000 {
-            let mut value = (rng.next_u32() & 0x3fff) as i16;
-            if rng.next_u32() % 2 == 1 {
-                value *= -1;
-            }
+            let value = rng.random_range(0..Felt::Q);
             let felt = Felt::new(value);
             assert_eq!(
-                0,
-                (felt.value() - value) % (Q as i16),
+                value,
+                felt.value(),
                 "value: {value} but got {}",
                 felt.value()
             );
@@ -218,15 +286,15 @@ mod test {
     #[test]
     fn test_add() {
         let mut rng = rng();
-        let a_value = (rng.next_u32() % 0x0fff) as i16;
-        let b_value = (rng.next_u32() % 0x0fff) as i16;
+        let a_value = (rng.next_u32() % 0x0fff) as u16;
+        let b_value = (rng.next_u32() % 0x0fff) as u16;
         let a = Felt::new(a_value);
         let b = Felt::new(b_value);
         assert_eq!(
             a + b,
             Felt::new(a.value() + b.value()),
             "a: {a_value}, b: {b_value}, c: {}",
-            ((a_value + b_value) as u32) % Q
+            ((a_value + b_value) as u16) % Q
         );
     }
 
@@ -241,9 +309,9 @@ mod test {
     fn test_mul() {
         let mut rng = rng();
         for _ in 0..1000 {
-            let a_value = (rng.next_u32() % 0x3fff) as i16;
-            let b_value = (rng.next_u32() % 0x3fff) as i16;
-            let product = (((a_value as u32) * (b_value as u32)) % Q) as i16;
+            let a_value = (rng.next_u32() % 0x3fff) as u16;
+            let b_value = (rng.next_u32() % 0x3fff) as u16;
+            let product = (((a_value as u32) * (b_value as u32)) % (Felt::Q as u32)) as u16;
             let a = Felt::new(a_value);
             let b = Felt::new(b_value);
             assert_eq!(
@@ -313,7 +381,7 @@ mod test {
         let n = 32;
         let mut rng = rng();
         let mut a = (0..n)
-            .map(|_| rng.next_u32() as i16)
+            .map(|_| rng.random_range(0..Felt::Q))
             .map(Felt::new)
             .collect_vec();
         let mut b = a.clone();
@@ -321,13 +389,13 @@ mod test {
 
         let psi_rev = Felt::bitreversed_powers(n);
         let psi_inv_rev = Felt::bitreversed_powers_inverse(n);
-        let ninv = Felt::inverse_or_zero(Felt::new(n as i16));
+        let ninv = Felt::inverse_or_zero(Felt::new(n as u16));
         Felt::fft(&mut a, &psi_rev);
         Felt::ifft(&mut a, &psi_inv_rev, ninv);
         assert_eq!(a, b);
 
-        let x = Felt::new(rng.next_u32() as i16);
-        let y = Felt::new(rng.next_u32() as i16);
+        let x = Felt::new(rng.random_range(0..Felt::Q));
+        let y = Felt::new(rng.random_range(0..Felt::Q));
         let mut c = a
             .iter()
             .zip(b.iter())
@@ -352,10 +420,10 @@ mod test {
         let n = 32;
         let mut rng = rng();
         let mut a = (0..n)
-            .map(|_| Felt::new(rng.random_range(-20..20)))
+            .map(|_| Felt::new(rng.random_range(0..20)))
             .collect_vec();
         let mut b = (0..n)
-            .map(|_| Felt::new(rng.random_range(-20..20)))
+            .map(|_| Felt::new(rng.random_range(0..20)))
             .collect_vec();
 
         let c = (Polynomial::new(a.clone()) * Polynomial::new(b.clone()))
@@ -367,7 +435,7 @@ mod test {
         Felt::fft(&mut b, &psi_rev);
         let mut d = a.iter().zip(b.iter()).map(|(&l, &r)| l * r).collect_vec();
         let psi_inv_rev = Felt::bitreversed_powers_inverse(n);
-        let ninv = Felt::new(n as i16).inverse_or_zero();
+        let ninv = Felt::new(n as u16).inverse_or_zero();
         Felt::ifft(&mut d, &psi_inv_rev, ninv);
 
         let diff =

@@ -8,7 +8,7 @@ use std::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 
 use itertools::Itertools;
 
-use crate::falcon_field::{Felt, Q};
+use crate::falcon_field::Felt;
 use crate::inverse::Inverse;
 
 /// Marked pub for benchmarking; not considered part of the public API.
@@ -639,7 +639,7 @@ where
 /// Algorithm 3, "HashToPoint" in the spec (page 31).
 #[profiling]
 pub(crate) fn hash_to_point(string: &[u8], n: usize) -> Polynomial<Felt> {
-    const K: u32 = (1u32 << 16) / Q;
+    const K: u32 = (1u32 << 16) / (Felt::Q as u32);
 
     let mut hasher = Shake256::default();
     hasher.update(string);
@@ -651,8 +651,8 @@ pub(crate) fn hash_to_point(string: &[u8], n: usize) -> Polynomial<Felt> {
         reader.read(&mut randomness);
         // Arabic endianness but so be it
         let t = ((randomness[0] as u32) << 8) | (randomness[1] as u32);
-        if t < K * Q {
-            coefficients.push(Felt::new((t % Q) as i16));
+        if t < K * (Felt::Q as u32) {
+            coefficients.push(Felt::new((t % (Felt::Q as u32)) as u16));
         }
     }
 
