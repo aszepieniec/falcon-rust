@@ -46,11 +46,17 @@ impl Felt {
         Felt(Self::montyred(self.0, other.0))
     }
 
+    /// Compute the product and montgomery-reduce it.
+    ///
+    /// Given two field elements 0 ≤ a, b < Q, this function computes a number
+    /// 0 ≤ c < Q such that c R = ab mod Q, where R is 2^16.
     const fn montyred(a: u16, b: u16) -> u16 {
         debug_assert!(a < Self::Q);
         debug_assert!(b < Self::Q);
 
         let product: u32 = (a as u32) * (b as u32);
+
+        // product ≤ (Q-1)²
 
         // We want to add a magic number to this product such that
         //  - the magic number is a multiple of q, so the residue class does not
@@ -60,23 +66,34 @@ impl Felt {
         //    (expensive).
         //
         // These requirements translate to
-        //  - the rightmost logr bits of a*b  is congruent to the rightmost logr
-        //    bits of -magic_number;
-        //  - magic_number = q * something.
+        //  - the rightmost logr bits of a·b equals the rightmost logr bits of
+        //    -magic_number;
+        //  - magic_number = q · something.
         //
         // So:
-        //  something is congruent to magic_number * q^-1 modulo r
-        //                            a*b * (-q^-1) modulo r
+        //  something is congruent to magic_number · q^-1 modulo r
+        //                            a·b · (-q^-1) modulo r
 
         let tail = product & Self::R_MINUS_1;
 
         let cofactor = (Self::NEGQINV_MODR * tail) & Self::R_MINUS_1;
 
+        // cofactor ≤ R-1
+
         let magic_sum = product + cofactor * (Self::Q as u32);
+
+        // magic_sum ≤ (Q-1)² + (R-1)·Q
+        //           = Q² -2·Q + 1 + R·Q - Q  (expand)
+        //           = Q·R + Q·(Q-3) + 1      (group)
+        //           < 2·Q·R                  (because Q-3 < R)
 
         let mut g = (magic_sum >> Self::LOG2R) as u16;
 
-        while g > Self::Q {
+        // g < 2·Q
+        // So one conditional subtraction suffices.
+        // The compiler is smart enough to turn this if-statement into
+        // branch-free code.
+        if g >= Self::Q {
             g -= Self::Q;
         }
 
