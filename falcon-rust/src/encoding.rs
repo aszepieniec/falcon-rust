@@ -125,7 +125,12 @@ pub(crate) fn decompress_slow(x: &[u8], n: usize) -> Option<Vec<i16>> {
 /// [1]: https://falcon-sign.info/falcon.pdf
 #[profiling]
 pub(crate) fn decompress(x: &[u8], n: usize) -> Option<Vec<i16>> {
-    let bitvector = BitVec::from_bytes(x);
+    // Read bits directly from the byte slice rather than copying into a BitVec.
+    // The encoding uses MSB-first bit ordering within each byte: bit i of the
+    // stream is bit (7 - i%8) of byte i/8.  `get_bit(i)` extracts that bit.
+    let bit_len = x.len() * 8;
+    let get_bit = |i: usize| -> bool { (x[i / 8] >> (7 - i % 8)) & 1 != 0 };
+
     let mut index = 0;
     let mut result = Vec::with_capacity(n);
 
@@ -135,12 +140,12 @@ pub(crate) fn decompress(x: &[u8], n: usize) -> Option<Vec<i16>> {
     // for all elements (last round is special due to bound checks)
     for _ in 0..n - 1 {
         // early return if
-        if index + 8 >= bitvector.len() {
+        if index + 8 >= bit_len {
             return None;
         }
 
         // read sign
-        let sign = if bitvector[index] { -1 } else { 1 };
+        let sign = if get_bit(index) { -1 } else { 1 };
         index += 1;
 
         // read low bits
@@ -151,13 +156,13 @@ pub(crate) fn decompress(x: &[u8], n: usize) -> Option<Vec<i16>> {
         low_bits = (low_bits & 255) >> 1;
         index += 7;
 
-        // read high bits
+        // read high bits (unary encoding: count leading zeros, terminated by a 1)
         let mut high_bits = 0;
-        while !bitvector[index] {
+        while !get_bit(index) {
             index += 1;
             high_bits += 1;
 
-            if high_bits == 95 || index + 1 == bitvector.len() {
+            if high_bits == 95 || index + 1 == bit_len {
                 return None;
             }
         }
@@ -174,15 +179,15 @@ pub(crate) fn decompress(x: &[u8], n: usize) -> Option<Vec<i16>> {
     // last round
 
     // early return if
-    if index + 8 >= bitvector.len() {
+    if index + 8 >= bit_len {
         return None;
     }
 
     // read sign
-    if bitvector.len() == index {
+    if bit_len == index {
         return None;
     }
-    let sign = if bitvector[index] { -1 } else { 1 };
+    let sign = if get_bit(index) { -1 } else { 1 };
     index += 1;
 
     // read low bits
@@ -197,14 +202,14 @@ pub(crate) fn decompress(x: &[u8], n: usize) -> Option<Vec<i16>> {
     low_bits = (low_bits & 255) >> 1;
     index += 7;
 
-    // read high bits
+    // read high bits (unary encoding: count leading zeros, terminated by a 1)
     let mut high_bits = 0;
-    if bitvector.len() == index {
+    if bit_len == index {
         return None;
     }
-    while !bitvector[index] {
+    while !get_bit(index) {
         index += 1;
-        if bitvector.len() == index {
+        if bit_len == index {
             return None;
         }
         high_bits += 1;
@@ -219,17 +224,17 @@ pub(crate) fn decompress(x: &[u8], n: usize) -> Option<Vec<i16>> {
     let integer = sign * ((high_bits << 7) | low_bits);
     result.push(integer);
 
-    // check padding
+    // check that the remainder of the input is zero-padded
     index += 1;
     let (index_div_8, index_mod_8) = index.div_mod_floor(&8);
+    // check the partial byte that straddles the boundary
     for idx in 0..(8 - index_mod_8) {
-        if let Some(b) = bitvector.get(index + idx) {
-            if b {
-                // unread part of input contains set bits
-                return None;
-            }
+        if index + idx < bit_len && get_bit(index + idx) {
+            // unread part of input contains set bits
+            return None;
         }
     }
+    // check all remaining whole bytes
     for &byte in x.iter().skip(index_div_8 + 1 - (index_mod_8 == 0) as usize) {
         if byte != 0 {
             // unread part of input contains set bits!

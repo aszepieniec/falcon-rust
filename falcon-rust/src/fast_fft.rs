@@ -17,7 +17,6 @@ pub trait FastFft: Sized + Clone {
 
     fn fft_inplace(&mut self);
 
-    #[profiling]
     fn fft(&self) -> Self {
         let mut a = self.clone();
         a.fft_inplace();
@@ -30,7 +29,6 @@ pub trait FastFft: Sized + Clone {
 
     fn ifft_inplace(&mut self);
 
-    #[profiling]
     fn ifft(&self) -> Self {
         let mut a = self.clone();
         a.ifft_inplace();
@@ -3173,10 +3171,12 @@ const FELT_NINV_1024: Felt = Felt::new(12277);
 impl FastFft for Polynomial<Felt> {
     type Field = Felt;
 
+    #[profiling]
     fn fft_inplace(&mut self) {
         Felt::fft(&mut self.coefficients, &FELT_BITREVERSED_POWERS_1024);
     }
 
+    #[profiling]
     fn ifft_inplace(&mut self) {
         let n = self.coefficients.len();
         let ninv = match n {

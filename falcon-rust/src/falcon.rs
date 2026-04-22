@@ -560,13 +560,16 @@ pub fn verify<const N: usize>(m: &[u8], sig: &Signature<N>, pk: &PublicKey<N>) -
             Felt::from(a)
         })
         .collect_vec();
-    let s2_ntt = Polynomial::new(s2_felt).fft();
+    let mut s2_ntt = Polynomial::new(s2_felt);
+    s2_ntt.fft_inplace();
     let h_ntt = &pk.h_ntt;
-    let c_ntt = c.fft();
+    let mut c_ntt = c;
+    c_ntt.fft_inplace();
 
     // s1 = c - s2 * pk.h;
-    let s1_ntt = c_ntt - s2_ntt.hadamard_mul(h_ntt);
-    let s1 = s1_ntt.ifft();
+    let mut s1_ntt = c_ntt - s2_ntt.hadamard_mul(h_ntt);
+    s1_ntt.ifft_inplace();
+    let s1 = s1_ntt;
 
     let s1_norm_sq = s1
         .coefficients

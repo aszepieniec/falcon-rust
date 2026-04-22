@@ -645,7 +645,7 @@ pub(crate) fn hash_to_point(string: &[u8], n: usize) -> Polynomial<Felt> {
     hasher.update(string);
     let mut reader = hasher.finalize_xof();
 
-    let mut coefficients: Vec<Felt> = vec![];
+    let mut coefficients: Vec<Felt> = Vec::with_capacity(n);
     while coefficients.len() != n {
         let mut randomness = [0u8; 2];
         reader.read(&mut randomness);
