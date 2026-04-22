@@ -125,119 +125,73 @@ pub(crate) fn decompress_slow(x: &[u8], n: usize) -> Option<Vec<i16>> {
 /// [1]: https://falcon-sign.info/falcon.pdf
 #[profiling]
 pub(crate) fn decompress(x: &[u8], n: usize) -> Option<Vec<i16>> {
-    // Read bits directly from the byte slice rather than copying into a BitVec.
-    // The encoding uses MSB-first bit ordering within each byte: bit i of the
-    // stream is bit (7 - i%8) of byte i/8.  `get_bit(i)` extracts that bit.
-    let bit_len = x.len() * 8;
-    let get_bit = |i: usize| -> bool { (x[i / 8] >> (7 - i % 8)) & 1 != 0 };
-
-    let mut index = 0;
+    // Bit-accumulator decoder, structured the same as fn-dsa's comp_decode.
+    //
+    // `acc` is a 32-bit shift register; `acc_len` counts how many of its
+    // least-significant bits are valid.  Invariant: acc_len <= 7 at the top
+    // of each coefficient iteration.
+    //
+    // For each coefficient we load exactly one new byte into acc (covering
+    // the sign bit and 7 low bits), then refill byte-by-byte as needed while
+    // scanning the unary-encoded high bits.  The key win over a per-bit index
+    // approach is that acc_len is updated with a simple decrement — no
+    // division or modulo by 8 on every bit.
     let mut result = Vec::with_capacity(n);
+    let mut i = 0usize;   // byte cursor into x
+    let mut acc: u32 = 0;
+    let mut acc_len: u32 = 0;
 
-    // tracks invalid coefficient encodings
-    let mut abort = false;
-
-    // for all elements (last round is special due to bound checks)
-    for _ in 0..n - 1 {
-        // early return if
-        if index + 8 >= bit_len {
+    for _ in 0..n {
+        // Load the next byte; it holds the sign bit (MSB) and the 7 low bits
+        // of this coefficient's absolute value.
+        if i >= x.len() {
             return None;
         }
+        acc = (acc << 8) | x[i] as u32;
+        i += 1;
+        // After the shift, the fresh byte occupies bits acc_len..acc_len+7.
+        let s = (acc >> (acc_len + 7)) & 1;  // sign: 0 = positive, 1 = negative
+        let mut m = (acc >> acc_len) & 0x7F; // |coeff| low 7 bits
 
-        // read sign
-        let sign = if get_bit(index) { -1 } else { 1 };
-        index += 1;
-
-        // read low bits
-        let mut low_bits = 0i16;
-        let (index_div_8, index_mod_8) = index.div_mod_floor(&8);
-        low_bits |= (x[index_div_8] as i16) << index_mod_8;
-        low_bits |= (x[index_div_8 + 1] as i16) >> (8 - index_mod_8);
-        low_bits = (low_bits & 255) >> 1;
-        index += 7;
-
-        // read high bits (unary encoding: count leading zeros, terminated by a 1)
-        let mut high_bits = 0;
-        while !get_bit(index) {
-            index += 1;
-            high_bits += 1;
-
-            if high_bits == 95 || index + 1 == bit_len {
+        // Read the unary-encoded high bits: zero or more 0-bits, terminated
+        // by a 1-bit.  Each 0-bit adds 128 to m (one high-bit position).
+        loop {
+            if acc_len == 0 {
+                if i >= x.len() {
+                    return None;
+                }
+                acc = (acc << 8) | x[i] as u32;
+                i += 1;
+                acc_len = 8;
+            }
+            acc_len -= 1;
+            if (acc >> acc_len) & 1 != 0 {
+                break; // found the terminating 1
+            }
+            m += 0x80;
+            if m > 2047 {
                 return None;
             }
         }
-        index += 1;
 
-        // test if coefficient is encoded properly
-        abort |= low_bits == 0 && high_bits == 0 && sign == -1;
-
-        // compose integer and collect it
-        let integer = sign * ((high_bits << 7) | low_bits);
-        result.push(integer);
-    }
-
-    // last round
-
-    // early return if
-    if index + 8 >= bit_len {
-        return None;
-    }
-
-    // read sign
-    if bit_len == index {
-        return None;
-    }
-    let sign = if get_bit(index) { -1 } else { 1 };
-    index += 1;
-
-    // read low bits
-    let mut low_bits = 0i16;
-    let (index_div_8, index_mod_8) = index.div_mod_floor(&8);
-    low_bits |= (x[index_div_8] as i16) << index_mod_8;
-    if index_mod_8 != 0 && index_div_8 + 1 < x.len() {
-        low_bits |= (x[index_div_8 + 1] as i16) >> (8 - index_mod_8);
-    } else if index_mod_8 != 0 {
-        return None;
-    }
-    low_bits = (low_bits & 255) >> 1;
-    index += 7;
-
-    // read high bits (unary encoding: count leading zeros, terminated by a 1)
-    let mut high_bits = 0;
-    if bit_len == index {
-        return None;
-    }
-    while !get_bit(index) {
-        index += 1;
-        if bit_len == index {
+        // Reject the "-0" encoding (sign=negative, value=0).
+        // m.wrapping_sub(1) >> 31 is 1 iff m == 0.
+        if s & (m.wrapping_sub(1) >> 31) != 0 {
             return None;
         }
-        high_bits += 1;
+
+        // Apply sign branchlessly: sw = 0 if positive, 0xFFFF_FFFF if negative.
+        let sw = s.wrapping_neg();
+        result.push(((m ^ sw).wrapping_sub(sw)) as i16);
     }
 
-    // test if coefficient encoded properly
-    if abort || (low_bits == 0 && high_bits == 0 && sign == -1) {
+    // Verify zero-padding: remaining bits in the accumulator and all
+    // unread bytes must be zero.
+    if acc_len > 0 && acc & ((1 << acc_len) - 1) != 0 {
         return None;
     }
-
-    // compose integer and collect it
-    let integer = sign * ((high_bits << 7) | low_bits);
-    result.push(integer);
-
-    // check that the remainder of the input is zero-padded
-    index += 1;
-    let (index_div_8, index_mod_8) = index.div_mod_floor(&8);
-    // check the partial byte that straddles the boundary
-    for idx in 0..(8 - index_mod_8) {
-        if index + idx < bit_len && get_bit(index + idx) {
-            // unread part of input contains set bits
-            return None;
-        }
-    }
-    // check all remaining whole bytes
-    for &byte in x.iter().skip(index_div_8 + 1 - (index_mod_8 == 0) as usize) {
+    for &byte in &x[i..] {
         if byte != 0 {
-            // unread part of input contains set bits!
             return None;
         }
     }
