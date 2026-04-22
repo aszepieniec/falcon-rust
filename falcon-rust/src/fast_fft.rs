@@ -3168,6 +3168,19 @@ const FELT_NINV_256: Felt = Felt::new(12241);
 const FELT_NINV_512: Felt = Felt::new(12265);
 const FELT_NINV_1024: Felt = Felt::new(12277);
 
+/// Inverse twiddle factors for the IFFT of length ≤ 1024, each pre-multiplied
+/// by 2⁻¹ mod Q.  Used by the self-normalizing ifft_inplace below.
+const FELT_BITREVERSED_POWERS_INVERSE_HALVED_1024: [Felt; 1024] = {
+    let src = FELT_BITREVERSED_POWERS_INVERSE_1024;
+    let mut result = [Felt::new(0); 1024];
+    let mut i = 0;
+    while i < 1024 {
+        result[i] = src[i].half();
+        i += 1;
+    }
+    result
+};
+
 impl FastFft for Polynomial<Felt> {
     type Field = Felt;
 
@@ -3178,26 +3191,41 @@ impl FastFft for Polynomial<Felt> {
 
     #[profiling]
     fn ifft_inplace(&mut self) {
+        // Standard inverse-NTT butterfly, but with the n⁻¹ normalization
+        // folded in: both butterfly outputs are halved at every stage.
+        //
+        //   sum  output: a[j]   = (u + v).half()   — Felt::half() uses a
+        //                                             cheap shift, not a full
+        //                                             Montgomery multiply
+        //   diff output: a[j+t] = (u − v) * s      — s is drawn from
+        //                                             FELT_BITREVERSED_POWERS_INVERSE_HALVED_1024,
+        //                                             which already incorporates
+        //                                             the ×2⁻¹ factor
+        //
+        // Every coefficient passes through exactly one butterfly per stage.
+        // After log₂(n) stages each coefficient has been halved log₂(n) times,
+        // accumulating a factor of (½)^{log₂n} = n⁻¹.  No separate
+        // normalization pass is needed.
         let n = self.coefficients.len();
-        let ninv = match n {
-            1 => FELT_NINV_1,
-            2 => FELT_NINV_2,
-            4 => FELT_NINV_4,
-            8 => FELT_NINV_8,
-            16 => FELT_NINV_16,
-            32 => FELT_NINV_32,
-            64 => FELT_NINV_64,
-            128 => FELT_NINV_128,
-            256 => FELT_NINV_256,
-            512 => FELT_NINV_512,
-            1024 => FELT_NINV_1024,
-            _ => panic!("vector length is not power of 2 or larger than 1024"),
-        };
-        Felt::ifft(
-            &mut self.coefficients,
-            &FELT_BITREVERSED_POWERS_INVERSE_1024,
-            ninv,
-        );
+        let a = &mut self.coefficients;
+        let mut t = 1;
+        let mut m = n;
+        while m > 1 {
+            let h = m / 2;
+            let mut j1 = 0;
+            for i in 0..h {
+                let s = FELT_BITREVERSED_POWERS_INVERSE_HALVED_1024[h + i];
+                for j in j1..j1 + t {
+                    let u = a[j];
+                    let v = a[j + t];
+                    a[j] = (u + v).half();
+                    a[j + t] = (u - v) * s;
+                }
+                j1 += 2 * t;
+            }
+            t <<= 1;
+            m >>= 1;
+        }
     }
 
     fn merge_fft(a: &Self, b: &Self) -> Self {
