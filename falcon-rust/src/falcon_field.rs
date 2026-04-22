@@ -46,6 +46,26 @@ impl Felt {
         Felt(Self::montyred(self.0, other.0))
     }
 
+    /// Multiply by 2⁻¹ mod Q without a full Montgomery reduction.
+    ///
+    /// The stored value x is an integer in {0, …, Q−1}.  Whether it is in
+    /// Montgomery form or not, the following identity holds:
+    ///
+    ///   (x + Q·(x & 1)) >> 1  ≡  x · 2⁻¹  (mod Q)
+    ///
+    /// Proof: if x is even, the result is x/2 and 2·(x/2) = x ≡ x (mod Q).
+    /// If x is odd, Q is also odd so x+Q is even, and 2·(x+Q)/2 = x+Q ≡ x (mod Q).
+    /// The result is always in {0, …, Q−1}, so no further reduction is needed.
+    ///
+    /// Cost: one AND, one negate-mask, one ADD, one shift — much cheaper than a
+    /// full Montgomery multiplication.
+    pub const fn half(self) -> Self {
+        let x = self.0 as u32;
+        // If x is odd, add Q to make it even before halving.
+        let r = (x + ((x & 1).wrapping_neg() & Self::Q as u32)) >> 1;
+        Felt(r as u16)
+    }
+
     /// Compute the product and montgomery-reduce it.
     ///
     /// Given two field elements 0 ≤ a, b < Q, this function computes a number
