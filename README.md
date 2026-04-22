@@ -1,5 +1,13 @@
 # Falcon-Rust
 
+![GitHub License](https://img.shields.io/github/license/aszepieniec/falcon-rust)
+![GitHub Actions Workflow Status](https://img.shields.io/github/actions/workflow/status/aszepieniec/falcon-rust/rust.yml)
+![Crates.io Version](https://img.shields.io/crates/v/falcon-rust)
+![docs.rs](https://img.shields.io/docsrs/falcon-rust)
+![Crates.io Downloads (latest version)](https://img.shields.io/crates/dv/falcon-rust)
+![Deps.rs Crate Dependencies (latest)](https://img.shields.io/deps-rs/falcon-rust/latest)
+![Crates.io Dependents](https://img.shields.io/crates/dependents/falcon-rust)
+
 Unofficial rust implementation of the [Falcon](https://falcon-sign.info/) post-quantum
 digital signature scheme.
 
@@ -28,16 +36,16 @@ assert!(falcon512::verify(&msg, &sig, &pk));
 
 ## Performance
 
-If you are after performance, you are probably better off with one of the implementations by the inventors, either the foreign function interface (FFI) into the optimized C code ([`pqcrypto-falcon`](https://crates.io/crates/pqcrypto-falcon)), or the optimized rust crate ([`fn-dsa`](https://crates.io/crates/fn-dsa)). The following benchmark was produced by my 12th Gen Intel(R) Core(TM) i9-12900K (which supports AVX2). You can make your own by running `cargo bench`.
+If you are after performance, you are probably better off with one of the implementations by the inventors, either the foreign function interface (FFI) into the optimized C code ([`pqcrypto-falcon`](https://crates.io/crates/pqcrypto-falcon)), or the optimized rust crate ([`fn-dsa`](https://crates.io/crates/fn-dsa)). The following benchmark was produced by my Intel(R) Core(TM) Ultra 9 275HX (which supports AVX2). You can make your own by running `cargo bench`.
 
 |                      | Keygen          | Sign      | Verify    |
 |----------------------|-----------------|-----------|-----------|
-|      falcon-rust 512 |   226.84 ms     | 329.26 µs | 20.277 µs |
-|     falcon-rust 1024 |   1.3106 **s**  | 665.00 µs | 41.933 µs |
-|            C FFI 512 |   4.0688 ms     | 129.49 µs | 25.555 µs |
-|           C FFI 1024 |   12.048 ms     | 255.59 µs | 50.142 µs |
-|           FN DSA 512 |   2.0587 ms     | 143.86 µs | 10.486 µs |
-|          FN DSA 1024 |   9.0216 ms     | 278.71 µs | 20.793 µs |
+|      falcon-rust 512 |   171.58 ms     | 253.19 µs | 13.605 µs |
+|     falcon-rust 1024 |   984.22 ms     | 509.57 µs | 28.004 µs |
+|            C FFI 512 |   3.5610 ms     | 118.27 µs | 22.636 µs |
+|           C FFI 1024 |   10.725 ms     | 235.69 µs | 44.329 µs |
+|           FN DSA 512 |   1.7758 ms     | 133.08 µs | 8.1014 µs |
+|          FN DSA 1024 |   8.3540 ms     | 253.82 µs | 16.871 µs |
 
 
 ## Features
@@ -47,6 +55,7 @@ If you are after performance, you are probably better off with one of the implem
  - [x] signature verification
  - [x] derandomized algorithms
  - [x] (de)serialization
+ - [x] Montgomery representation
  - [ ] better algorithms (e.g. RNS)
  - [ ] uncompressed signature format
  - [ ] signed-message interface
@@ -62,7 +71,6 @@ If you are after performance, you are probably better off with one of the implem
  - [ ] test interoperability against the reference implementation
  - [ ] negative tests
  - [ ] profile, and fix bottlenecks
- - [ ] Montgomery representation for field elements
  - [ ] Residue number system (RNS) for big integer arithmetic
  - [ ] streaming (de)serialization
  - [ ] investigate secret-dependent time variability
