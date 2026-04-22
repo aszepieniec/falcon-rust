@@ -3156,17 +3156,6 @@ const FELT_BITREVERSED_POWERS_INVERSE_1024: [Felt; 1024] = [
     Felt::new(11260),
     Felt::new(10344),
 ];
-const FELT_NINV_1: Felt = Felt::new(1);
-const FELT_NINV_2: Felt = Felt::new(6145);
-const FELT_NINV_4: Felt = Felt::new(9217);
-const FELT_NINV_8: Felt = Felt::new(10753);
-const FELT_NINV_16: Felt = Felt::new(11521);
-const FELT_NINV_32: Felt = Felt::new(11905);
-const FELT_NINV_64: Felt = Felt::new(12097);
-const FELT_NINV_128: Felt = Felt::new(12193);
-const FELT_NINV_256: Felt = Felt::new(12241);
-const FELT_NINV_512: Felt = Felt::new(12265);
-const FELT_NINV_1024: Felt = Felt::new(12277);
 
 /// Inverse twiddle factors for the IFFT of length ≤ 1024, each pre-multiplied
 /// by 2⁻¹ mod Q.  Used by the self-normalizing ifft_inplace below.
