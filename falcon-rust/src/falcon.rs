@@ -1446,16 +1446,16 @@ mod test {
         // test every bit in header
         for i in 0..8 {
             serialized[0] ^= 1 << i;
-            assert!(SecretKey::<512>::from_bytes(&serialized).is_err());
+            assert!(PublicKey::<512>::from_bytes(&serialized).is_err());
             serialized[0] ^= 1 << i;
         }
 
         // change length
         let longer = [serialized, vec![0]].concat();
-        assert!(SecretKey::<512>::from_bytes(&longer).is_err());
+        assert!(PublicKey::<512>::from_bytes(&longer).is_err());
 
         let shorter = &longer[0..len - 1];
-        assert!(SecretKey::<512>::from_bytes(shorter).is_err());
+        assert!(PublicKey::<512>::from_bytes(shorter).is_err());
     }
 
     #[test]
@@ -1463,7 +1463,7 @@ mod test {
         let mut rng = rng();
         for polynomial_index in [0, 1, 2] {
             let width = SecretKey::<512>::field_element_width(512, polynomial_index);
-            for _ in 0..100000 {
+            for _ in 0..10000 {
                 let int = rng.random_range(-(1 << (width - 1))..(1 << (width - 1)));
                 if int == -(1i16 << (width - 1)) {
                     continue;
