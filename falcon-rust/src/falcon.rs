@@ -1,14 +1,15 @@
 use bit_vec::BitVec;
 use falcon_profiler::profiling;
 use itertools::Itertools;
-use num_complex::{Complex, Complex64};
+use num_complex::Complex;
 use rand::{rng, rngs::StdRng, Rng, RngCore, SeedableRng};
 
 use crate::{
     encoding::{compress, decompress},
     falcon_field::{Felt, Q},
     fast_fft::FastFft,
-    ffsampling::{ffldl, ffsampling, gram, normalize_tree, LdlTree},
+    ffsampling::{build_falcon_tree, ffsampling, LdlTree},
+    fixed_point::{FixedPoint64, FixedPoint128},
     math::ntru_gen,
     polynomial::{hash_to_point, Polynomial},
 };
@@ -16,8 +17,8 @@ use crate::{
 #[derive(Copy, Clone, Debug)]
 pub struct FalconParameters {
     pub(crate) n: usize,
-    pub(crate) sigma: f64,
-    pub(crate) sigmin: f64,
+    pub(crate) sigma: FixedPoint64,
+    pub(crate) sigmin: FixedPoint64,
     pub(crate) sig_bound: i64,
     pub(crate) sig_bytelen: usize,
 }
@@ -35,19 +36,19 @@ impl FalconVariant {
             _ => unreachable!(),
         }
     }
-    pub(crate) const fn parameters(&self) -> FalconParameters {
+    pub(crate) fn parameters(&self) -> FalconParameters {
         match self {
             FalconVariant::Falcon512 => FalconParameters {
                 n: 512,
-                sigma: 165.7366171829776,
-                sigmin: 1.2778336969128337,
+                sigma: FixedPoint64::from(165.7366171829776f64),
+                sigmin: FixedPoint64::from(1.2778336969128337f64),
                 sig_bound: 34034726,
                 sig_bytelen: 666,
             },
             FalconVariant::Falcon1024 => FalconParameters {
                 n: 1024,
-                sigma: 168.38857144654395,
-                sigmin: 1.298280334344292,
+                sigma: FixedPoint64::from(168.38857144654395f64),
+                sigmin: FixedPoint64::from(1.298280334344292f64),
                 sig_bound: 70265242,
                 sig_bytelen: 1280,
             },
@@ -103,13 +104,10 @@ impl<const N: usize> SecretKey<N> {
     pub(crate) fn from_b0(b0: [Polynomial<i16>; 4]) -> Self {
         let b0_fft = b0
             .clone()
-            .map(|c| c.map(|cc| Complex64::new(*cc as f64, 0.0)).fft());
+            .map(|c| c.map(|cc| Complex::new(FixedPoint128::from(*cc as i64), FixedPoint128::ZERO)).fft());
 
-        let g0_fft = gram(b0_fft);
-        let mut tree = ffldl(g0_fft);
-        let sigma = FalconVariant::from_n(N).parameters().sigma;
-
-        normalize_tree(&mut tree, sigma);
+        let sigma = FixedPoint128::from(f64::from(FalconVariant::from_n(N).parameters().sigma));
+        let tree = build_falcon_tree(b0_fft, sigma);
 
         SecretKey { b0, tree }
     }
@@ -471,16 +469,16 @@ pub fn sign<const N: usize>(m: &[u8], sk: &SecretKey<N>) -> Signature<N> {
     let r_cat_m = [r.to_vec(), m.to_vec()].concat();
 
     let c = hash_to_point(&r_cat_m, n);
-    let one_over_q = 1.0 / (Q as f64);
+    let one_over_q = FixedPoint64::ONE / FixedPoint64::from(Q as i32);
     let c_over_q_fft = c
-        .map(|cc| Complex::new(one_over_q * cc.value() as f64, 0.0))
+        .map(|cc| Complex::new(one_over_q * FixedPoint64::from(cc.value() as i32), FixedPoint64::ZERO))
         .fft();
 
     // B = [[FFT(g), -FFT(f)], [FFT(G), -FFT(F)]]
-    let capital_f_fft = sk.b0[3].map(|&i| Complex64::new(-i as f64, 0.0)).fft();
-    let f_fft = sk.b0[1].map(|&i| Complex64::new(-i as f64, 0.0)).fft();
-    let capital_g_fft = sk.b0[2].map(|&i| Complex64::new(i as f64, 0.0)).fft();
-    let g_fft = sk.b0[0].map(|&i| Complex64::new(i as f64, 0.0)).fft();
+    let capital_f_fft = sk.b0[3].map(|&i| Complex::new(FixedPoint64::from(-i as i32), FixedPoint64::ZERO)).fft();
+    let f_fft = sk.b0[1].map(|&i| Complex::new(FixedPoint64::from(-i as i32), FixedPoint64::ZERO)).fft();
+    let capital_g_fft = sk.b0[2].map(|&i| Complex::new(FixedPoint64::from(i as i32), FixedPoint64::ZERO)).fft();
+    let g_fft = sk.b0[0].map(|&i| Complex::new(FixedPoint64::from(i as i32), FixedPoint64::ZERO)).fft();
     let t0 = c_over_q_fft.hadamard_mul(&capital_f_fft);
     let t1 = -c_over_q_fft.hadamard_mul(&f_fft);
 
@@ -496,19 +494,19 @@ pub fn sign<const N: usize>(m: &[u8], sk: &SecretKey<N>) -> Signature<N> {
             let s0 = t0_min_z0.hadamard_mul(&g_fft) + t1_min_z1.hadamard_mul(&capital_g_fft);
             let s1 = t0_min_z0.hadamard_mul(&f_fft) + t1_min_z1.hadamard_mul(&capital_f_fft);
 
-            // compute the norm of (s0||s1) and note that they are in FFT representation
-            let length_squared: f64 = (s0
-                .coefficients
-                .iter()
-                .map(|a| (a * a.conj()).re)
-                .sum::<f64>()
-                + s1.coefficients
-                    .iter()
-                    .map(|a| (a * a.conj()).re)
-                    .sum::<f64>())
-                / (n as f64);
+            // Compute squared norm via i128: |s_k|^2 can be ~2^54, too large for FixedPoint64.
+            // norm_sum holds sum_k(|s0_k|^2 + |s1_k|^2) in raw Q31.32 bits (× 2^32).
+            // Reject if sum / n > bound  ⟺  norm_sum > n × bound × 2^32.
+            let sq = |a: &Complex<FixedPoint64>| -> i128 {
+                let re = a.re.0 as i128;
+                let im = a.im.0 as i128;
+                (re * re + im * im) >> 32
+            };
+            let norm_sum: i128 = s0.coefficients.iter().map(sq).sum::<i128>()
+                + s1.coefficients.iter().map(sq).sum::<i128>();
+            let bound_raw = (n as i128) * (bound as i128) * (1i128 << 32);
 
-            if length_squared > (bound as f64) {
+            if norm_sum > bound_raw {
                 continue;
             }
 
@@ -518,7 +516,7 @@ pub fn sign<const N: usize>(m: &[u8], sk: &SecretKey<N>) -> Signature<N> {
         let maybe_s = compress(
             &s2.coefficients
                 .iter()
-                .map(|a| a.re.round() as i16)
+                .map(|a| a.re.round().trunc() as i16)
                 .collect_vec(),
             params.sig_bytelen - 41,
         );

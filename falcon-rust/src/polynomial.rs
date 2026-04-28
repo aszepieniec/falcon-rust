@@ -9,6 +9,7 @@ use std::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 use itertools::Itertools;
 
 use crate::falcon_field::Felt;
+use crate::fixed_point::FixedPoint64;
 use crate::inverse::Inverse;
 
 /// Marked pub for benchmarking; not considered part of the public API.
@@ -347,24 +348,20 @@ impl<
     }
 }
 
-impl<F: Clone + Into<f64>> Polynomial<F> {
+#[allow(private_bounds)]
+impl<F: Clone + Into<FixedPoint64>> Polynomial<F> {
     #[allow(dead_code)]
     #[profiling]
-    pub(crate) fn l2_norm(&self) -> f64 {
-        self.coefficients
-            .iter()
-            .map(|i| Into::<f64>::into(i.clone()))
-            .map(|i| i * i)
-            .sum::<f64>()
-            .sqrt()
+    pub(crate) fn l2_norm(&self) -> FixedPoint64 {
+        self.l2_norm_squared().sqrt()
     }
     #[profiling]
-    pub(crate) fn l2_norm_squared(&self) -> f64 {
+    pub(crate) fn l2_norm_squared(&self) -> FixedPoint64 {
         self.coefficients
             .iter()
-            .map(|i| Into::<f64>::into(i.clone()))
+            .map(|i| Into::<FixedPoint64>::into(i.clone()))
             .map(|i| i * i)
-            .sum::<f64>()
+            .sum::<FixedPoint64>()
     }
 }
 
@@ -756,6 +753,6 @@ mod test {
         let schoolbook = lhs.clone() * rhs.clone();
         let karatsuba = lhs.karatsuba(&rhs);
         let difference = schoolbook - karatsuba;
-        assert!(difference.l2_norm() < f64::EPSILON * 100.0);
+        assert!(f64::from(difference.l2_norm()) < f64::EPSILON * 100.0);
     }
 }

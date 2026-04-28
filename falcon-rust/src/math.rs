@@ -10,6 +10,7 @@ use crate::{
     cyclotomic_fourier::CyclotomicFourier,
     falcon_field::{Felt, Q},
     fast_fft::FastFft,
+    fixed_point::FixedPoint64,
     inverse::Inverse,
     polynomial::Polynomial,
     samplerz::sampler_z,
@@ -158,10 +159,10 @@ pub fn babai_reduce_i32(
 
     let shift = (size as i64) - 53;
     let f_adjusted = f
-        .map(|i| Complex64::new(i64::from(i >> shift) as f64, 0.0))
+        .map(|i| Complex64::new(i64::from(*i >> shift) as f64, 0.0))
         .fft();
     let g_adjusted = g
-        .map(|i| Complex64::new(i64::from(i >> shift) as f64, 0.0))
+        .map(|i| Complex64::new(i64::from(*i >> shift) as f64, 0.0))
         .fft();
 
     let f_star_adjusted = f_adjusted.map(|c| c.conj());
@@ -192,10 +193,10 @@ pub fn babai_reduce_i32(
         }
         let capital_shift = (capital_size as i64) - 53;
         let capital_f_adjusted = capital_f
-            .map(|bi| Complex64::new(i64::from(bi >> capital_shift) as f64, 0.0))
+            .map(|bi| Complex64::new(i64::from(*bi >> capital_shift) as f64, 0.0))
             .fft();
         let capital_g_adjusted = capital_g
-            .map(|bi| Complex64::new(i64::from(bi >> capital_shift) as f64, 0.0))
+            .map(|bi| Complex64::new(i64::from(*bi >> capital_shift) as f64, 0.0))
             .fft();
 
         let numerator = capital_f_adjusted.hadamard_mul(&f_star_adjusted)
@@ -444,12 +445,12 @@ pub fn ntru_gen(
 // fn gen_poly(n: usize, rng: &mut dyn RngCore) -> Polynomial<i16> {
 #[profiling]
 fn gen_poly(n: usize, rng: &mut dyn RngCore) -> Polynomial<i16> {
-    let mu = 0.0;
-    let sigma_star = 1.43300980528773;
+    let mu = FixedPoint64::ZERO;
+    let sigma_star = FixedPoint64::from(1.43300980528773f64);
     const NUM_COEFFICIENTS: usize = 4096;
     Polynomial {
         coefficients: (0..NUM_COEFFICIENTS)
-            .map(|_| sampler_z(mu, sigma_star, sigma_star - 0.001, rng))
+            .map(|_| sampler_z(mu, sigma_star, sigma_star - FixedPoint64::from(0.001f64), rng))
             .collect_vec()
             .chunks(NUM_COEFFICIENTS / n)
             .map(|ch| ch.iter().sum())
@@ -464,34 +465,36 @@ fn gen_poly(n: usize, rng: &mut dyn RngCore) -> Polynomial<i16> {
 #[profiling]
 fn gram_schmidt_norm_squared(f: &Polynomial<i16>, g: &Polynomial<i16>) -> f64 {
     let n = f.coefficients.len();
-    let norm_f_squared = f.l2_norm_squared();
-    let norm_g_squared = g.l2_norm_squared();
-    let gamma1 = norm_f_squared + norm_g_squared;
+    let gamma1 = f64::from(f.l2_norm_squared() + g.l2_norm_squared());
 
-    let f_fft = f.map(|i| Complex64::new(*i as f64, 0.0)).fft();
-    let g_fft = g.map(|i| Complex64::new(*i as f64, 0.0)).fft();
+    let fp = |i: &i16| Complex64::new(*i as f64, 0.0);
+    let q_fp = Q as f64;
+    let n_fp = n as f64;
+
+    let f_fft = f.map(fp).fft();
+    let g_fft = g.map(fp).fft();
     let f_adj_fft = f_fft.map(|c| c.conj());
     let g_adj_fft = g_fft.map(|c| c.conj());
     let ffgg_fft = f_fft.hadamard_mul(&f_adj_fft) + g_fft.hadamard_mul(&g_adj_fft);
     let ffgg_fft_inverse = ffgg_fft.hadamard_inv();
     let qf_over_ffgg_fft = f_adj_fft
-        .map(|c| c * (Q as f64))
+        .map(|c| c * q_fp)
         .hadamard_mul(&ffgg_fft_inverse);
     let qg_over_ffgg_fft = g_adj_fft
-        .map(|c| c * (Q as f64))
+        .map(|c| c * q_fp)
         .hadamard_mul(&ffgg_fft_inverse);
     let norm_f_over_ffgg_squared = qf_over_ffgg_fft
         .coefficients
         .iter()
         .map(|c| (c * c.conj()).re)
         .sum::<f64>()
-        / (n as f64);
+        / n_fp;
     let norm_g_over_ffgg_squared = qg_over_ffgg_fft
         .coefficients
         .iter()
         .map(|c| (c * c.conj()).re)
         .sum::<f64>()
-        / (n as f64);
+        / n_fp;
 
     let gamma2 = norm_f_over_ffgg_squared + norm_g_over_ffgg_squared;
 
@@ -617,11 +620,11 @@ mod test {
         let f = (0..n).map(|i| i % 5).collect_vec();
         let g = (0..n).map(|i| (i % 7) - 4).collect_vec();
         let norm_squared = gram_schmidt_norm_squared(&Polynomial::new(f), &Polynomial::new(g));
-        let difference = norm_squared - 5992556.183229722;
+        let expected = 5992556.183229722f64;
+        let difference = (norm_squared - expected).abs();
         assert!(
-            difference * difference < 0.00001,
-            "norm squared was {} =/= 5992556.183229722",
-            norm_squared,
+            difference < 1.0,
+            "norm squared was {norm_squared} =/= {expected} (expected)",
         );
     }
 

@@ -2,11 +2,15 @@ use std::ops::{Add, AddAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 
 use falcon_profiler::profiling;
 use itertools::Itertools;
+use lazy_static::lazy_static;
 use num::{One, Zero};
-use num_complex::Complex64;
+use num_complex::{Complex, Complex64};
 
 use crate::{
-    cyclotomic_fourier::CyclotomicFourier, falcon_field::Felt, polynomial::Polynomial,
+    cyclotomic_fourier::CyclotomicFourier,
+    falcon_field::Felt,
+    fixed_point::{FixedPoint64, FixedPoint128},
+    polynomial::Polynomial,
     u32_field::U32Field,
 };
 
@@ -1099,6 +1103,106 @@ impl FastFft for Polynomial<Complex64> {
             .map(|c| Complex64::new(c.re, -c.im))
             .collect_vec();
         let (a, b) = Self::Field::split_fft(&self.coefficients, psi_inv_rev);
+        (Self { coefficients: a }, Self { coefficients: b })
+    }
+}
+
+type ComplexFP = Complex<FixedPoint64>;
+
+lazy_static! {
+    static ref FP_BITREVERSED_POWERS_1024: Vec<ComplexFP> =
+        ComplexFP::bitreversed_powers(1024);
+}
+
+impl FastFft for Polynomial<ComplexFP> {
+    type Field = ComplexFP;
+
+    fn fft_inplace(&mut self) {
+        ComplexFP::fft(&mut self.coefficients, &FP_BITREVERSED_POWERS_1024);
+    }
+
+    fn ifft_inplace(&mut self) {
+        let n = self.coefficients.len();
+        let psi_inv_rev = FP_BITREVERSED_POWERS_1024
+            .iter()
+            .take(n)
+            .map(|c| Complex::new(c.re, -c.im))
+            .collect_vec();
+        let ninv = Complex::new(
+            FixedPoint64::ONE / FixedPoint64::from(n as i32),
+            FixedPoint64::ZERO,
+        );
+        ComplexFP::ifft(&mut self.coefficients, &psi_inv_rev, ninv);
+    }
+
+    fn merge_fft(a: &Self, b: &Self) -> Self {
+        Self {
+            coefficients: ComplexFP::merge_fft(
+                &a.coefficients,
+                &b.coefficients,
+                &FP_BITREVERSED_POWERS_1024,
+            ),
+        }
+    }
+
+    fn split_fft(&self) -> (Self, Self) {
+        let n = self.coefficients.len();
+        let psi_inv_rev = FP_BITREVERSED_POWERS_1024
+            .iter()
+            .take(n)
+            .map(|c| Complex::new(c.re, -c.im))
+            .collect_vec();
+        let (a, b) = ComplexFP::split_fft(&self.coefficients, &psi_inv_rev);
+        (Self { coefficients: a }, Self { coefficients: b })
+    }
+}
+
+type ComplexFixed128 = Complex<FixedPoint128>;
+
+lazy_static! {
+    static ref FIXED128_BITREVERSED_POWERS_1024: Vec<ComplexFixed128> =
+        ComplexFixed128::bitreversed_powers(1024);
+}
+
+impl FastFft for Polynomial<ComplexFixed128> {
+    type Field = ComplexFixed128;
+
+    fn fft_inplace(&mut self) {
+        ComplexFixed128::fft(&mut self.coefficients, &FIXED128_BITREVERSED_POWERS_1024);
+    }
+
+    fn ifft_inplace(&mut self) {
+        let n = self.coefficients.len();
+        let psi_inv_rev = FIXED128_BITREVERSED_POWERS_1024
+            .iter()
+            .take(n)
+            .map(|c| Complex::new(c.re, -c.im))
+            .collect_vec();
+        let ninv = Complex::new(
+            FixedPoint128::ONE / FixedPoint128::from(n as i64),
+            FixedPoint128::ZERO,
+        );
+        ComplexFixed128::ifft(&mut self.coefficients, &psi_inv_rev, ninv);
+    }
+
+    fn merge_fft(a: &Self, b: &Self) -> Self {
+        Self {
+            coefficients: ComplexFixed128::merge_fft(
+                &a.coefficients,
+                &b.coefficients,
+                &FIXED128_BITREVERSED_POWERS_1024,
+            ),
+        }
+    }
+
+    fn split_fft(&self) -> (Self, Self) {
+        let n = self.coefficients.len();
+        let psi_inv_rev = FIXED128_BITREVERSED_POWERS_1024
+            .iter()
+            .take(n)
+            .map(|c| Complex::new(c.re, -c.im))
+            .collect_vec();
+        let (a, b) = ComplexFixed128::split_fft(&self.coefficients, &psi_inv_rev);
         (Self { coefficients: a }, Self { coefficients: b })
     }
 }

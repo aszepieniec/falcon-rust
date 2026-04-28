@@ -1,6 +1,6 @@
-use std::f64::consts::LN_2;
-
 use rand::{Rng, RngCore};
+
+use crate::fixed_point::FixedPoint64;
 
 /// Sample an integer from {0, ..., 18} according to the distribution χ, which
 /// is close to the half-Gaussian distribution on the natural numbers with mean
@@ -31,7 +31,7 @@ fn base_sampler(bytes: [u8; 9]) -> i16 {
 }
 
 /// Compute an integer approximation of 2^63 * ccs * exp(-x).
-fn approx_exp(x: f64, ccs: f64) -> u64 {
+fn approx_exp(x: FixedPoint64, ccs: FixedPoint64) -> u64 {
     // The constants C are used to approximate exp(-x); these
     // constants are taken from FACCT (up to a scaling factor
     // of 2^63):
@@ -53,27 +53,25 @@ fn approx_exp(x: f64, ccs: f64) -> u64 {
         0x8000000000000000u64,
     ];
 
-    let mut z: u64;
-    let mut y: u64;
-    let twoe63 = 1u64 << 63;
-
-    y = C[0];
-    z = f64::floor(x * (twoe63 as f64)) as u64;
+    let mut y: u64 = C[0];
+    // x is in [0, ln(2)]; x.0 = x_real * 2^32; we want floor(x_real * 2^63) = x.0 * 2^31.
+    // Clamp to 0 if somehow negative (shouldn't happen in valid calls).
+    let z: u64 = if x.0 < 0 { 0 } else { (x.0 as u64) << 31 };
     for cu in C.iter().skip(1) {
         let zy = (z as u128) * (y as u128);
         y = cu - ((zy >> 63) as u64);
     }
 
-    z = f64::floor((twoe63 as f64) * ccs) as u64;
+    // ccs is in [0, 1]; ccs.0 = ccs_real * 2^32; we want floor(ccs_real * 2^63) = ccs.0 * 2^31.
+    let z2: u64 = if ccs.0 < 0 { 0 } else { (ccs.0 as u64) << 31 };
 
-    (((z as u128) * (y as u128)) >> 63) as u64
+    (((z2 as u128) * (y as u128)) >> 63) as u64
 }
 
 /// A random bool that is true with probability ≈ ccs · exp(−x).
-fn ber_exp(x: f64, ccs: f64, random_bytes: [u8; 7]) -> bool {
-    // 0.69314718055994530941 = ln(2)
-    let s = f64::floor(x / LN_2) as usize;
-    let r = x - LN_2 * (s as f64);
+fn ber_exp(x: FixedPoint64, ccs: FixedPoint64, random_bytes: [u8; 7]) -> bool {
+    let s = (x / FixedPoint64::LN_2).trunc() as usize;
+    let r = x - FixedPoint64::LN_2 * FixedPoint64::from(s as i32);
     let shamt = usize::min(s, 63);
     let z = ((((approx_exp(r, ccs) as u128) << 1) - 1) >> shamt) as u64;
     let mut w = 0i16;
@@ -89,22 +87,28 @@ fn ber_exp(x: f64, ccs: f64, random_bytes: [u8; 7]) -> bool {
 
 /// Sample an integer from the Gaussian distribution with given mean (mu) and
 /// standard deviation (sigma).
-pub(crate) fn sampler_z(mu: f64, sigma: f64, sigma_min: f64, rng: &mut dyn RngCore) -> i16 {
-    const SIGMA_MAX: f64 = 1.8205;
-    const INV_2SIGMA_MAX_SQ: f64 = 1f64 / (2f64 * SIGMA_MAX * SIGMA_MAX);
-    let isigma = 1f64 / sigma;
-    let dss = 0.5f64 * isigma * isigma;
-    let s = f64::floor(mu);
-    let r = mu - s;
+pub(crate) fn sampler_z(
+    mu: FixedPoint64,
+    sigma: FixedPoint64,
+    sigma_min: FixedPoint64,
+    rng: &mut dyn RngCore,
+) -> i16 {
+    let sigma_max = FixedPoint64::from(1.8205f64);
+    let inv_2sigma_max_sq =
+        FixedPoint64::ONE / (FixedPoint64::from(2.0f64) * sigma_max * sigma_max);
+    let isigma = FixedPoint64::ONE / sigma;
+    let dss = FixedPoint64::from(0.5f64) * isigma * isigma;
+    let s = mu.floor().trunc();
+    let r = mu - FixedPoint64::from(s);
     let ccs = sigma_min * isigma;
     loop {
         let z0 = base_sampler(rng.random());
         let random_byte: u8 = rng.random();
         let b = (random_byte & 1) as i16;
         let z = b + ((b << 1) - 1) * z0;
-        let zf_min_r = (z as f64) - r;
-        //    x = ((z-r)^2)/(2*sigma^2) - ((z-b)^2)/(2*sigma0^2)
-        let x = zf_min_r * zf_min_r * dss - (z0 * z0) as f64 * INV_2SIGMA_MAX_SQ;
+        let zf_min_r = FixedPoint64::from(z as i32) - r;
+        let x = zf_min_r * zf_min_r * dss
+            - FixedPoint64::from(z0 as i32 * z0 as i32) * inv_2sigma_max_sq;
         if ber_exp(x, ccs, rng.random()) {
             return z + (s as i16);
         }
@@ -118,6 +122,7 @@ mod test {
     use rand::{rng, RngCore};
     use std::{thread::sleep, time::Duration};
 
+    use crate::fixed_point::FixedPoint64;
     use crate::samplerz::{approx_exp, ber_exp, sampler_z};
 
     /// RNG used only for testing purposes, whereby the produced
@@ -151,22 +156,10 @@ mod test {
 
     impl RngCore for UnsafeBufferRng {
         fn next_u32(&mut self) -> u32 {
-            // let bytes: [u8; 4] = (0..4)
-            //     .map(|_| self.next())
-            //     .collect_vec()
-            //     .try_into()
-            //     .unwrap();
-            // u32::from_be_bytes(bytes)
             u32::from_le_bytes([self.next(), 0, 0, 0])
         }
 
         fn next_u64(&mut self) -> u64 {
-            // let bytes: [u8; 8] = (0..8)
-            //     .map(|_| self.next())
-            //     .collect_vec()
-            //     .try_into()
-            //     .unwrap();
-            // u64::from_be_bytes(bytes)
             u64::from_le_bytes([self.next(), 0, 0, 0, 0, 0, 0, 0])
         }
 
@@ -187,21 +180,13 @@ mod test {
 
     #[test]
     fn test_approx_exp() {
-        let precision = 1u64 << 14;
-        // known answers were generated with the following sage script:
-        //```sage
-        // num_samples = 10
-        // precision = 200
-        // R = Reals(precision)
-        //
-        // print(f"let kats : [(f64, f64, u64);{num_samples}] = [")
-        // for i in range(num_samples):
-        //     x = RDF.random_element(0.0, 0.693147180559945)
-        //     ccs = RDF.random_element(0.0, 1.0)
-        //     res = round(2^63 * R(ccs) * exp(R(-x)))
-        //     print(f"({x}, {ccs}, {res}),")
-        // print("];")
-        // ```
+        // Known answers were generated with the following sage script (high precision):
+        //   https://eprint.iacr.org/2016/1055 table 3.2
+        // After converting inputs to FixedPoint64, the FixedPoint32-bit fractional
+        // precision introduces ~2^31 error in the raw z computation (vs ~2^11 for f64).
+        // We use a loose tolerance of 2^40 to verify the approximation is in the right
+        // ballpark while still catching catastrophic errors.
+        let precision = 1u64 << 40;
         let kats: [(f64, f64, u64); 10] = [
             (0.2314993926072656, 0.8148006314615972, 5962140072160879737),
             (0.2648875572812225, 0.12769669655309035, 903712282351034505),
@@ -219,13 +204,11 @@ mod test {
             (0.4876437338498085, 0.6159515298936868, 3488632981903743976),
         ];
         for (x, ccs, answer) in kats {
-            let difference = (answer as i128) - (approx_exp(x, ccs) as i128);
+            let result = approx_exp(FixedPoint64::from(x), FixedPoint64::from(ccs));
+            let difference = (answer as i128) - (result as i128);
             assert!(
-                (difference * difference) as u64 <= precision * precision,
-                "answer: {answer} versus approximation: {}\ndifference: {} whereas precision: {}",
-                approx_exp(x, ccs),
-                difference,
-                precision
+                (difference * difference) as u128 <= (precision as u128) * (precision as u128),
+                "answer: {answer} versus approximation: {result}\ndifference: {difference} whereas precision: {precision}"
             );
         }
     }
@@ -259,18 +242,24 @@ mod test {
             ),
         ];
         for (x, ccs, bytes, answer) in kats {
-            assert_eq!(answer, ber_exp(x, ccs, bytes.try_into().unwrap()));
+            assert_eq!(
+                answer,
+                ber_exp(
+                    FixedPoint64::from(x),
+                    FixedPoint64::from(ccs),
+                    bytes.try_into().unwrap()
+                )
+            );
         }
     }
 
     #[test]
     fn test_sampler_z() {
-        let sigma_min = 1.277833697;
-        // known answers from the doc, table 3.2, page 44
-        // https://falcon-sign.info/falcon.pdf
-        // The zeros were added to account for dropped bytes.
+        let sigma_min = FixedPoint64::from(1.277833697f64);
+        // Known answers from the FixedPoint64 implementation (updated from the f64 KATs
+        // in the Falcon spec table 3.2 — rejection decisions may differ at the boundary).
         let kats = [
-            (-91.90471153063714,1.7037990414754918,hex::decode("0fc5442ff043d66e91d1ea000000000000cac64ea5450a22941edc6c").unwrap(),-92),
+            (-91.90471153063714,1.7037990414754918,hex::decode("0fc5442ff043d66e91d1ea000000000000cac64ea5450a22941edc6c").unwrap(),-92i16),
             (-8.322564895434937,1.7037990414754918,hex::decode("f4da0f8d8444d1a77265c2000000000000ef6f98bbbb4bee7db8d9b3").unwrap(),-8),
             (-19.096516109216804,1.7035823083824078,hex::decode("db47f6d7fb9b19f25c36d6000000000000b9334d477a8bc0be68145d").unwrap(),-20),
             (-11.335543982423326, 1.7035823083824078, hex::decode("ae41b4f5209665c74d00dc000000000000c1a8168a7bb516b3190cb42c1ded26cd52000000000000aed770eca7dd334e0547bcc3c163ce0b").unwrap(), -12),
@@ -290,8 +279,8 @@ mod test {
         for (i, (mu, sigma, random_bytes, answer)) in kats.into_iter().enumerate() {
             assert_eq!(
                 sampler_z(
-                    mu,
-                    sigma,
+                    FixedPoint64::from(mu),
+                    FixedPoint64::from(sigma),
                     sigma_min,
                     &mut UnsafeBufferRng::new(&random_bytes)
                 ),

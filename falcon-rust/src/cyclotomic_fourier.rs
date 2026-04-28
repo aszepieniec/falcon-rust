@@ -4,8 +4,9 @@ use std::{
 };
 
 use num::{One, Zero};
-use num_complex::Complex64;
+use num_complex::{Complex, Complex64};
 
+use crate::fixed_point::{FixedInt, FixedPoint};
 use crate::inverse::Inverse;
 
 pub(crate) trait CyclotomicFourier
@@ -219,6 +220,44 @@ impl CyclotomicFourier for Complex64 {
         for (i, a) in array.iter_mut().enumerate() {
             let angle = (i as f64) * half_circle / (n as f64);
             *a = Self::new(f64::cos(angle), -f64::sin(angle));
+        }
+        Self::bitreverse_array(&mut array);
+        array
+    }
+}
+
+impl<T: FixedInt> CyclotomicFourier for Complex<FixedPoint<T>>
+where
+    Complex<FixedPoint<T>>: Copy + One + Zero + Add<Output = Self> + Sub<Output = Self> + Mul<Output = Self> + MulAssign + Inverse,
+{
+    fn primitive_root_of_unity(n: usize) -> Self {
+        let c = Complex64::primitive_root_of_unity(n);
+        Complex::new(FixedPoint::from(c.re), FixedPoint::from(c.im))
+    }
+
+    fn bitreversed_powers(n: usize) -> Vec<Self> {
+        let mut array = vec![Self::zero(); n];
+        let half_circle = PI;
+        for (i, a) in array.iter_mut().enumerate() {
+            let angle = (i as f64) * half_circle / (n as f64);
+            *a = Self::new(
+                FixedPoint::from(f64::cos(angle)),
+                FixedPoint::from(f64::sin(angle)),
+            );
+        }
+        Self::bitreverse_array(&mut array);
+        array
+    }
+
+    fn bitreversed_powers_inverse(n: usize) -> Vec<Self> {
+        let mut array = vec![Self::zero(); n];
+        let half_circle = PI;
+        for (i, a) in array.iter_mut().enumerate() {
+            let angle = (i as f64) * half_circle / (n as f64);
+            *a = Self::new(
+                FixedPoint::from(f64::cos(angle)),
+                FixedPoint::from(-f64::sin(angle)),
+            );
         }
         Self::bitreverse_array(&mut array);
         array
