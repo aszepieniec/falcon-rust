@@ -57,8 +57,9 @@
 
 pub(crate) mod cyclotomic_fourier;
 pub(crate) mod encoding;
-pub(crate) mod fixed_point;
 pub(crate) mod falcon;
+pub(crate) mod fixed_point;
+pub(crate) mod fp_field;
 pub mod falcon1024;
 pub mod falcon512;
 pub mod falcon_field;
