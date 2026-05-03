@@ -31,6 +31,40 @@ const fn r_sq_modq(q: u32) -> u32 {
     (r_sq % q as u128) as u32
 }
 
+/// Return the distinct prime factors of n by trial division.
+///
+/// A 32-bit integer has at most 9 distinct prime factors
+/// (2·3·5·7·11·13·17·19·23 < 2^32 < 2·3·5·7·11·13·17·19·23·29),
+/// so the result fits in a fixed-size array of 9 elements.
+#[allow(dead_code)]
+const fn prime_factors_const(mut n: u32) -> ([u32; 9], usize) {
+    let mut factors = [0u32; 9];
+    let mut count = 0usize;
+    if n % 2 == 0 {
+        factors[count] = 2;
+        count += 1;
+        while n % 2 == 0 {
+            n /= 2;
+        }
+    }
+    let mut d = 3u32;
+    while d * d <= n {
+        if n % d == 0 {
+            factors[count] = d;
+            count += 1;
+            while n % d == 0 {
+                n /= d;
+            }
+        }
+        d += 2;
+    }
+    if n > 1 {
+        factors[count] = n;
+        count += 1;
+    }
+    (factors, count)
+}
+
 /// A field element of Z/QZ stored in Montgomery form.
 ///
 /// Q must be an odd prime.  The Montgomery base is R = 2^LOG2R where
@@ -77,6 +111,60 @@ impl<const Q: u32> FpField<Q> {
         let x = self.0 as u64;
         let r = (x + ((x & 1).wrapping_neg() & Q as u64)) >> 1;
         FpField(r as u32)
+    }
+
+    /// Right-to-left binary exponentiation.
+    #[allow(dead_code)]
+    pub const fn pow(self, mut exp: u64) -> Self {
+        let mut result = Self::new(1);
+        let mut base = self;
+        while exp > 0 {
+            if exp & 1 == 1 {
+                result = result.multiply(base);
+            }
+            base = base.multiply(base);
+            exp >>= 1;
+        }
+        result
+    }
+
+    /// Field addition without going through the `Add` trait (which is not const).
+    const fn add_fp(self, rhs: Self) -> Self {
+        let s = self.0 as u64 + rhs.0 as u64;
+        FpField(if s >= Q as u64 { (s - Q as u64) as u32 } else { s as u32 })
+    }
+
+    /// Return a primitive nth root of unity in Z/QZ.
+    ///
+    /// Finds the smallest primitive root g of the multiplicative group by
+    /// testing candidates a = 2, 3, … until a^((Q-1)/p) ≠ 1 for every
+    /// prime factor p of Q-1, then returns g^((Q-1)/n).
+    ///
+    /// Requires that n divides Q-1.
+    #[allow(dead_code)]
+    pub const fn primitive_nth_root_of_unity(n: u32) -> Self {
+        let order = (Q - 1) as u64;
+        let (factors, num_factors) = prime_factors_const(Q - 1);
+        let one = Self::new(1);
+
+        let mut a = Self::new(2);
+        loop {
+            let mut is_generator = true;
+            let mut i = 0;
+            while i < num_factors {
+                if a.pow(order / factors[i] as u64).0 == one.0 {
+                    is_generator = false;
+                    break;
+                }
+                i += 1;
+            }
+            if is_generator {
+                break;
+            }
+            a = a.add_fp(one);
+        }
+
+        a.pow(order / n as u64)
     }
 
     /// Montgomery multiplication: given a, b in [0, Q),
@@ -418,5 +506,31 @@ mod test {
         test_half_for::<12289>();
         test_half_for::<1073754113>();
         test_half_for::<4294967291>();
+    }
+
+    fn test_primitive_nth_root_for<const Q: u32>(n: u32) {
+        let g = FpField::<Q>::primitive_nth_root_of_unity(n);
+        // g^n == 1
+        assert_eq!(g.pow(n as u64), FpField::<Q>::new(1), "Q={Q}, n={n}");
+        // g^k != 1 for every proper divisor k of n
+        let mut k = 1u32;
+        while k < n {
+            if n % k == 0 {
+                assert_ne!(g.pow(k as u64), FpField::<Q>::new(1), "Q={Q}, n={n}, k={k}");
+            }
+            k += 1;
+        }
+    }
+
+    #[test]
+    fn test_primitive_nth_root_of_unity() {
+        // Q-1 = 12288 = 2^12 * 3, so n can be any divisor of 12288
+        test_primitive_nth_root_for::<12289>(2);
+        test_primitive_nth_root_for::<12289>(4);
+        test_primitive_nth_root_for::<12289>(1024);
+        test_primitive_nth_root_for::<12289>(2048);
+        // Q-1 = 1073754112 = 2^10 * (Q-1)/2^10
+        test_primitive_nth_root_for::<1073754113>(2);
+        test_primitive_nth_root_for::<1073754113>(1024);
     }
 }
