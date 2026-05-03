@@ -65,12 +65,11 @@ pub mod falcon512;
 pub mod falcon_field;
 pub(crate) mod fast_fft;
 pub(crate) mod ffsampling;
-pub(crate) mod fixed_point;
 pub(crate) mod inverse;
 pub mod math; // pub for benching
 pub mod polynomial; // pub for benching
 pub(crate) mod samplerz;
-pub(crate) mod u32_field;
+pub(crate) type U32Field = fp_field::FpField<1073754113>;
 
 #[cfg(feature = "profiling")]
 pub mod profiling;
