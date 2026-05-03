@@ -14,7 +14,7 @@ use crate::{
     inverse::Inverse,
     polynomial::Polynomial,
     samplerz::sampler_z,
-    u32_field::U32Field,
+    U32Field,
 };
 
 /// Reduce the vector (F,G) relative to (f,g). This method follows the python
@@ -137,8 +137,8 @@ pub fn babai_reduce_i32(
     capital_f: &mut Polynomial<i32>,
     capital_g: &mut Polynomial<i32>,
 ) -> Result<(), String> {
-    let f_ntt: Polynomial<U32Field> = f.map(|&i| U32Field::new(i)).fft();
-    let g_ntt: Polynomial<U32Field> = g.map(|&i| U32Field::new(i)).fft();
+    let f_ntt: Polynomial<U32Field> = f.map(|&i| U32Field::from(i)).fft();
+    let g_ntt: Polynomial<U32Field> = g.map(|&i| U32Field::from(i)).fft();
 
     let bitsize = |itr: IntoIter<i32>| {
         (itr.map(|i| i.abs()).max().unwrap() * 2)
@@ -203,7 +203,7 @@ pub fn babai_reduce_i32(
             + capital_g_adjusted.hadamard_mul(&g_star_adjusted);
         let quotient = numerator.hadamard_div(&denominator_fft).ifft();
 
-        let k_ntt = quotient.map(|f| U32Field::new(f.re.round() as i32)).fft();
+        let k_ntt = quotient.map(|f| U32Field::from(f.re.round() as i32)).fft();
 
         if k_ntt.is_zero() {
             break;
@@ -212,8 +212,8 @@ pub fn babai_reduce_i32(
         let kf_ntt = k_ntt.hadamard_mul(&f_ntt).ifft();
         let kg_ntt = k_ntt.hadamard_mul(&g_ntt).ifft();
 
-        let kf = kf_ntt.map(|p| p.balanced_value());
-        let kg = kg_ntt.map(|p| p.balanced_value());
+        let kf = kf_ntt.map(|p| p.balanced_value() as i32);
+        let kg = kg_ntt.map(|p| p.balanced_value() as i32);
 
         *capital_f -= kf;
         *capital_g -= kg;
@@ -361,11 +361,11 @@ fn ntru_solve_entrypoint(
 
     let psi_rev = U32Field::bitreversed_powers(n);
     let psi_rev_inv = U32Field::bitreversed_powers_inverse(n);
-    let ninv = U32Field::new(n as i32).inverse_or_zero();
-    let mut cfp_ntt = capital_f_prime_xsq.map(|c| U32Field::new(*c));
-    let mut cgp_ntt = capital_g_prime_xsq.map(|c| U32Field::new(*c));
-    let mut gm_ntt = g_minx.map(|c| U32Field::new(*c));
-    let mut fm_ntt = f_minx.map(|c| U32Field::new(*c));
+    let ninv = U32Field::new(n as u32).inverse_or_zero();
+    let mut cfp_ntt = capital_f_prime_xsq.map(|c| U32Field::from(*c));
+    let mut cgp_ntt = capital_g_prime_xsq.map(|c| U32Field::from(*c));
+    let mut gm_ntt = g_minx.map(|c| U32Field::from(*c));
+    let mut fm_ntt = f_minx.map(|c| U32Field::from(*c));
     U32Field::fft(&mut cfp_ntt.coefficients, &psi_rev);
     U32Field::fft(&mut cgp_ntt.coefficients, &psi_rev);
     U32Field::fft(&mut gm_ntt.coefficients, &psi_rev);
@@ -375,8 +375,8 @@ fn ntru_solve_entrypoint(
     U32Field::ifft(&mut cf_ntt.coefficients, &psi_rev_inv, ninv);
     U32Field::ifft(&mut cg_ntt.coefficients, &psi_rev_inv, ninv);
 
-    let mut capital_f = cf_ntt.map(|c| c.balanced_value());
-    let mut capital_g = cg_ntt.map(|c| c.balanced_value());
+    let mut capital_f = cf_ntt.map(|c| c.balanced_value() as i32);
+    let mut capital_g = cg_ntt.map(|c| c.balanced_value() as i32);
 
     match babai_reduce_i32(&f, &g, &mut capital_f, &mut capital_g) {
         Ok(_) => Some((capital_f, capital_g)),
