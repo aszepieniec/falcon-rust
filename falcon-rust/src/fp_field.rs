@@ -4,6 +4,7 @@ use std::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
 use num::{One, Zero};
 use rand::distr::{Distribution, StandardUniform};
 
+use crate::cyclotomic_fourier::CyclotomicFourier;
 use crate::inverse::Inverse;
 
 /// Compute -q^{-1} mod R where R = 2^(q.ilog2()+1).
@@ -232,6 +233,19 @@ impl<const Q: u32> Div for FpField<Q> {
         } else {
             self.multiply(rhs.inverse_or_zero())
         }
+    }
+}
+
+impl CyclotomicFourier for FpField<1073754113> {
+    fn primitive_root_of_unity(n: usize) -> Self {
+        let log2n = n.ilog2();
+        assert!(log2n <= 12);
+        // 48440 is a primitive 12th root of unity mod 1073754113
+        let mut a = Self::new(48440);
+        for _ in 0..(12 - log2n) {
+            a *= a;
+        }
+        a
     }
 }
 
