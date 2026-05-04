@@ -11,7 +11,7 @@ use crate::inverse::Inverse;
 ///
 /// Uses five Hensel-lifting steps to get q^{-1} mod 2^32, then negates
 /// and masks down to mod R.  Panics at compile time if q is even.
-const fn negqinv_modr(q: u32) -> u32 {
+pub(crate) const fn negqinv_modr(q: u32) -> u32 {
     assert!(q & 1 == 1, "FpField requires an odd modulus");
     let mut x = 1u32; // q*x ≡ 1 (mod 2)
     x = x.wrapping_mul(2u32.wrapping_sub(q.wrapping_mul(x))); // mod 4
@@ -25,7 +25,7 @@ const fn negqinv_modr(q: u32) -> u32 {
 }
 
 /// Compute R² mod q where R = 2^(q.ilog2()+1).
-const fn r_sq_modq(q: u32) -> u32 {
+pub(crate) const fn r_sq_modq(q: u32) -> u32 {
     let log2r = q.ilog2() + 1;
     let r_sq = 1u128 << (2 * log2r);
     (r_sq % q as u128) as u32
@@ -63,6 +63,35 @@ const fn prime_factors_const(mut n: u32) -> ([u32; 9], usize) {
         count += 1;
     }
     (factors, count)
+}
+
+/// Montgomery reduction: given a, b in [0, p), compute a·b·R⁻¹ mod p
+/// where R = 2^LOG2R.
+///
+/// When LOG2R ≤ 31 the intermediate magic_sum fits in u64.  When LOG2R = 32
+/// it falls back to u128.  Because LOG2R is a const generic, the dead branch
+/// is eliminated by the compiler at each monomorphisation.
+pub(crate) const fn montyred<const LOG2R: u32>(
+    a: u32,
+    b: u32,
+    p: u32,
+    neg_inv: u32,
+) -> u32 {
+    let product = a as u64 * b as u64;
+    if LOG2R <= 31 {
+        let r_mask = (1u32 << LOG2R) - 1;
+        let tail = product as u32 & r_mask;
+        let cofactor = neg_inv.wrapping_mul(tail) & r_mask;
+        let magic_sum = product + cofactor as u64 * p as u64;
+        let g = magic_sum >> LOG2R;
+        (if g >= p as u64 { g - p as u64 } else { g }) as u32
+    } else {
+        // LOG2R == 32; magic_sum can reach ~2^65, use u128
+        let cofactor = neg_inv.wrapping_mul(product as u32);
+        let magic_sum = product as u128 + cofactor as u128 * p as u128;
+        let g = (magic_sum >> 32) as u64;
+        (if g >= p as u64 { g - p as u64 } else { g }) as u32
+    }
 }
 
 /// A field element of Z/QZ stored in Montgomery form.
