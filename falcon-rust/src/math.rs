@@ -6,6 +6,8 @@ use num::{BigInt, FromPrimitive, One, Zero};
 use num_complex::Complex64;
 use rand::RngCore;
 
+use num_complex::Complex;
+
 use crate::{
     cyclotomic_fourier::CyclotomicFourier,
     falcon_field::{Felt, Q},
@@ -13,6 +15,7 @@ use crate::{
     fixed_point::FixedPoint64,
     inverse::Inverse,
     polynomial::Polynomial,
+    rns::{intt_inplace, ntt_inplace, NttPrimeList, Rns},
     samplerz::sampler_z,
     U32Field,
 };
@@ -236,6 +239,118 @@ pub fn babai_reduce_i32(
     Ok(())
 }
 
+/// Reduce the vector (F, G) relative to (f, g) using fixed-point FFT for the
+/// quotient step and RNS NTT for polynomial multiplication.
+///
+/// This is a floating-point-free-in-the-hot-loop replacement for
+/// `babai_reduce_i32`.  The FFT quotient step uses `Complex<FixedPoint64>`
+/// (Q31.32 arithmetic); f64 is only used once at startup to seed the twiddle
+/// factors.  The multiplication step uses negacyclic NTT modulo each prime in
+/// `P`.
+///
+/// `capital_f` and `capital_g` are coefficient-ordered vectors of RNS
+/// elements.  Values must lie in the symmetric range (−M/2, M/2) where
+/// M = ∏ PRIMES[i]; overflow wraps silently.
+///
+/// Algorithm 7 in the spec [1, p.35].
+///
+/// [1]: https://falcon-sign.info/falcon.pdf
+#[profiling]
+pub(crate) fn babai_reduce_rns<const K: usize, P: NttPrimeList<K>>(
+    f: &Polynomial<i32>,
+    g: &Polynomial<i32>,
+    capital_f: &mut Vec<Rns<K, P>>,
+    capital_g: &mut Vec<Rns<K, P>>,
+) -> Result<(), String> {
+    type Cfp = Complex<FixedPoint64>;
+
+    let n = f.coefficients.len();
+
+    // Precompute FFT of f and g (fixed, computed once).
+    let to_cfp = |i: &i32| Cfp::new(FixedPoint64::from(*i), FixedPoint64::ZERO);
+    let f_fft = f.map(to_cfp).fft();
+    let g_fft = g.map(to_cfp).fft();
+    let f_adj_fft = f_fft.map(|c| c.conj());
+    let g_adj_fft = g_fft.map(|c| c.conj());
+    let denom_fft = f_fft.hadamard_mul(&f_adj_fft) + g_fft.hadamard_mul(&g_adj_fft);
+
+    // Precompute NTT of f and g in RNS (fixed, computed once).
+    let mut f_rns_ntt: Vec<Rns<K, P>> = f.coefficients.iter().map(|&i| Rns::from_i32(i)).collect();
+    let mut g_rns_ntt: Vec<Rns<K, P>> = g.coefficients.iter().map(|&i| Rns::from_i32(i)).collect();
+    ntt_inplace::<K, P>(&mut f_rns_ntt);
+    ntt_inplace::<K, P>(&mut g_rns_ntt);
+
+    let mut counter = 0;
+    loop {
+        // Bridge: RNS → FixedPoint64 (exact when true value fits in i64).
+        let capital_f_fft = Polynomial::new(
+            capital_f
+                .iter()
+                .map(|r| Cfp::new(FixedPoint64::from(r.to_i64()), FixedPoint64::ZERO))
+                .collect::<Vec<_>>(),
+        )
+        .fft();
+        let capital_g_fft = Polynomial::new(
+            capital_g
+                .iter()
+                .map(|r| Cfp::new(FixedPoint64::from(r.to_i64()), FixedPoint64::ZERO))
+                .collect::<Vec<_>>(),
+        )
+        .fft();
+
+        let numerator =
+            capital_f_fft.hadamard_mul(&f_adj_fft) + capital_g_fft.hadamard_mul(&g_adj_fft);
+        let quotient = numerator.hadamard_div(&denom_fft).ifft();
+
+        let k: Vec<i32> = quotient
+            .coefficients
+            .iter()
+            .map(|c| c.re.round().trunc() as i32)
+            .collect();
+
+        if k.iter().all(|&x| x == 0) {
+            break;
+        }
+
+        // k → RNS NTT domain.
+        let mut k_rns_ntt: Vec<Rns<K, P>> = k.iter().map(|&i| Rns::from_i32(i)).collect();
+        ntt_inplace::<K, P>(&mut k_rns_ntt);
+
+        // Hadamard multiply, INTT, subtract.
+        let mut kf: Vec<Rns<K, P>> = k_rns_ntt
+            .iter()
+            .zip(f_rns_ntt.iter())
+            .map(|(&a, &b)| a * b)
+            .collect();
+        let mut kg: Vec<Rns<K, P>> = k_rns_ntt
+            .iter()
+            .zip(g_rns_ntt.iter())
+            .map(|(&a, &b)| a * b)
+            .collect();
+        intt_inplace::<K, P>(&mut kf);
+        intt_inplace::<K, P>(&mut kg);
+
+        for i in 0..n {
+            capital_f[i] -= kf[i];
+            capital_g[i] -= kg[i];
+        }
+
+        counter += 1;
+        if counter > 1000 {
+            return Err(format!(
+                "Encountered infinite loop in babai_reduce_rns of falcon-rust.\n\
+                Please help the developer(s) fix it! Send them:\n\
+                f: {:?}\ng: {:?}\ncapital_f: {:?}\ncapital_g: {:?}\n",
+                f.coefficients,
+                g.coefficients,
+                capital_f.iter().map(|r| r.to_i64()).collect::<Vec<_>>(),
+                capital_g.iter().map(|r| r.to_i64()).collect::<Vec<_>>(),
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// Extended Euclidean algorithm for computing the greatest common divisor (g) and
 /// Bézout coefficients (u, v) for the relation
 ///
@@ -450,7 +565,14 @@ fn gen_poly(n: usize, rng: &mut dyn RngCore) -> Polynomial<i16> {
     const NUM_COEFFICIENTS: usize = 4096;
     Polynomial {
         coefficients: (0..NUM_COEFFICIENTS)
-            .map(|_| sampler_z(mu, sigma_star, sigma_star - FixedPoint64::from(0.001f64), rng))
+            .map(|_| {
+                sampler_z(
+                    mu,
+                    sigma_star,
+                    sigma_star - FixedPoint64::from(0.001f64),
+                    rng,
+                )
+            })
             .collect_vec()
             .chunks(NUM_COEFFICIENTS / n)
             .map(|ch| ch.iter().sum())
@@ -477,12 +599,8 @@ fn gram_schmidt_norm_squared(f: &Polynomial<i16>, g: &Polynomial<i16>) -> f64 {
     let g_adj_fft = g_fft.map(|c| c.conj());
     let ffgg_fft = f_fft.hadamard_mul(&f_adj_fft) + g_fft.hadamard_mul(&g_adj_fft);
     let ffgg_fft_inverse = ffgg_fft.hadamard_inv();
-    let qf_over_ffgg_fft = f_adj_fft
-        .map(|c| c * q_fp)
-        .hadamard_mul(&ffgg_fft_inverse);
-    let qg_over_ffgg_fft = g_adj_fft
-        .map(|c| c * q_fp)
-        .hadamard_mul(&ffgg_fft_inverse);
+    let qf_over_ffgg_fft = f_adj_fft.map(|c| c * q_fp).hadamard_mul(&ffgg_fft_inverse);
+    let qg_over_ffgg_fft = g_adj_fft.map(|c| c * q_fp).hadamard_mul(&ffgg_fft_inverse);
     let norm_f_over_ffgg_squared = qf_over_ffgg_fft
         .coefficients
         .iter()
@@ -509,17 +627,35 @@ mod test {
     use itertools::Itertools;
     use num::{BigInt, FromPrimitive};
     use proptest::collection::vec;
-    use proptest::prop_assert_eq;
     use proptest::strategy::Just;
+    use proptest::{prop_assert, prop_assert_eq};
     use rand::{rngs::StdRng, SeedableRng};
     use test_strategy::proptest as strategy_proptest;
 
+    use crate::math::{
+        babai_reduce_i32, babai_reduce_rns, gram_schmidt_norm_squared, ntru_gen, ntru_solve,
+    };
     use crate::{
-        math::{babai_reduce_i32, gram_schmidt_norm_squared, ntru_gen, ntru_solve},
+        fp_field::FpField,
         polynomial::Polynomial,
+        rns::{NttPrimeList, PrimeList, Rns},
     };
 
     use super::babai_reduce_bigint;
+
+    // Prime list for babai_reduce_rns tests: three primes ≡ 1 (mod 2048).
+    struct NttPrimes3;
+    impl PrimeList<3> for NttPrimes3 {
+        const PRIMES: [u32; 3] = [786_433, 998_244_353, 1_073_754_113];
+    }
+    impl NttPrimeList<3> for NttPrimes3 {
+        const ROOTS_OF_UNITY_2048: [u32; 3] = [
+            FpField::<786_433>::primitive_nth_root_of_unity(2048).value(),
+            FpField::<998_244_353>::primitive_nth_root_of_unity(2048).value(),
+            FpField::<1_073_754_113>::primitive_nth_root_of_unity(2048).value(),
+        ];
+    }
+    type Rns3 = Rns<3, NttPrimes3>;
     fn babai_infinite_loop_polynomials() -> (
         Polynomial<BigInt>,
         Polynomial<BigInt>,
@@ -664,6 +800,70 @@ mod test {
 
         let ntru = (f * capital_g - g * capital_f).reduce_by_cyclotomic(n);
         assert_eq!(Polynomial::constant(12289.into()), ntru);
+    }
+
+    #[strategy_proptest]
+    fn rns_and_i32_babai_reduce_agree(
+        #[strategy(1usize..5)] _logn: usize,
+        #[strategy(Just(1<<#_logn))] _n: usize,
+        #[strategy(vec(-5i32..5, #_n))] f_coefficients: Vec<i32>,
+        #[strategy(vec(-5i32..5, #_n))] g_coefficients: Vec<i32>,
+        #[strategy(vec(-115i32..115, #_n))] capital_f_coefficients: Vec<i32>,
+        #[strategy(vec(-115i32..115, #_n))] capital_g_coefficients: Vec<i32>,
+    ) {
+        let f = Polynomial::new(f_coefficients);
+        let g = Polynomial::new(g_coefficients);
+
+        // babai_reduce_i32 uses f64::round (rounds half away from zero);
+        // babai_reduce_rns uses FixedPoint64::round (rounds half toward +∞).
+        // These differ on inputs where the quotient is exactly ±0.5, which
+        // typically arises only with degenerate (g=all-zeros) inputs.  Skip
+        // those to avoid spurious comparison failures.
+        if g.coefficients.iter().all(|&x| x == 0) {
+            return Ok(());
+        }
+
+        let mut capital_f_i32 = Polynomial::new(capital_f_coefficients.clone());
+        let mut capital_g_i32 = Polynomial::new(capital_g_coefficients.clone());
+
+        let mut capital_f_rns: Vec<Rns3> = capital_f_coefficients
+            .iter()
+            .map(|&i| Rns3::from_i32(i))
+            .collect();
+        let mut capital_g_rns: Vec<Rns3> = capital_g_coefficients
+            .iter()
+            .map(|&i| Rns3::from_i32(i))
+            .collect();
+
+        let i32_result = babai_reduce_i32(&f, &g, &mut capital_f_i32, &mut capital_g_i32);
+        let rns_result =
+            babai_reduce_rns::<3, NttPrimes3>(&f, &g, &mut capital_f_rns, &mut capital_g_rns);
+
+        // babai_reduce_i32 has a known oscillation bug; only assert agreement
+        // when the i32 version also succeeded.
+        if i32_result.is_err() {
+            return Ok(());
+        }
+        prop_assert!(rns_result.is_ok(), "rns babai failed where i32 succeeded");
+
+        for (i, (ci32, crns)) in capital_f_i32
+            .coefficients
+            .iter()
+            .zip(capital_f_rns.iter())
+            .enumerate()
+        {
+            let got = crns.to_i64() as i32;
+            prop_assert_eq!(*ci32, got, "capital_f[{}]", i);
+        }
+        for (i, (ci32, crns)) in capital_g_i32
+            .coefficients
+            .iter()
+            .zip(capital_g_rns.iter())
+            .enumerate()
+        {
+            let got = crns.to_i64() as i32;
+            prop_assert_eq!(*ci32, got, "capital_g[{}]", i);
+        }
     }
 
     #[strategy_proptest]

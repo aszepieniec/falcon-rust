@@ -56,6 +56,7 @@
 //! ```
 
 pub(crate) mod cyclotomic_fourier;
+pub(crate) mod rns;
 pub(crate) mod encoding;
 pub(crate) mod falcon;
 pub(crate) mod fixed_point;
