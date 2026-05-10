@@ -4,7 +4,7 @@ use std::ops::{Add, AddAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 
 use num::{One, Zero};
 
-use crate::fp_field::{montyred, negqinv_modr, r_sq_modq};
+use crate::fp_field::{montyred, negqinv_modr, r_sq_modq, FpField};
 
 /// A set of odd prime moduli known at compile time.
 pub(crate) trait PrimeList<const N: usize> {
@@ -223,6 +223,17 @@ impl<const N: usize, P: PrimeList<N>> Rns<N, P> {
         Rns { residues, _phantom: PhantomData }
     }
 
+    /// Construct from a signed `i128`, reducing modulo each prime with correct
+    /// sign handling.
+    pub(crate) fn from_i128(x: i128) -> Self {
+        let mut residues = [0u32; N];
+        for i in 0..N {
+            let r = x.rem_euclid(P::PRIMES[i] as i128) as u32;
+            residues[i] = Self::to_mont_at(r, i);
+        }
+        Rns { residues, _phantom: PhantomData }
+    }
+
     /// Reconstruct as a signed `i64` via Garner's algorithm.
     ///
     /// Uses the symmetric representative: values above M/2 are interpreted as
@@ -242,6 +253,25 @@ impl<const N: usize, P: PrimeList<N>> Rns<N, P> {
             result.wrapping_sub(base) as i64
         } else {
             result as i64
+        }
+    }
+
+    /// Reconstruct as a signed `i128` via Garner's algorithm.
+    ///
+    /// Correct when the true value fits in i128.  For K ≤ 5 primes of ≤ 24 bits
+    /// the modulus M < 2^120 and the u128 accumulator never overflows.
+    pub(crate) fn to_i128(&self) -> i128 {
+        let a = self.to_garner();
+        let mut result = 0u128;
+        let mut base = 1u128;
+        for i in 0..N {
+            result = result.wrapping_add(base.wrapping_mul(a[i] as u128));
+            base = base.wrapping_mul(P::PRIMES[i] as u128);
+        }
+        if result > base / 2 {
+            result.wrapping_sub(base) as i128
+        } else {
+            result as i128
         }
     }
 }
@@ -523,6 +553,34 @@ pub(crate) fn intt_inplace<const N: usize, P: NttPrimeList<N>>(coeffs: &mut [Rns
             coeff.residues[prime_idx] = val;
         }
     }
+}
+
+/// Two 24-bit NTT-friendly primes (p ≡ 1 mod 2048, 2²³ ≤ p < 2²⁴).
+/// Signed capacity ≈ 45 bits; covers `babai_reduce_rns` at recursion depth 1.
+pub(crate) struct NttPrimes24Bit2;
+impl PrimeList<2> for NttPrimes24Bit2 {
+    const PRIMES: [u32; 2] = [8_404_993, 8_427_521];
+}
+impl NttPrimeList<2> for NttPrimes24Bit2 {
+    const ROOTS_OF_UNITY_2048: [u32; 2] = [
+        FpField::<8_404_993>::primitive_nth_root_of_unity(2048).value(),
+        FpField::<8_427_521>::primitive_nth_root_of_unity(2048).value(),
+    ];
+}
+
+/// Four 24-bit NTT-friendly primes (p ≡ 1 mod 2048, 2²³ ≤ p < 2²⁴).
+/// Signed capacity ≈ 91 bits; covers `babai_reduce_rns` at recursion depth 2.
+pub(crate) struct NttPrimes24Bit4;
+impl PrimeList<4> for NttPrimes24Bit4 {
+    const PRIMES: [u32; 4] = [8_404_993, 8_427_521, 8_441_857, 8_452_097];
+}
+impl NttPrimeList<4> for NttPrimes24Bit4 {
+    const ROOTS_OF_UNITY_2048: [u32; 4] = [
+        FpField::<8_404_993>::primitive_nth_root_of_unity(2048).value(),
+        FpField::<8_427_521>::primitive_nth_root_of_unity(2048).value(),
+        FpField::<8_441_857>::primitive_nth_root_of_unity(2048).value(),
+        FpField::<8_452_097>::primitive_nth_root_of_unity(2048).value(),
+    ];
 }
 
 #[cfg(test)]
