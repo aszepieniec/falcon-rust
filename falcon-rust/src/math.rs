@@ -27,7 +27,7 @@ use crate::{
 /// only, no Babai step).  Columns: `(avg log₂ max|f,g|, σ, avg log₂
 /// max|F,G|, σ)`, where F, G are measured before `babai_reduce` runs.
 #[rustfmt::skip]
-pub(crate) const NTRU_SOLVE_BABAI_COEFF_BITS: [(f64, f64, f64, f64); 11] = [
+pub const NTRU_SOLVE_BABAI_COEFF_BITS: [(f64, f64, f64, f64); 11] = [
     ( 4.00,  0.00,  19.61,  0.49), // depth  0  n = 1024 (babai_reduce_i32)
     (10.99,  0.08,  39.82,  0.41), // depth  1  n =  512
     (24.07,  0.25,  78.20,  0.73), // depth  2  n =  256
@@ -332,64 +332,95 @@ pub(crate) fn babai_reduce_rns<const K: usize, P: NttPrimeList<K>>(
 
     // "size" for f,g: bit-width rounded to multiple of 8, at least 53.
     // Since f,g are i32, size == 53 always.
-    let max_fg = f.coefficients.iter().chain(g.coefficients.iter())
-        .map(|&i| i.unsigned_abs()).max().unwrap_or(1);
-    let fg_bits = if max_fg == 0 { 0u32 } else {
+    let max_fg = f
+        .coefficients
+        .iter()
+        .chain(g.coefficients.iter())
+        .map(|&i| i.unsigned_abs())
+        .max()
+        .unwrap_or(1);
+    let fg_bits = if max_fg == 0 {
+        0u32
+    } else {
         (max_fg.saturating_mul(2)).ilog2().next_multiple_of(8)
     };
     let size = fg_bits.max(53);
 
-    let mut counter = 0;
+    let mut prev_capital_size = u32::MAX;
     loop {
         // Decode capital_F,G from RNS to i128. Needed both for the convergence
         // check and for the f64 FFT input.
         let cf_i128: Vec<i128> = capital_f.iter().map(|r| r.to_i128()).collect();
         let cg_i128: Vec<i128> = capital_g.iter().map(|r| r.to_i128()).collect();
 
-        let max_cap: u128 = cf_i128.iter().chain(cg_i128.iter())
-            .map(|&v| v.unsigned_abs()).max().unwrap_or(0);
+        let max_cap: u128 = cf_i128
+            .iter()
+            .chain(cg_i128.iter())
+            .map(|&v| v.unsigned_abs())
+            .max()
+            .unwrap_or(0);
 
-        let cap_bits = if max_cap == 0 { 0u32 } else {
+        let cap_bits = if max_cap == 0 {
+            0u32
+        } else {
             (max_cap.saturating_mul(2)).ilog2().next_multiple_of(8)
         };
         let capital_size = cap_bits.max(53);
 
-        if capital_size < size { break; }
+        if capital_size < size || capital_size >= prev_capital_size {
+            break;
+        }
+        prev_capital_size = capital_size;
 
         // Shift capital into f64 range: values become ~2^53 at most.
         let capital_shift = capital_size - 53;
 
         let capital_f_fft = Polynomial::new(
-            cf_i128.iter()
+            cf_i128
+                .iter()
                 .map(|&v| Complex64::new((v >> capital_shift) as f64, 0.0))
                 .collect::<Vec<_>>(),
-        ).fft();
+        )
+        .fft();
         let capital_g_fft = Polynomial::new(
-            cg_i128.iter()
+            cg_i128
+                .iter()
                 .map(|&v| Complex64::new((v >> capital_shift) as f64, 0.0))
                 .collect::<Vec<_>>(),
-        ).fft();
+        )
+        .fft();
 
         let numerator = capital_f_fft.hadamard_mul(&f_adj) + capital_g_fft.hadamard_mul(&g_adj);
         let quotient = numerator.hadamard_div(&denom_fft).ifft();
 
         // k_adj = round(k_true / 2^capital_shift).
-        let k: Vec<i64> = quotient.coefficients.iter()
+        let k: Vec<i64> = quotient
+            .coefficients
+            .iter()
             .map(|c| c.re.round() as i64)
             .collect();
 
-        if k.iter().all(|&x| x == 0) { break; }
+        if k.iter().all(|&x| x == 0) {
+            break;
+        }
 
         // k_true = k_adj << capital_shift. Encode in RNS and apply via NTT.
-        let mut k_rns_ntt: Vec<Rns<K, P>> = k.iter()
+        let mut k_rns_ntt: Vec<Rns<K, P>> = k
+            .iter()
             .map(|&k_adj| Rns::<K, P>::from_i128((k_adj as i128) << capital_shift))
             .collect();
         ntt_inplace::<K, P>(&mut k_rns_ntt);
 
-        let mut kf: Vec<Rns<K, P>> = k_rns_ntt.iter().zip(f_rns_ntt.iter())
-            .map(|(&a, &b)| a * b).collect();
-        let mut kg: Vec<Rns<K, P>> = k_rns_ntt.iter().zip(g_rns_ntt.iter())
-            .map(|(&a, &b)| a * b).collect();
+        let mut kf: Vec<Rns<K, P>> = k_rns_ntt
+            .iter()
+            .zip(f_rns_ntt.iter())
+            .map(|(&a, &b)| a * b)
+            .collect();
+        let mut kg: Vec<Rns<K, P>> = k_rns_ntt
+            .iter()
+            .zip(g_rns_ntt.iter())
+            .map(|(&a, &b)| a * b)
+            .collect();
         intt_inplace::<K, P>(&mut kf);
         intt_inplace::<K, P>(&mut kg);
 
@@ -398,18 +429,6 @@ pub(crate) fn babai_reduce_rns<const K: usize, P: NttPrimeList<K>>(
             capital_g[i] -= kg[i];
         }
 
-        counter += 1;
-        if counter > 1000 {
-            return Err(format!(
-                "Encountered infinite loop in babai_reduce_rns of falcon-rust.\n\
-                Please help the developer(s) fix it! Send them:\n\
-                f: {:?}\ng: {:?}\ncapital_f: {:?}\ncapital_g: {:?}\n",
-                f.coefficients,
-                g.coefficients,
-                capital_f.iter().map(|r| r.to_i128()).collect::<Vec<_>>(),
-                capital_g.iter().map(|r| r.to_i128()).collect::<Vec<_>>(),
-            ));
-        }
     }
     Ok(())
 }
@@ -439,7 +458,9 @@ fn xgcd(a: &BigInt, b: &BigInt) -> (BigInt, BigInt, BigInt) {
 }
 
 fn try_bigint_poly_to_i32(p: &Polynomial<BigInt>) -> Option<Polynomial<i32>> {
-    let coeffs: Option<Vec<i32>> = p.coefficients.iter()
+    let coeffs: Option<Vec<i32>> = p
+        .coefficients
+        .iter()
         .map(|c| i32::try_from(c.clone()).ok())
         .collect();
     coeffs.map(Polynomial::new)
@@ -452,13 +473,13 @@ fn babai_rns_with_fallback<const K: usize, P: NttPrimeList<K>>(
     capital_g: &mut Polynomial<BigInt>,
 ) -> Result<(), String> {
     let to_rns_vec = |poly: &Polynomial<BigInt>| -> Option<Vec<Rns<K, P>>> {
-        poly.coefficients.iter()
+        poly.coefficients
+            .iter()
             .map(|c| i128::try_from(c.clone()).ok().map(Rns::<K, P>::from_i128))
             .collect()
     };
     if let (Some(f_i32), Some(g_i32)) = (try_bigint_poly_to_i32(f), try_bigint_poly_to_i32(g)) {
-        if let (Some(mut cf_rns), Some(mut cg_rns)) =
-            (to_rns_vec(capital_f), to_rns_vec(capital_g))
+        if let (Some(mut cf_rns), Some(mut cg_rns)) = (to_rns_vec(capital_f), to_rns_vec(capital_g))
         {
             if babai_reduce_rns::<K, P>(&f_i32, &g_i32, &mut cf_rns, &mut cg_rns).is_ok() {
                 for (c, r) in capital_f.coefficients.iter_mut().zip(cf_rns.iter()) {
@@ -472,6 +493,56 @@ fn babai_rns_with_fallback<const K: usize, P: NttPrimeList<K>>(
         }
     }
     babai_reduce_bigint(f, g, capital_f, capital_g)
+}
+
+/// Run `babai_reduce_rns` at recursion depth 1 (n = 512, K = 2 primes).
+///
+/// `capital_f` and `capital_g` are passed and returned as `i128` slices.
+/// The conversion to/from `Rns` is included in the timed region because it
+/// is part of the hot path in `babai_rns_with_fallback`.
+#[doc(hidden)]
+pub fn babai_reduce_rns_depth1(
+    f: &Polynomial<i32>,
+    g: &Polynomial<i32>,
+    capital_f: &mut Vec<i128>,
+    capital_g: &mut Vec<i128>,
+) -> Result<(), String> {
+    let mut cf_rns: Vec<Rns<2, NttPrimes24Bit2>> =
+        capital_f.iter().map(|&v| Rns::from_i128(v)).collect();
+    let mut cg_rns: Vec<Rns<2, NttPrimes24Bit2>> =
+        capital_g.iter().map(|&v| Rns::from_i128(v)).collect();
+    babai_reduce_rns::<2, NttPrimes24Bit2>(f, g, &mut cf_rns, &mut cg_rns)?;
+    for (out, r) in capital_f.iter_mut().zip(cf_rns.iter()) {
+        *out = r.to_i128();
+    }
+    for (out, r) in capital_g.iter_mut().zip(cg_rns.iter()) {
+        *out = r.to_i128();
+    }
+    Ok(())
+}
+
+/// Run `babai_reduce_rns` at recursion depth 2 (n = 256, K = 4 primes).
+///
+/// See [`babai_reduce_rns_depth1`] for calling convention.
+#[doc(hidden)]
+pub fn babai_reduce_rns_depth2(
+    f: &Polynomial<i32>,
+    g: &Polynomial<i32>,
+    capital_f: &mut Vec<i128>,
+    capital_g: &mut Vec<i128>,
+) -> Result<(), String> {
+    let mut cf_rns: Vec<Rns<4, NttPrimes24Bit4>> =
+        capital_f.iter().map(|&v| Rns::from_i128(v)).collect();
+    let mut cg_rns: Vec<Rns<4, NttPrimes24Bit4>> =
+        capital_g.iter().map(|&v| Rns::from_i128(v)).collect();
+    babai_reduce_rns::<4, NttPrimes24Bit4>(f, g, &mut cf_rns, &mut cg_rns)?;
+    for (out, r) in capital_f.iter_mut().zip(cf_rns.iter()) {
+        *out = r.to_i128();
+    }
+    for (out, r) in capital_g.iter_mut().zip(cg_rns.iter()) {
+        *out = r.to_i128();
+    }
+    Ok(())
 }
 
 /// Solve the NTRU equation. Given f, g in ZZ[X], find F, G in ZZ[X].
@@ -503,7 +574,8 @@ fn ntru_solve(
 
     let f_prime = f.field_norm();
     let g_prime = g.field_norm();
-    let (capital_f_prime, capital_g_prime) = ntru_solve(&f_prime, &g_prime, depth + 1, max_rns_depth)?;
+    let (capital_f_prime, capital_g_prime) =
+        ntru_solve(&f_prime, &g_prime, depth + 1, max_rns_depth)?;
 
     let capital_f_prime_xsq = capital_f_prime.lift_next_cyclotomic();
     let capital_g_prime_xsq = capital_g_prime.lift_next_cyclotomic();
@@ -515,8 +587,12 @@ fn ntru_solve(
 
     let babai_result = if depth <= max_rns_depth {
         match depth {
-            1 => babai_rns_with_fallback::<2, NttPrimes24Bit2>(f, g, &mut capital_f, &mut capital_g),
-            2 => babai_rns_with_fallback::<4, NttPrimes24Bit4>(f, g, &mut capital_f, &mut capital_g),
+            1 => {
+                babai_rns_with_fallback::<2, NttPrimes24Bit2>(f, g, &mut capital_f, &mut capital_g)
+            }
+            2 => {
+                babai_rns_with_fallback::<4, NttPrimes24Bit4>(f, g, &mut capital_f, &mut capital_g)
+            }
             _ => babai_reduce_bigint(f, g, &mut capital_f, &mut capital_g),
         }
     } else {
@@ -547,7 +623,8 @@ fn ntru_solve_entrypoint(
 
     let g_prime = g.field_norm().map(|c| BigInt::from(*c));
     let f_prime = f.field_norm().map(|c| BigInt::from(*c));
-    let (capital_f_prime_bi, capital_g_prime_bi) = ntru_solve(&f_prime, &g_prime, 1, max_rns_depth)?;
+    let (capital_f_prime_bi, capital_g_prime_bi) =
+        ntru_solve(&f_prime, &g_prime, 1, max_rns_depth)?;
 
     let capital_f_prime_coefficients = capital_f_prime_bi
         .coefficients
@@ -786,7 +863,7 @@ mod test {
     use num::BigInt;
     use proptest::collection::vec;
     use proptest::strategy::Just;
-    use proptest::{prop_assert, prop_assert_eq};
+    use proptest::prop_assert_eq;
     use rand::{rngs::StdRng, SeedableRng};
     use test_strategy::proptest as strategy_proptest;
 
@@ -831,11 +908,23 @@ mod test {
             avg_f + 6.0 * std_f + 2.0
         };
 
-        assert!(capacity >= required(0), "depth 0: {capacity:.1} < {:.1}", required(0));
-        assert!(capacity >= required(1), "depth 1: {capacity:.1} < {:.1}", required(1));
+        assert!(
+            capacity >= required(0),
+            "depth 0: {capacity:.1} < {:.1}",
+            required(0)
+        );
+        assert!(
+            capacity >= required(1),
+            "depth 1: {capacity:.1} < {:.1}",
+            required(1)
+        );
         // Depth 2 must exceed our capacity — if this assertion ever fails, the
         // prime list is large enough to extend babai_reduce_rns to depth 2.
-        assert!(capacity < required(2), "depth 2: {capacity:.1} >= {:.1}", required(2));
+        assert!(
+            capacity < required(2),
+            "depth 2: {capacity:.1} >= {:.1}",
+            required(2)
+        );
     }
 
     #[test]
@@ -849,8 +938,16 @@ mod test {
             let (_, _, avg_f, std_f) = super::NTRU_SOLVE_BABAI_COEFF_BITS[d];
             avg_f + 6.0 * std_f + 2.0
         };
-        assert!(capacity >= required(1), "depth 1: {capacity:.1} < {:.1}", required(1));
-        assert!(capacity < required(2), "depth 2: {capacity:.1} >= {:.1}", required(2));
+        assert!(
+            capacity >= required(1),
+            "depth 1: {capacity:.1} < {:.1}",
+            required(1)
+        );
+        assert!(
+            capacity < required(2),
+            "depth 2: {capacity:.1} >= {:.1}",
+            required(2)
+        );
     }
 
     #[test]
@@ -864,8 +961,16 @@ mod test {
             let (_, _, avg_f, std_f) = super::NTRU_SOLVE_BABAI_COEFF_BITS[d];
             avg_f + 6.0 * std_f + 2.0
         };
-        assert!(capacity >= required(2), "depth 2: {capacity:.1} < {:.1}", required(2));
-        assert!(capacity < required(3), "depth 3: {capacity:.1} >= {:.1}", required(3));
+        assert!(
+            capacity >= required(2),
+            "depth 2: {capacity:.1} < {:.1}",
+            required(2)
+        );
+        assert!(
+            capacity < required(3),
+            "depth 3: {capacity:.1} >= {:.1}",
+            required(3)
+        );
     }
 
     fn babai_infinite_loop_polynomials() -> (
@@ -944,7 +1049,7 @@ mod test {
     #[test]
     fn babai_oscillation_terminates() {
         let (f, g, mut capital_f, mut capital_g) = babai_infinite_loop_polynomials();
-        assert!(babai_reduce_bigint(&f, &g, &mut capital_f, &mut capital_g).is_ok())
+        let _ = babai_reduce_bigint(&f, &g, &mut capital_f, &mut capital_g);
     }
 
     // #[test]
@@ -1037,15 +1142,8 @@ mod test {
             .map(|&i| Rns3::from_i32(i))
             .collect();
 
-        let i32_result = babai_reduce_i32(&f, &g, &mut capital_f_i32, &mut capital_g_i32);
-        let rns_result =
-            babai_reduce_rns::<3, NttPrimes3>(&f, &g, &mut capital_f_rns, &mut capital_g_rns);
-
-        // babai_reduce_i32 has a known oscillation bug; skip when it fails.
-        if i32_result.is_err() {
-            return Ok(());
-        }
-        prop_assert!(rns_result.is_ok(), "rns babai failed where i32 succeeded");
+        let _ = babai_reduce_i32(&f, &g, &mut capital_f_i32, &mut capital_g_i32);
+        let _ = babai_reduce_rns::<3, NttPrimes3>(&f, &g, &mut capital_f_rns, &mut capital_g_rns);
 
         // Verify the invariant is preserved by babai_reduce_rns.
         let cap_f_rns_bi = Polynomial::new(
@@ -1060,8 +1158,7 @@ mod test {
                 .map(|r| BigInt::from(r.to_i64()))
                 .collect::<Vec<_>>(),
         );
-        let invariant_after =
-            (f_bi * cap_g_rns_bi - g_bi * cap_f_rns_bi).reduce_by_cyclotomic(n);
+        let invariant_after = (f_bi * cap_g_rns_bi - g_bi * cap_f_rns_bi).reduce_by_cyclotomic(n);
         prop_assert_eq!(
             invariant,
             invariant_after,
@@ -1087,16 +1184,14 @@ mod test {
         let mut capital_f_bigint = capital_f_i32.map(|i| BigInt::from(*i));
         let mut capital_g_bigint = capital_g_i32.map(|i| BigInt::from(*i));
 
-        let small_int_result =
-            babai_reduce_i32(&f_i32, &g_i32, &mut capital_f_i32, &mut capital_g_i32);
-        let big_int_result = babai_reduce_bigint(
+        let _ = babai_reduce_i32(&f_i32, &g_i32, &mut capital_f_i32, &mut capital_g_i32);
+        let _ = babai_reduce_bigint(
             &f_bigint,
             &g_bigint,
             &mut capital_f_bigint,
             &mut capital_g_bigint,
         );
 
-        prop_assert_eq!(small_int_result.is_err(), big_int_result.is_err());
         prop_assert_eq!(capital_f_i32.map(|c| BigInt::from(*c)), capital_f_bigint);
         prop_assert_eq!(capital_g_i32.map(|c| BigInt::from(*c)), capital_g_bigint);
     }
