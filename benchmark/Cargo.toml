@@ -39,5 +39,13 @@ harness = false
 name = "profile"
 harness = false
 
+[[bench]]
+name = "babai_per_depth"
+harness = false
+
+[[bench]]
+name = "ntru_gen_per_depth"
+harness = false
+
 [features]
 profiling = ["falcon-rust/profiling"]
