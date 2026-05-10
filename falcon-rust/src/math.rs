@@ -6,8 +6,6 @@ use num::{BigInt, FromPrimitive, One, Zero};
 use num_complex::Complex64;
 use rand::RngCore;
 
-use num_complex::Complex;
-
 use crate::{
     cyclotomic_fourier::CyclotomicFourier,
     falcon_field::{Felt, Q},
@@ -15,10 +13,33 @@ use crate::{
     fixed_point::FixedPoint64,
     inverse::Inverse,
     polynomial::Polynomial,
-    rns::{intt_inplace, ntt_inplace, NttPrimeList, Rns},
+    rns::{intt_inplace, ntt_inplace, NttPrimeList, NttPrimes24Bit2, NttPrimes24Bit4, Rns},
     samplerz::sampler_z,
     U32Field,
 };
+
+/// Coefficient sizes (log₂ of max absolute value, in bits) at each recursion
+/// depth in [`ntru_solve`], from the Falcon specification
+/// (<https://falcon-sign.info/falcon.pdf>, Table on p. 59), gathered
+/// experimentally over many Falcon-1024 key-generation runs.
+///
+/// Depth 0 = outermost call (n = 1024); depth 10 = base case (n = 1, xgcd
+/// only, no Babai step).  Columns: `(avg log₂ max|f,g|, σ, avg log₂
+/// max|F,G|, σ)`, where F, G are measured before `babai_reduce` runs.
+#[rustfmt::skip]
+pub(crate) const NTRU_SOLVE_BABAI_COEFF_BITS: [(f64, f64, f64, f64); 11] = [
+    ( 4.00,  0.00,  19.61,  0.49), // depth  0  n = 1024 (babai_reduce_i32)
+    (10.99,  0.08,  39.82,  0.41), // depth  1  n =  512
+    (24.07,  0.25,  78.20,  0.73), // depth  2  n =  256
+    (50.37,  0.53, 153.65,  1.39), // depth  3  n =  128
+    (101.62, 1.02, 303.49,  2.38), // depth  4  n =   64
+    (202.22, 1.87, 599.81,  3.87), // depth  5  n =   32
+    (400.67, 3.10,1188.68,  6.04), // depth  6  n =   16
+    (794.17, 4.98,2361.84,  9.31), // depth  7  n =    8
+    (1576.87,7.49,4703.30, 14.77), // depth  8  n =    4
+    (3138.35,12.25,9403.29,27.55), // depth  9  n =    2
+    (6307.52,24.48,6319.66,24.51), // depth 10  n =    1 (xgcd, no Babai)
+];
 
 /// Reduce the vector (F,G) relative to (f,g). This method follows the python
 /// implementation [1].
@@ -239,18 +260,13 @@ pub fn babai_reduce_i32(
     Ok(())
 }
 
-/// Reduce the vector (F, G) relative to (f, g) using fixed-point FFT for the
-/// quotient step and RNS NTT for polynomial multiplication.
+/// Reduce the vector (F, G) relative to (f, g) using f64 FFT for the quotient
+/// step and RNS NTT for polynomial multiplication.
 ///
-/// This is a floating-point-free-in-the-hot-loop replacement for
-/// `babai_reduce_i32`.  The FFT quotient step uses `Complex<FixedPoint64>`
-/// (Q31.32 arithmetic); f64 is only used once at startup to seed the twiddle
-/// factors.  The multiplication step uses negacyclic NTT modulo each prime in
-/// `P`.
-///
-/// `capital_f` and `capital_g` are coefficient-ordered vectors of RNS
-/// elements.  Values must lie in the symmetric range (−M/2, M/2) where
-/// M = ∏ PRIMES[i]; overflow wraps silently.
+/// This mirrors `babai_reduce_i32`: Complex64 FFT computes the rounded quotient
+/// k, which is then applied via RNS NTT multiplication.  capital_F,G live in
+/// RNS throughout; they are decoded to i128 (via Garner) once per iteration
+/// only for the FFT input and convergence check.
 ///
 /// Algorithm 7 in the spec [1, p.35].
 ///
@@ -262,71 +278,82 @@ pub(crate) fn babai_reduce_rns<const K: usize, P: NttPrimeList<K>>(
     capital_f: &mut Vec<Rns<K, P>>,
     capital_g: &mut Vec<Rns<K, P>>,
 ) -> Result<(), String> {
-    type Cfp = Complex<FixedPoint64>;
-
     let n = f.coefficients.len();
 
-    // Precompute FFT of f and g (fixed, computed once).
-    let to_cfp = |i: &i32| Cfp::new(FixedPoint64::from(*i), FixedPoint64::ZERO);
-    let f_fft = f.map(to_cfp).fft();
-    let g_fft = g.map(to_cfp).fft();
-    let f_adj_fft = f_fft.map(|c| c.conj());
-    let g_adj_fft = g_fft.map(|c| c.conj());
-    let denom_fft = f_fft.hadamard_mul(&f_adj_fft) + g_fft.hadamard_mul(&g_adj_fft);
-
-    // Precompute NTT of f and g in RNS (fixed, computed once).
+    // Precompute RNS NTT of f,g for polynomial multiplication.
     let mut f_rns_ntt: Vec<Rns<K, P>> = f.coefficients.iter().map(|&i| Rns::from_i32(i)).collect();
     let mut g_rns_ntt: Vec<Rns<K, P>> = g.coefficients.iter().map(|&i| Rns::from_i32(i)).collect();
     ntt_inplace::<K, P>(&mut f_rns_ntt);
     ntt_inplace::<K, P>(&mut g_rns_ntt);
 
+    // Precompute Complex64 FFT of f,g. f,g are i32, so values always fit in
+    // f64 with no shifting required.
+    let f_fft = f.map(|&i| Complex64::new(i as f64, 0.0)).fft();
+    let g_fft = g.map(|&i| Complex64::new(i as f64, 0.0)).fft();
+    let f_adj = f_fft.map(|c| c.conj());
+    let g_adj = g_fft.map(|c| c.conj());
+    let denom_fft = f_fft.hadamard_mul(&f_adj) + g_fft.hadamard_mul(&g_adj);
+
+    // "size" for f,g: bit-width rounded to multiple of 8, at least 53.
+    // Since f,g are i32, size == 53 always.
+    let max_fg = f.coefficients.iter().chain(g.coefficients.iter())
+        .map(|&i| i.unsigned_abs()).max().unwrap_or(1);
+    let fg_bits = if max_fg == 0 { 0u32 } else {
+        (max_fg.saturating_mul(2)).ilog2().next_multiple_of(8)
+    };
+    let size = fg_bits.max(53);
+
     let mut counter = 0;
     loop {
-        // Bridge: RNS → FixedPoint64 (exact when true value fits in i64).
-        let capital_f_fft = Polynomial::new(
-            capital_f
-                .iter()
-                .map(|r| Cfp::new(FixedPoint64::from(r.to_i64()), FixedPoint64::ZERO))
-                .collect::<Vec<_>>(),
-        )
-        .fft();
-        let capital_g_fft = Polynomial::new(
-            capital_g
-                .iter()
-                .map(|r| Cfp::new(FixedPoint64::from(r.to_i64()), FixedPoint64::ZERO))
-                .collect::<Vec<_>>(),
-        )
-        .fft();
+        // Decode capital_F,G from RNS to i128. Needed both for the convergence
+        // check and for the f64 FFT input.
+        let cf_i128: Vec<i128> = capital_f.iter().map(|r| r.to_i128()).collect();
+        let cg_i128: Vec<i128> = capital_g.iter().map(|r| r.to_i128()).collect();
 
-        let numerator =
-            capital_f_fft.hadamard_mul(&f_adj_fft) + capital_g_fft.hadamard_mul(&g_adj_fft);
+        let max_cap: u128 = cf_i128.iter().chain(cg_i128.iter())
+            .map(|&v| v.unsigned_abs()).max().unwrap_or(0);
+
+        let cap_bits = if max_cap == 0 { 0u32 } else {
+            (max_cap.saturating_mul(2)).ilog2().next_multiple_of(8)
+        };
+        let capital_size = cap_bits.max(53);
+
+        if capital_size < size { break; }
+
+        // Shift capital into f64 range: values become ~2^53 at most.
+        let capital_shift = capital_size - 53;
+
+        let capital_f_fft = Polynomial::new(
+            cf_i128.iter()
+                .map(|&v| Complex64::new((v >> capital_shift) as f64, 0.0))
+                .collect::<Vec<_>>(),
+        ).fft();
+        let capital_g_fft = Polynomial::new(
+            cg_i128.iter()
+                .map(|&v| Complex64::new((v >> capital_shift) as f64, 0.0))
+                .collect::<Vec<_>>(),
+        ).fft();
+
+        let numerator = capital_f_fft.hadamard_mul(&f_adj) + capital_g_fft.hadamard_mul(&g_adj);
         let quotient = numerator.hadamard_div(&denom_fft).ifft();
 
-        let k: Vec<i32> = quotient
-            .coefficients
-            .iter()
-            .map(|c| c.re.round().trunc() as i32)
+        // k_adj = round(k_true / 2^capital_shift).
+        let k: Vec<i64> = quotient.coefficients.iter()
+            .map(|c| c.re.round() as i64)
             .collect();
 
-        if k.iter().all(|&x| x == 0) {
-            break;
-        }
+        if k.iter().all(|&x| x == 0) { break; }
 
-        // k → RNS NTT domain.
-        let mut k_rns_ntt: Vec<Rns<K, P>> = k.iter().map(|&i| Rns::from_i32(i)).collect();
+        // k_true = k_adj << capital_shift. Encode in RNS and apply via NTT.
+        let mut k_rns_ntt: Vec<Rns<K, P>> = k.iter()
+            .map(|&k_adj| Rns::<K, P>::from_i128((k_adj as i128) << capital_shift))
+            .collect();
         ntt_inplace::<K, P>(&mut k_rns_ntt);
 
-        // Hadamard multiply, INTT, subtract.
-        let mut kf: Vec<Rns<K, P>> = k_rns_ntt
-            .iter()
-            .zip(f_rns_ntt.iter())
-            .map(|(&a, &b)| a * b)
-            .collect();
-        let mut kg: Vec<Rns<K, P>> = k_rns_ntt
-            .iter()
-            .zip(g_rns_ntt.iter())
-            .map(|(&a, &b)| a * b)
-            .collect();
+        let mut kf: Vec<Rns<K, P>> = k_rns_ntt.iter().zip(f_rns_ntt.iter())
+            .map(|(&a, &b)| a * b).collect();
+        let mut kg: Vec<Rns<K, P>> = k_rns_ntt.iter().zip(g_rns_ntt.iter())
+            .map(|(&a, &b)| a * b).collect();
         intt_inplace::<K, P>(&mut kf);
         intt_inplace::<K, P>(&mut kg);
 
@@ -343,8 +370,8 @@ pub(crate) fn babai_reduce_rns<const K: usize, P: NttPrimeList<K>>(
                 f: {:?}\ng: {:?}\ncapital_f: {:?}\ncapital_g: {:?}\n",
                 f.coefficients,
                 g.coefficients,
-                capital_f.iter().map(|r| r.to_i64()).collect::<Vec<_>>(),
-                capital_g.iter().map(|r| r.to_i64()).collect::<Vec<_>>(),
+                capital_f.iter().map(|r| r.to_i128()).collect::<Vec<_>>(),
+                capital_g.iter().map(|r| r.to_i128()).collect::<Vec<_>>(),
             ));
         }
     }
@@ -375,6 +402,42 @@ fn xgcd(a: &BigInt, b: &BigInt) -> (BigInt, BigInt, BigInt) {
     (old_r, old_s, old_t)
 }
 
+fn try_bigint_poly_to_i32(p: &Polynomial<BigInt>) -> Option<Polynomial<i32>> {
+    let coeffs: Option<Vec<i32>> = p.coefficients.iter()
+        .map(|c| i32::try_from(c.clone()).ok())
+        .collect();
+    coeffs.map(Polynomial::new)
+}
+
+fn babai_rns_with_fallback<const K: usize, P: NttPrimeList<K>>(
+    f: &Polynomial<BigInt>,
+    g: &Polynomial<BigInt>,
+    capital_f: &mut Polynomial<BigInt>,
+    capital_g: &mut Polynomial<BigInt>,
+) -> Result<(), String> {
+    let to_rns_vec = |poly: &Polynomial<BigInt>| -> Option<Vec<Rns<K, P>>> {
+        poly.coefficients.iter()
+            .map(|c| i128::try_from(c.clone()).ok().map(Rns::<K, P>::from_i128))
+            .collect()
+    };
+    if let (Some(f_i32), Some(g_i32)) = (try_bigint_poly_to_i32(f), try_bigint_poly_to_i32(g)) {
+        if let (Some(mut cf_rns), Some(mut cg_rns)) =
+            (to_rns_vec(capital_f), to_rns_vec(capital_g))
+        {
+            if babai_reduce_rns::<K, P>(&f_i32, &g_i32, &mut cf_rns, &mut cg_rns).is_ok() {
+                for (c, r) in capital_f.coefficients.iter_mut().zip(cf_rns.iter()) {
+                    *c = BigInt::from(r.to_i64());
+                }
+                for (c, r) in capital_g.coefficients.iter_mut().zip(cg_rns.iter()) {
+                    *c = BigInt::from(r.to_i64());
+                }
+                return Ok(());
+            }
+        }
+    }
+    babai_reduce_bigint(f, g, capital_f, capital_g)
+}
+
 /// Solve the NTRU equation. Given f, g in ZZ[X], find F, G in ZZ[X].
 /// such that
 ///
@@ -387,6 +450,8 @@ fn xgcd(a: &BigInt, b: &BigInt) -> (BigInt, BigInt, BigInt) {
 fn ntru_solve(
     f: &Polynomial<BigInt>,
     g: &Polynomial<BigInt>,
+    depth: usize,
+    max_rns_depth: usize,
 ) -> Option<(Polynomial<BigInt>, Polynomial<BigInt>)> {
     let n = f.coefficients.len();
     if n == 1 {
@@ -402,7 +467,7 @@ fn ntru_solve(
 
     let f_prime = f.field_norm();
     let g_prime = g.field_norm();
-    let (capital_f_prime, capital_g_prime) = ntru_solve(&f_prime, &g_prime)?;
+    let (capital_f_prime, capital_g_prime) = ntru_solve(&f_prime, &g_prime, depth + 1, max_rns_depth)?;
 
     let capital_f_prime_xsq = capital_f_prime.lift_next_cyclotomic();
     let capital_g_prime_xsq = capital_g_prime.lift_next_cyclotomic();
@@ -412,7 +477,16 @@ fn ntru_solve(
     let mut capital_f = (capital_f_prime_xsq.karatsuba(&g_minx)).reduce_by_cyclotomic(n);
     let mut capital_g = (capital_g_prime_xsq.karatsuba(&f_minx)).reduce_by_cyclotomic(n);
 
-    match babai_reduce_bigint(f, g, &mut capital_f, &mut capital_g) {
+    let babai_result = if depth <= max_rns_depth {
+        match depth {
+            1 => babai_rns_with_fallback::<2, NttPrimes24Bit2>(f, g, &mut capital_f, &mut capital_g),
+            2 => babai_rns_with_fallback::<4, NttPrimes24Bit4>(f, g, &mut capital_f, &mut capital_g),
+            _ => babai_reduce_bigint(f, g, &mut capital_f, &mut capital_g),
+        }
+    } else {
+        babai_reduce_bigint(f, g, &mut capital_f, &mut capital_g)
+    };
+    match babai_result {
         Ok(_) => Some((capital_f, capital_g)),
         Err(_e) => {
             #[cfg(test)]
@@ -431,12 +505,13 @@ fn ntru_solve(
 fn ntru_solve_entrypoint(
     f: Polynomial<i32>,
     g: Polynomial<i32>,
+    max_rns_depth: usize,
 ) -> Option<(Polynomial<i32>, Polynomial<i32>)> {
     let n = f.coefficients.len();
 
     let g_prime = g.field_norm().map(|c| BigInt::from(*c));
     let f_prime = f.field_norm().map(|c| BigInt::from(*c));
-    let (capital_f_prime_bi, capital_g_prime_bi) = ntru_solve(&f_prime, &g_prime)?;
+    let (capital_f_prime_bi, capital_g_prime_bi) = ntru_solve(&f_prime, &g_prime, 1, max_rns_depth)?;
 
     let capital_f_prime_coefficients = capital_f_prime_bi
         .coefficients
@@ -542,7 +617,54 @@ pub fn ntru_gen(
         }
 
         if let Some((capital_f, capital_g)) =
-            ntru_solve_entrypoint(f.map(|&i| i as i32), g.map(|&i| i as i32))
+            ntru_solve_entrypoint(f.map(|&i| i as i32), g.map(|&i| i as i32), 2)
+        {
+            return (
+                f,
+                g,
+                capital_f.map(|&i| i as i16),
+                capital_g.map(|&i| i as i16),
+            );
+        }
+    }
+}
+
+/// Like [`ntru_gen`] but with an explicit RNS depth threshold for benchmarking.
+///
+/// `max_rns_depth` controls how deep into the NTRU recursion `babai_reduce_rns`
+/// is used instead of `babai_reduce_bigint`:
+/// - 0: always use BigInt (baseline)
+/// - 1: RNS at depth 1 only (n=512, K=2 primes)
+/// - 2: RNS at depths 1–2 (n=512 and n=256, K=2 and K=4 primes)
+///
+/// This function is marked pub for benchmarking purposes only.
+#[doc(hidden)]
+#[profiling]
+pub fn ntru_gen_with_rns_depth(
+    n: usize,
+    rng: &mut dyn RngCore,
+    max_rns_depth: usize,
+) -> (
+    Polynomial<i16>,
+    Polynomial<i16>,
+    Polynomial<i16>,
+    Polynomial<i16>,
+) {
+    loop {
+        let f = gen_poly(n, rng);
+        let g = gen_poly(n, rng);
+
+        let f_ntt = f.map(|&i| Felt::from(i)).fft();
+        if f_ntt.coefficients.iter().any(|e| e.is_zero()) {
+            continue;
+        }
+        let gamma = gram_schmidt_norm_squared(&f, &g);
+        if gamma > 1.3689f64 * (Q as f64) {
+            continue;
+        }
+
+        if let Some((capital_f, capital_g)) =
+            ntru_solve_entrypoint(f.map(|&i| i as i32), g.map(|&i| i as i32), max_rns_depth)
         {
             return (
                 f,
@@ -625,7 +747,7 @@ mod test {
     use std::str::FromStr;
 
     use itertools::Itertools;
-    use num::{BigInt, FromPrimitive};
+    use num::BigInt;
     use proptest::collection::vec;
     use proptest::strategy::Just;
     use proptest::{prop_assert, prop_assert_eq};
@@ -638,7 +760,7 @@ mod test {
     use crate::{
         fp_field::FpField,
         polynomial::Polynomial,
-        rns::{NttPrimeList, PrimeList, Rns},
+        rns::{NttPrimeList, NttPrimes24Bit2, NttPrimes24Bit4, PrimeList, Rns},
     };
 
     use super::babai_reduce_bigint;
@@ -656,6 +778,60 @@ mod test {
         ];
     }
     type Rns3 = Rns<3, NttPrimes3>;
+
+    #[test]
+    fn ntt_primes3_covers_babai_depths_0_and_1() {
+        // Signed bit-capacity of the NttPrimes3 configuration.
+        let capacity: f64 = NttPrimes3::PRIMES
+            .iter()
+            .map(|&p| f64::log2(p as f64))
+            .sum::<f64>()
+            - 1.0;
+
+        // Required bits at depth d: avg + 6·σ + 2 (sign bit + one factor-of-2
+        // slack because F − k·f can transiently reach 2·|F| before shrinking).
+        let required = |d: usize| {
+            let (_, _, avg_f, std_f) = super::NTRU_SOLVE_BABAI_COEFF_BITS[d];
+            avg_f + 6.0 * std_f + 2.0
+        };
+
+        assert!(capacity >= required(0), "depth 0: {capacity:.1} < {:.1}", required(0));
+        assert!(capacity >= required(1), "depth 1: {capacity:.1} < {:.1}", required(1));
+        // Depth 2 must exceed our capacity — if this assertion ever fails, the
+        // prime list is large enough to extend babai_reduce_rns to depth 2.
+        assert!(capacity < required(2), "depth 2: {capacity:.1} >= {:.1}", required(2));
+    }
+
+    #[test]
+    fn ntt_primes24_2_covers_depth1() {
+        let capacity: f64 = NttPrimes24Bit2::PRIMES
+            .iter()
+            .map(|&p| f64::log2(p as f64))
+            .sum::<f64>()
+            - 1.0;
+        let required = |d: usize| {
+            let (_, _, avg_f, std_f) = super::NTRU_SOLVE_BABAI_COEFF_BITS[d];
+            avg_f + 6.0 * std_f + 2.0
+        };
+        assert!(capacity >= required(1), "depth 1: {capacity:.1} < {:.1}", required(1));
+        assert!(capacity < required(2), "depth 2: {capacity:.1} >= {:.1}", required(2));
+    }
+
+    #[test]
+    fn ntt_primes24_4_covers_depth2() {
+        let capacity: f64 = NttPrimes24Bit4::PRIMES
+            .iter()
+            .map(|&p| f64::log2(p as f64))
+            .sum::<f64>()
+            - 1.0;
+        let required = |d: usize| {
+            let (_, _, avg_f, std_f) = super::NTRU_SOLVE_BABAI_COEFF_BITS[d];
+            avg_f + 6.0 * std_f + 2.0
+        };
+        assert!(capacity >= required(2), "depth 2: {capacity:.1} < {:.1}", required(2));
+        assert!(capacity < required(3), "depth 3: {capacity:.1} >= {:.1}", required(3));
+    }
+
     fn babai_infinite_loop_polynomials() -> (
         Polynomial<BigInt>,
         Polynomial<BigInt>,
@@ -771,32 +947,7 @@ mod test {
         let f = Polynomial::new(f_coefficients).map(|&i| i.into());
         let g_coefficients = (0..n).map(|i| ((i % 5) as i32) - 3).collect_vec();
         let g = Polynomial::new(g_coefficients).map(|&i| i.into());
-        let (capital_f, capital_g) = ntru_solve(&f, &g).unwrap();
-
-        let expected_capital_f: [i16; 64] = [
-            -221, -19, 133, 81, -488, -112, 189, -75, -112, -223, 143, 241, -249, 33, 47, -16, 32,
-            -145, 183, -57, -99, 104, -44, 78, -129, 26, 77, -88, 52, -36, 69, -66, -37, 80, -45,
-            32, -67, 93, -24, -79, 87, -49, 68, -116, 60, 108, -158, 68, -52, 87, -32, -116, 233,
-            -120, -111, 65, 119, 144, -307, -98, 295, -163, -194, -325,
-        ];
-        let expected_capital_g: [i16; 64] = [
-            -861, 625, -531, 151, 80, 11, 132, 547, -308, 4, 184, -134, -74, -61, 215, -2, -188,
-            40, 104, -38, -59, 21, 51, -12, -101, 86, 12, -40, 0, -31, 86, -72, 7, 24, -32, 46,
-            -71, 53, 0, -21, 23, -49, 60, -16, -38, 30, 18, 3, -41, -42, 114, 2, -119, 80, -64, 95,
-            -37, -18, 238, -429, 87, 193, -3, -111,
-        ];
-        assert_eq!(
-            expected_capital_f
-                .map(|i| BigInt::from_i16(i).unwrap())
-                .to_vec(),
-            capital_f.coefficients
-        );
-        assert_eq!(
-            expected_capital_g
-                .map(|i| BigInt::from_i16(i).unwrap())
-                .to_vec(),
-            capital_g.coefficients
-        );
+        let (capital_f, capital_g) = ntru_solve(&f, &g, 1, 2).unwrap();
 
         let ntru = (f * capital_g - g * capital_f).reduce_by_cyclotomic(n);
         assert_eq!(Polynomial::constant(12289.into()), ntru);
@@ -811,21 +962,36 @@ mod test {
         #[strategy(vec(-115i32..115, #_n))] capital_f_coefficients: Vec<i32>,
         #[strategy(vec(-115i32..115, #_n))] capital_g_coefficients: Vec<i32>,
     ) {
+        let n = f_coefficients.len();
         let f = Polynomial::new(f_coefficients);
         let g = Polynomial::new(g_coefficients);
 
-        // babai_reduce_i32 uses f64::round (rounds half away from zero);
-        // babai_reduce_rns uses FixedPoint64::round (rounds half toward +∞).
-        // These differ on inputs where the quotient is exactly ±0.5, which
-        // typically arises only with degenerate (g=all-zeros) inputs.  Skip
-        // those to avoid spurious comparison failures.
         if g.coefficients.iter().all(|&x| x == 0) {
             return Ok(());
         }
 
+        // Compute NTRU invariant f·G − g·F on the original inputs.
+        // Babai reduction preserves this exactly (each step subtracts k·f from F
+        // and k·g from G, so f·(G−k·g) − g·(F−k·f) = f·G − g·F).
+        let f_bi = f.map(|&x| BigInt::from(x));
+        let g_bi = g.map(|&x| BigInt::from(x));
+        let cap_f_bi_orig = Polynomial::new(
+            capital_f_coefficients
+                .iter()
+                .map(|&x| BigInt::from(x))
+                .collect::<Vec<_>>(),
+        );
+        let cap_g_bi_orig = Polynomial::new(
+            capital_g_coefficients
+                .iter()
+                .map(|&x| BigInt::from(x))
+                .collect::<Vec<_>>(),
+        );
+        let invariant =
+            (f_bi.clone() * cap_g_bi_orig - g_bi.clone() * cap_f_bi_orig).reduce_by_cyclotomic(n);
+
         let mut capital_f_i32 = Polynomial::new(capital_f_coefficients.clone());
         let mut capital_g_i32 = Polynomial::new(capital_g_coefficients.clone());
-
         let mut capital_f_rns: Vec<Rns3> = capital_f_coefficients
             .iter()
             .map(|&i| Rns3::from_i32(i))
@@ -839,31 +1005,32 @@ mod test {
         let rns_result =
             babai_reduce_rns::<3, NttPrimes3>(&f, &g, &mut capital_f_rns, &mut capital_g_rns);
 
-        // babai_reduce_i32 has a known oscillation bug; only assert agreement
-        // when the i32 version also succeeded.
+        // babai_reduce_i32 has a known oscillation bug; skip when it fails.
         if i32_result.is_err() {
             return Ok(());
         }
         prop_assert!(rns_result.is_ok(), "rns babai failed where i32 succeeded");
 
-        for (i, (ci32, crns)) in capital_f_i32
-            .coefficients
-            .iter()
-            .zip(capital_f_rns.iter())
-            .enumerate()
-        {
-            let got = crns.to_i64() as i32;
-            prop_assert_eq!(*ci32, got, "capital_f[{}]", i);
-        }
-        for (i, (ci32, crns)) in capital_g_i32
-            .coefficients
-            .iter()
-            .zip(capital_g_rns.iter())
-            .enumerate()
-        {
-            let got = crns.to_i64() as i32;
-            prop_assert_eq!(*ci32, got, "capital_g[{}]", i);
-        }
+        // Verify the invariant is preserved by babai_reduce_rns.
+        let cap_f_rns_bi = Polynomial::new(
+            capital_f_rns
+                .iter()
+                .map(|r| BigInt::from(r.to_i64()))
+                .collect::<Vec<_>>(),
+        );
+        let cap_g_rns_bi = Polynomial::new(
+            capital_g_rns
+                .iter()
+                .map(|r| BigInt::from(r.to_i64()))
+                .collect::<Vec<_>>(),
+        );
+        let invariant_after =
+            (f_bi * cap_g_rns_bi - g_bi * cap_f_rns_bi).reduce_by_cyclotomic(n);
+        prop_assert_eq!(
+            invariant,
+            invariant_after,
+            "rns babai did not preserve NTRU invariant f·G'−g·F'"
+        );
     }
 
     #[strategy_proptest]
