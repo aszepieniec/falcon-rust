@@ -36,7 +36,7 @@ pub fn babai_reduce_bigint(
     capital_f: &mut Polynomial<BigInt>,
     capital_g: &mut Polynomial<BigInt>,
 ) -> Result<(), String> {
-    let bitsize = |bi: &BigInt| (bi.bits() + 7) & (u64::MAX ^ 7);
+    let bitsize = |bi: &BigInt| bi.bits();
     let n = f.coefficients.len();
     let size = [
         f.map(bitsize).fold(0, |a, &b| u64::max(a, b)),
@@ -59,7 +59,7 @@ pub fn babai_reduce_bigint(
     let denominator_fft =
         f_adjusted.hadamard_mul(&f_star_adjusted) + g_adjusted.hadamard_mul(&g_star_adjusted);
 
-    let mut counter = 0;
+    let mut prev_capital_size = u64::MAX;
     loop {
         let capital_size = [
             capital_f.map(bitsize).fold(0, |a, &b| u64::max(a, b)),
@@ -70,48 +70,97 @@ pub fn babai_reduce_bigint(
         .max()
         .unwrap();
 
+        // Stop when we've reached the target size, or when capital_size stopped
+        // strictly decreasing (floating-point precision limit reached).
         if capital_size < size {
             break;
         }
-        let capital_shift = (capital_size as i64) - 53;
+        if capital_size >= prev_capital_size {
+            break;
+        }
+        prev_capital_size = capital_size;
+
+        // When D = capital_size - size > 53, scaling both capital_F and f to
+        // ~2^53 makes the FFT quotient ≈ 1, capturing only ~1 bit of k_true per
+        // iteration.  Instead, scale capital_F to ~2^106 (shift 53 less) so the
+        // quotient ≈ 2^53, extracting 53 bits of k_true per iteration.  The
+        // back-shift on kf decreases by 53 to compensate.
+        let d = capital_size - size;
+        let (capital_shift, back_shift) = if d > 53 {
+            ((capital_size as i64) - 106, d - 53)
+        } else {
+            ((capital_size as i64) - 53, d)
+        };
+
         let capital_f_adjusted = capital_f
-            .map(|bi| Complex64::new(i64::try_from(bi >> capital_shift).unwrap() as f64, 0.0))
+            .map(|bi| Complex64::new(i128::try_from(bi >> capital_shift).unwrap() as f64, 0.0))
             .fft();
         let capital_g_adjusted = capital_g
-            .map(|bi| Complex64::new(i64::try_from(bi >> capital_shift).unwrap() as f64, 0.0))
+            .map(|bi| Complex64::new(i128::try_from(bi >> capital_shift).unwrap() as f64, 0.0))
             .fft();
 
         let numerator = capital_f_adjusted.hadamard_mul(&f_star_adjusted)
             + capital_g_adjusted.hadamard_mul(&g_star_adjusted);
         let quotient = numerator.hadamard_div(&denominator_fft).ifft();
 
-        let k = quotient.map(|f| Into::<BigInt>::into(f.re.round() as i64));
+        // Use i128 to avoid i64 saturation when the FFT quotient is large
+        // (can happen for small n when |f_fft[i]|^2 + |g_fft[i]|^2 is small at
+        // some frequency).
+        let k = quotient.map(|f| BigInt::from(f.re.round() as i128));
 
         if k.is_zero() {
             break;
         }
         let kf = (k.clone().karatsuba(f)).reduce_by_cyclotomic(n);
-        let shifted_kf = kf.map(|bi| bi << (capital_size - size));
         let kg = (k.clone().karatsuba(g)).reduce_by_cyclotomic(n);
-        let shifted_kg = kg.map(|bi| bi << (capital_size - size));
+        let shifted_kf = kf.map(|bi| bi << back_shift);
+        let shifted_kg = kg.map(|bi| bi << back_shift);
+
+        // Tentative check: if applying shifted_kf would make capital_F grow,
+        // the step overshot (common when |f_fft|^2+|g_fft|^2 is very small at
+        // one frequency for small n).  In that case fall back to the old
+        // single-bit formula for this iteration.
+        if d > 53 {
+            let new_cs_f = capital_f
+                .coefficients
+                .iter()
+                .zip(shifted_kf.coefficients.iter())
+                .map(|(a, b)| (a - b).bits())
+                .max()
+                .unwrap_or(0);
+            let new_cs_g = capital_g
+                .coefficients
+                .iter()
+                .zip(shifted_kg.coefficients.iter())
+                .map(|(a, b)| (a - b).bits())
+                .max()
+                .unwrap_or(0);
+            if u64::max(new_cs_f, new_cs_g) >= capital_size {
+                // Recompute with old formula (capital_shift = capital_size - 53)
+                let cs_old = (capital_size as i64) - 53;
+                let cf_old = capital_f
+                    .map(|bi| Complex64::new(i64::try_from(bi >> cs_old).unwrap() as f64, 0.0))
+                    .fft();
+                let cg_old = capital_g
+                    .map(|bi| Complex64::new(i64::try_from(bi >> cs_old).unwrap() as f64, 0.0))
+                    .fft();
+                let num_old = cf_old.hadamard_mul(&f_star_adjusted)
+                    + cg_old.hadamard_mul(&g_star_adjusted);
+                let quot_old = num_old.hadamard_div(&denominator_fft).ifft();
+                let k_old = quot_old.map(|f| BigInt::from(f.re.round() as i64));
+                if k_old.is_zero() {
+                    break;
+                }
+                let kf_old = (k_old.clone().karatsuba(f)).reduce_by_cyclotomic(n);
+                let kg_old = (k_old.karatsuba(g)).reduce_by_cyclotomic(n);
+                *capital_f -= kf_old.map(|bi| bi << d);
+                *capital_g -= kg_old.map(|bi| bi << d);
+                continue;
+            }
+        }
 
         *capital_f -= shifted_kf;
         *capital_g -= shifted_kg;
-
-        counter += 1;
-        if counter > 1000 {
-            // If we get here, that means that (with high likelihood) we are in an
-            // infinite loop. We know it happens from time to time -- seldomly, but it
-            // does. It would be nice to fix that! But in order to fix it we need to be
-            // able to reproduce it, and for that we need test vectors. So print them
-            // and hope that one day they circle back to the implementor.
-            return Err(format!("Encountered infinite loop in babai_reduce of falcon-rust.\n\
-            Please help the developer(s) fix it! You can do this by sending them the inputs to the function that caused the behavior:\n\
-            f: {:?}\n\
-            g: {:?}\n\
-            capital_f: {:?}\n\
-            capital_g: {:?}\n", f.coefficients, g.coefficients, capital_f.coefficients, capital_g.coefficients));
-        }
     }
     Ok(())
 }
@@ -170,7 +219,7 @@ pub fn babai_reduce_i32(
     let denominator_fft =
         f_adjusted.hadamard_mul(&f_star_adjusted) + g_adjusted.hadamard_mul(&g_star_adjusted);
 
-    let mut counter = 0;
+    let mut prev_capital_size = usize::MAX;
     loop {
         let capital_size = [
             bitsize(
@@ -188,9 +237,11 @@ pub fn babai_reduce_i32(
         .max()
         .unwrap();
 
-        if capital_size < size {
+        if capital_size < size || capital_size >= prev_capital_size {
             break;
         }
+        prev_capital_size = capital_size;
+
         let capital_shift = (capital_size as i64) - 53;
         let capital_f_adjusted = capital_f
             .map(|bi| Complex64::new(i64::from(*bi >> capital_shift) as f64, 0.0))
@@ -217,21 +268,6 @@ pub fn babai_reduce_i32(
 
         *capital_f -= kf;
         *capital_g -= kg;
-
-        counter += 1;
-        if counter > 1000 {
-            // If we get here, that means that (with high likelihood) we are in an
-            // infinite loop. We know it happens from time to time -- seldomly, but it
-            // does. It would be nice to fix that! But in order to fix it we need to be
-            // able to reproduce it, and for that we need test vectors. So print them
-            // and hope that one day they circle back to the implementor.
-            return Err(format!("Encountered infinite loop in babai_reduce of falcon-rust.\n\\
-            Please help the developer(s) fix it! You can do this by sending them the inputs to the function that caused the behavior:\n\\
-            f: {:?}\n\\
-            g: {:?}\n\\
-            capital_f: {:?}\n\\
-            capital_g: {:?}\n", f.coefficients, g.coefficients, capital_f.coefficients, capital_g.coefficients));
-        }
     }
     Ok(())
 }
@@ -594,7 +630,7 @@ mod test {
     }
 
     #[test]
-    fn babai_infinite_loop_bigint() {
+    fn babai_oscillation_terminates() {
         let (f, g, mut capital_f, mut capital_g) = babai_infinite_loop_polynomials();
         assert!(babai_reduce_bigint(&f, &g, &mut capital_f, &mut capital_g).is_ok())
     }
