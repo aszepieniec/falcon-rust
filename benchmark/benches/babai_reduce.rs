@@ -2,7 +2,7 @@ use criterion::{criterion_group, criterion_main, Criterion};
 use falcon_rust::polynomial::Polynomial;
 use itertools::Itertools;
 use num::{bigint::Sign, BigInt};
-use rand::{rng, rngs::StdRng, Rng, SeedableRng};
+use rand::{rng, rngs::StdRng, RngExt, SeedableRng};
 
 const BITSIZE_SMALL: [usize; 10] = [4, 11, 24, 51, 100, 199, 399, 792, 1580, 3151];
 const BITSIZE_LARGE: [usize; 10] = [

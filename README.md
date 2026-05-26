@@ -25,6 +25,7 @@ This implementation adheres to the [specification](https://falcon-sign.info/falc
 
 ```rust
 use rand::rng;
+use rand::RngExt;
 use falcon_rust::falcon512;
 
 let mut rng = rng();

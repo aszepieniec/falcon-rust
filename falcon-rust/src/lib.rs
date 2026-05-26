@@ -28,7 +28,7 @@
 //! use falcon_rust::falcon512;
 //!
 //! use rand::rng;
-//! use rand::Rng;
+//! use rand::RngExt;
 //!
 //! let msg = b"Hello, world!";
 //! let (sk, pk) = falcon512::keygen(rng().random());
@@ -41,7 +41,7 @@
 //! use falcon_rust::falcon512;
 //!
 //! use rand::rng;
-//! use rand::Rng;
+//! use rand::RngExt;
 //!
 //! let msg = b"Hello, world!";
 //! let (sk, pk) = falcon512::keygen(rng().random());

@@ -2,7 +2,7 @@ use bit_vec::BitVec;
 use falcon_profiler::profiling;
 use itertools::Itertools;
 use num_complex::Complex;
-use rand::{rng, rngs::StdRng, Rng, RngCore, SeedableRng};
+use rand::{rng, rngs::StdRng, Rng, RngExt, SeedableRng};
 
 use crate::{
     encoding::{compress, decompress},
@@ -585,7 +585,7 @@ pub fn verify<const N: usize>(m: &[u8], sig: &Signature<N>, pk: &PublicKey<N>) -
 #[cfg(test)]
 mod test {
     use itertools::Itertools;
-    use rand::{rng, rngs::StdRng, Rng, RngCore, SeedableRng};
+    use rand::{rng, rngs::StdRng, Rng, RngExt, SeedableRng};
 
     use crate::{
         encoding::compress,

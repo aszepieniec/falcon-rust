@@ -271,7 +271,7 @@ mod test {
     use itertools::Itertools;
     use num::One;
     use num_complex::Complex64;
-    use rand::{rng, Rng, RngCore};
+    use rand::{rng, Rng, RngExt};
 
     fn diff(u: &[Complex64], v: &[Complex64]) -> f64 {
         u.iter()

@@ -1,7 +1,6 @@
 use falcon_profiler::profiling;
 use num::{One, Zero};
-use sha3::digest::{ExtendableOutput, Update, XofReader};
-use sha3::Shake256;
+use shake::{ExtendableOutput, Shake256, Update, XofReader};
 use std::default::Default;
 use std::fmt::{Debug, Display};
 use std::ops::{Add, AddAssign, Div, Mul, MulAssign, Neg, Sub, SubAssign};
@@ -669,7 +668,7 @@ mod test {
     use crate::polynomial::Polynomial;
     use itertools::Itertools;
     use rand::rng;
-    use rand::Rng;
+    use rand::RngExt;
 
     #[test]
     fn test_hash_to_point_sanity() {

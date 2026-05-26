@@ -207,7 +207,7 @@ mod test {
     use bit_vec::BitVec;
     use itertools::Itertools;
     use rand::distr::Distribution;
-    use rand::{rng, Rng};
+    use rand::{rng, RngExt};
 
     use proptest::prelude::*;
 

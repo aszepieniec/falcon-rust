@@ -4,7 +4,7 @@ use falcon_profiler::profiling;
 use itertools::Itertools;
 use num::{BigInt, FromPrimitive, One, Zero};
 use num_complex::Complex64;
-use rand::RngCore;
+use rand::Rng;
 
 use crate::{
     cyclotomic_fourier::CyclotomicFourier,
@@ -440,7 +440,7 @@ fn ntru_solve_entrypoint(
 #[profiling]
 pub fn ntru_gen(
     n: usize,
-    rng: &mut dyn RngCore,
+    rng: &mut dyn Rng,
 ) -> (
     Polynomial<i16>,
     Polynomial<i16>,
@@ -478,9 +478,9 @@ pub fn ntru_gen(
 /// Generate a polynomial of degree at most n-1 whose coefficients are
 /// distributed according to a discrete Gaussian with mu = 0 and
 /// sigma = 1.17 * sqrt(Q / (2n)).
-// fn gen_poly(n: usize, rng: &mut dyn RngCore) -> Polynomial<i16> {
+// fn gen_poly(n: usize, rng: &mut dyn Rng) -> Polynomial<i16> {
 #[profiling]
-fn gen_poly(n: usize, rng: &mut dyn RngCore) -> Polynomial<i16> {
+fn gen_poly(n: usize, rng: &mut dyn Rng) -> Polynomial<i16> {
     let mu = FixedPoint64::ZERO;
     let sigma_star = FixedPoint64::from(1.43300980528773f64);
     const NUM_COEFFICIENTS: usize = 4096;

@@ -173,7 +173,7 @@ impl CyclotomicFourier for U32Field {
 mod test {
     use itertools::Itertools;
     use num::One;
-    use rand::{rng, Rng, RngCore};
+    use rand::{rng, Rng, RngExt};
 
     use crate::{
         cyclotomic_fourier::CyclotomicFourier,

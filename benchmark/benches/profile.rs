@@ -1,4 +1,4 @@
-use rand::{rng, Rng};
+use rand::{rng, RngExt};
 
 // Run with:
 // `cargo bench --bench profile --features profiling`

@@ -1,7 +1,7 @@
 use criterion::{criterion_group, criterion_main, Criterion};
 use falcon_rust::falcon_field::Felt;
 use rand::rng;
-use rand::Rng;
+use rand::RngExt;
 
 pub fn field(c: &mut Criterion) {
     let mut rng = rng();

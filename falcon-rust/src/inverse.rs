@@ -99,7 +99,7 @@ where
 #[cfg(test)]
 mod test {
     use super::*;
-    use rand::{rng, RngCore};
+    use rand::{rng, Rng};
 
     #[test]
     fn test_complex_inverse() {

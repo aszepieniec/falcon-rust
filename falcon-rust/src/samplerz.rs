@@ -1,4 +1,4 @@
-use rand::{Rng, RngCore};
+use rand::{Rng, RngExt};
 
 use crate::fixed_point::FixedPoint64;
 
@@ -91,7 +91,7 @@ pub(crate) fn sampler_z(
     mu: FixedPoint64,
     sigma: FixedPoint64,
     sigma_min: FixedPoint64,
-    rng: &mut dyn RngCore,
+    rng: &mut dyn Rng,
 ) -> i16 {
     let sigma_max = FixedPoint64::from(1.8205f64);
     let inv_2sigma_max_sq =
@@ -117,9 +117,10 @@ pub(crate) fn sampler_z(
 
 #[cfg(test)]
 mod test {
+    use core::convert::Infallible;
     use itertools::Itertools;
-    use rand::Rng;
-    use rand::{rng, RngCore};
+    use rand::rand_core::TryRng;
+    use rand::{rng, RngExt};
     use std::{thread::sleep, time::Duration};
 
     use crate::fixed_point::FixedPoint64;
@@ -154,19 +155,22 @@ mod test {
         }
     }
 
-    impl RngCore for UnsafeBufferRng {
-        fn next_u32(&mut self) -> u32 {
-            u32::from_le_bytes([self.next(), 0, 0, 0])
+    impl TryRng for UnsafeBufferRng {
+        type Error = Infallible;
+
+        fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
+            Ok(u32::from_le_bytes([self.next(), 0, 0, 0]))
         }
 
-        fn next_u64(&mut self) -> u64 {
-            u64::from_le_bytes([self.next(), 0, 0, 0, 0, 0, 0, 0])
+        fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
+            Ok(u64::from_le_bytes([self.next(), 0, 0, 0, 0, 0, 0, 0]))
         }
 
-        fn fill_bytes(&mut self, dest: &mut [u8]) {
+        fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), Self::Error> {
             for d in dest.iter_mut() {
                 *d = self.next();
             }
+            Ok(())
         }
     }
 

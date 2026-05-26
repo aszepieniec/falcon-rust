@@ -1,7 +1,7 @@
 use falcon_profiler::profiling;
 use num::{One, Zero};
 use num_complex::Complex;
-use rand::RngCore;
+use rand::Rng;
 
 use crate::{
     falcon, fast_fft::FastFft, fixed_point::{FixedPoint64, FixedPoint128}, polynomial::Polynomial,
@@ -153,7 +153,7 @@ pub(crate) fn ffsampling(
     t: &(Polynomial<ComplexFP>, Polynomial<ComplexFP>),
     tree: &LdlTree,
     parameters: &falcon::FalconParameters,
-    rng: &mut dyn RngCore,
+    rng: &mut dyn Rng,
 ) -> (Polynomial<ComplexFP>, Polynomial<ComplexFP>) {
     match tree {
         LdlTree::Branch(ell, left, right) => {
@@ -196,7 +196,7 @@ mod test {
     use itertools::Itertools;
     use num::Zero;
     use num_complex::Complex;
-    use rand::{rng, Rng};
+    use rand::{rng, RngExt};
 
     use crate::{fixed_point::FixedPoint64, polynomial::Polynomial};
 

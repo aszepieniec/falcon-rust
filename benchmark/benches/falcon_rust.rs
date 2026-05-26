@@ -5,8 +5,7 @@ use std::io::{Read, Write};
 
 use criterion::{criterion_group, criterion_main, Criterion};
 use itertools::Itertools;
-use rand::rngs::{OsRng, StdRng};
-use rand::{rng, Rng, SeedableRng};
+use rand::{rng, RngExt};
 
 const NUM_KEYS: usize = 10;
 const SIGS_PER_KEY: usize = 10;
@@ -329,7 +328,7 @@ fn falcon_cffi_operation(c: &mut Criterion) {
 
 fn falcon_fndsa_operation(c: &mut Criterion) {
     let mut kg = fn_dsa::KeyPairGeneratorStandard::default();
-    let mut rng = StdRng::from_os_rng();
+    let mut rng = rng();
 
     let mut keys512 = (0..NUM_KEYS)
         .map(|_| {
