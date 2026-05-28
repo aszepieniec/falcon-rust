@@ -1,3 +1,7 @@
+//! Profiling for [falcon-rust](https://crates.io/crates/falcon-rust).
+//!
+//! Development (and benchmarking) dependency. Not used in production.
+
 use proc_macro::TokenStream;
 use quote::quote;
 use syn::parse_macro_input;

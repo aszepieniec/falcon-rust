@@ -21,7 +21,7 @@
 //!
 //! # Usage
 //!
-//! First, `falcon-rust = "0.1.2"` to your `Cargo.toml` file.
+//! First, `falcon-rust = "0.1.3"` to your `Cargo.toml` file.
 //!
 //! Then to use the interface:
 //! ```
@@ -57,13 +57,13 @@
 
 pub(crate) mod cyclotomic_fourier;
 pub(crate) mod encoding;
-pub(crate) mod fixed_point;
 pub(crate) mod falcon;
 pub mod falcon1024;
 pub mod falcon512;
 pub mod falcon_field;
 pub(crate) mod fast_fft;
 pub(crate) mod ffsampling;
+pub(crate) mod fixed_point;
 pub(crate) mod inverse;
 pub mod math; // pub for benching
 pub mod polynomial; // pub for benching
