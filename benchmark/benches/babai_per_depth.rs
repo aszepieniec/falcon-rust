@@ -97,6 +97,19 @@ pub fn babai_per_depth(c: &mut Criterion) {
         );
     });
 
+    // RNS-bigint variant at depth 3 (K=8, n=128): multi-word (BigInt) capital
+    // with the k·f product evaluated via the NTT.  Uses the same BigInt inputs
+    // as bigint/d=3, so the two are directly comparable.
+    group.bench_function("rns-bigint-k8/d=3", |b| {
+        b.iter_batched(
+            || generate_depth_inputs_bigint(3, &mut rng),
+            |(f, g, mut cf, mut cg)| {
+                let _ = falcon_rust::math::babai_reduce_rns_bigint_depth3(&f, &g, &mut cf, &mut cg);
+            },
+            BatchSize::SmallInput,
+        );
+    });
+
     group.finish();
 }
 

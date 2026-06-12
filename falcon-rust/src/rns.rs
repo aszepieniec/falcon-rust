@@ -2,7 +2,7 @@ use std::fmt;
 use std::marker::PhantomData;
 use std::ops::{Add, AddAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 
-use num::{One, Zero};
+use num::{BigInt, One, ToPrimitive, Zero};
 
 use crate::fp_field::{montyred, negqinv_modr, r_sq_modq, FpField};
 
@@ -254,6 +254,46 @@ impl<const N: usize, P: PrimeList<N>> Rns<N, P> {
         } else {
             result as i64
         }
+    }
+
+    /// Construct from a signed [`BigInt`], reducing modulo each prime.
+    ///
+    /// Unlike [`from_i128`](Self::from_i128) this has no magnitude ceiling, so
+    /// it is used when the represented values exceed 127 bits (recursion depth
+    /// ≥ 3, where the modulus spans more than 5 primes).
+    pub(crate) fn from_bigint(x: &BigInt) -> Self {
+        let mut residues = [0u32; N];
+        for i in 0..N {
+            let p = P::PRIMES[i];
+            // Centered remainder in [0, p): (x mod p) with the sign fixed up.
+            let mut r = x % &BigInt::from(p);
+            if r.sign() == num::bigint::Sign::Minus {
+                r += BigInt::from(p);
+            }
+            residues[i] = Self::to_mont_at(r.to_u32().unwrap(), i);
+        }
+        Rns { residues, _phantom: PhantomData }
+    }
+
+    /// Reconstruct as a signed [`BigInt`] via Garner's algorithm.
+    ///
+    /// Exact for any number of primes (the accumulator is a [`BigInt`]), and
+    /// returns the symmetric representative in `(-M/2, M/2]`.  This is the
+    /// reconstruction used when the value can exceed i128, i.e. for the
+    /// multi-word capital coefficients at recursion depth ≥ 3.
+    pub(crate) fn to_bigint(&self) -> BigInt {
+        let a = self.to_garner();
+        let mut result = BigInt::zero();
+        let mut base = BigInt::one();
+        for i in 0..N {
+            result += &base * BigInt::from(a[i]);
+            base *= BigInt::from(P::PRIMES[i]);
+        }
+        // base == M; values in (M/2, M) represent negatives.
+        if result > (&base >> 1) {
+            result -= &base;
+        }
+        result
     }
 
     /// Reconstruct as a signed `i128` via Garner's algorithm.
@@ -580,6 +620,29 @@ impl NttPrimeList<4> for NttPrimes24Bit4 {
         FpField::<8_427_521>::primitive_nth_root_of_unity(2048).value(),
         FpField::<8_441_857>::primitive_nth_root_of_unity(2048).value(),
         FpField::<8_452_097>::primitive_nth_root_of_unity(2048).value(),
+    ];
+}
+
+/// Eight 24-bit NTT-friendly primes (p ≡ 1 mod 2048, 2²³ ≤ p < 2²⁴).
+/// Signed capacity ≈ 183 bits; covers the RNS-NTT `k·f` product in
+/// `babai_reduce_rns_bigint` at recursion depths 3–4.  The first four primes
+/// coincide with [`NttPrimes24Bit4`] so the lists agree where they overlap.
+pub(crate) struct NttPrimes24Bit8;
+impl PrimeList<8> for NttPrimes24Bit8 {
+    const PRIMES: [u32; 8] = [
+        8_404_993, 8_427_521, 8_441_857, 8_452_097, 8_466_433, 8_513_537, 8_519_681, 8_527_873,
+    ];
+}
+impl NttPrimeList<8> for NttPrimes24Bit8 {
+    const ROOTS_OF_UNITY_2048: [u32; 8] = [
+        FpField::<8_404_993>::primitive_nth_root_of_unity(2048).value(),
+        FpField::<8_427_521>::primitive_nth_root_of_unity(2048).value(),
+        FpField::<8_441_857>::primitive_nth_root_of_unity(2048).value(),
+        FpField::<8_452_097>::primitive_nth_root_of_unity(2048).value(),
+        FpField::<8_466_433>::primitive_nth_root_of_unity(2048).value(),
+        FpField::<8_513_537>::primitive_nth_root_of_unity(2048).value(),
+        FpField::<8_519_681>::primitive_nth_root_of_unity(2048).value(),
+        FpField::<8_527_873>::primitive_nth_root_of_unity(2048).value(),
     ];
 }
 
