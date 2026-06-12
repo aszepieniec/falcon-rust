@@ -110,6 +110,18 @@ pub fn babai_per_depth(c: &mut Criterion) {
         );
     });
 
+    // Packed-limb variant at depth 3 (K=8, n=128): fixed-width capital, NTT
+    // multiply, word-level CRT.  Same inputs as bigint/d=3 and rns-bigint-k8/d=3.
+    group.bench_function("rns-packed-k8/d=3", |b| {
+        b.iter_batched(
+            || generate_depth_inputs_bigint(3, &mut rng),
+            |(f, g, mut cf, mut cg)| {
+                let _ = falcon_rust::math::babai_reduce_rns_packed_depth3(&f, &g, &mut cf, &mut cg);
+            },
+            BatchSize::SmallInput,
+        );
+    });
+
     group.finish();
 }
 

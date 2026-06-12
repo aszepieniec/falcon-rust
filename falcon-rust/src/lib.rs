@@ -61,6 +61,7 @@ pub(crate) mod encoding;
 pub(crate) mod falcon;
 pub(crate) mod fixed_point;
 pub(crate) mod fp_field;
+pub(crate) mod packed;
 pub mod falcon1024;
 pub mod falcon512;
 pub mod falcon_field;
