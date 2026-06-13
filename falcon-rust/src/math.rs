@@ -15,8 +15,8 @@ use crate::{
     packed::Packed,
     polynomial::Polynomial,
     rns::{
-        intt_inplace, intt_inplace_cached, ntt_inplace, ntt_inplace_cached, NttPrimeList,
-        NttPrimes24Bit2, NttPrimes24Bit4, NttPrimes24Bit8, NttTables, Rns,
+        intt_inplace_cached, ntt_inplace_cached, NttPrimeList, NttPrimes24Bit2, NttPrimes24Bit4,
+        NttPrimes24Bit8, NttTables, Rns,
     },
     samplerz::sampler_z,
     U32Field,
@@ -488,11 +488,15 @@ pub(crate) fn babai_reduce_rns<const K: usize, P: NttPrimeList<K>>(
 ) -> Result<(), String> {
     let n = f.coefficients.len();
 
+    // Precompute the per-prime twiddle tables once; reused by every transform
+    // (the one-off f/g forward NTTs and the per-iteration k transform).
+    let tables = NttTables::<K>::new::<P>(n);
+
     // Precompute RNS NTT of f,g for polynomial multiplication.
     let mut f_rns_ntt: Vec<Rns<K, P>> = f.coefficients.iter().map(|&i| Rns::from_i32(i)).collect();
     let mut g_rns_ntt: Vec<Rns<K, P>> = g.coefficients.iter().map(|&i| Rns::from_i32(i)).collect();
-    ntt_inplace::<K, P>(&mut f_rns_ntt);
-    ntt_inplace::<K, P>(&mut g_rns_ntt);
+    ntt_inplace_cached::<K, P>(&mut f_rns_ntt, &tables);
+    ntt_inplace_cached::<K, P>(&mut g_rns_ntt, &tables);
 
     // Precompute Complex64 FFT of f,g. f,g are i32, so values always fit in
     // f64 with no shifting required.
@@ -581,7 +585,7 @@ pub(crate) fn babai_reduce_rns<const K: usize, P: NttPrimeList<K>>(
             .iter()
             .map(|&k_adj| Rns::<K, P>::from_i128((k_adj as i128) << capital_shift))
             .collect();
-        ntt_inplace::<K, P>(&mut k_rns_ntt);
+        ntt_inplace_cached::<K, P>(&mut k_rns_ntt, &tables);
 
         let mut kf: Vec<Rns<K, P>> = k_rns_ntt
             .iter()
@@ -593,8 +597,8 @@ pub(crate) fn babai_reduce_rns<const K: usize, P: NttPrimeList<K>>(
             .zip(g_rns_ntt.iter())
             .map(|(&a, &b)| a * b)
             .collect();
-        intt_inplace::<K, P>(&mut kf);
-        intt_inplace::<K, P>(&mut kg);
+        intt_inplace_cached::<K, P>(&mut kf, &tables);
+        intt_inplace_cached::<K, P>(&mut kg, &tables);
 
         for i in 0..n {
             capital_f[i] -= kf[i];
