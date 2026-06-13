@@ -193,55 +193,106 @@ pub fn babai_reduce_bigint(
     Ok(())
 }
 
-/// Negacyclic product `k · h mod (X^n + 1)`, computed in RNS via the NTT.
-///
-/// `h_ntt` is the precomputed forward NTT of `h` (so f and g are each
-/// transformed only once, outside the reduction loop).  The result is
-/// reconstructed to `BigInt`, so the prime set `P` must be large enough that
-/// the modulus M exceeds twice the largest product coefficient; otherwise the
-/// centered CRT reconstruction wraps.  This is the multi-word analogue of the
-/// `karatsuba` + `reduce_by_cyclotomic` step in [`babai_reduce_bigint`].
-fn rns_negacyclic_mul<const K: usize, P: NttPrimeList<K>>(
-    k: &Polynomial<BigInt>,
-    h_ntt: &[Rns<K, P>],
-    tables: &NttTables<K>,
-) -> Polynomial<BigInt> {
-    let mut k_ntt: Vec<Rns<K, P>> =
-        k.coefficients.iter().map(Rns::<K, P>::from_bigint).collect();
-    ntt_inplace_cached::<K, P>(&mut k_ntt, tables);
-    let mut prod: Vec<Rns<K, P>> =
-        k_ntt.iter().zip(h_ntt.iter()).map(|(&a, &b)| a * b).collect();
-    intt_inplace_cached::<K, P>(&mut prod, tables);
-    Polynomial::new(prod.iter().map(|r| r.to_bigint()).collect())
+/// Capital-coefficient representation for the generic RNS Babai reduction
+/// [`babai_reduce_rns_generic`].  Implemented for `BigInt` (uncapped — the
+/// `babai_reduce_rns_bigint` path) and [`Packed<L>`] (fixed-width limbs — the
+/// faster `babai_reduce_rns_packed` path).  The reference `babai_reduce_bigint`
+/// (which multiplies via karatsuba, not the NTT) is intentionally kept separate
+/// as the correctness oracle.
+trait ReductionCapital: Clone {
+    fn from_bigint(x: &BigInt) -> Self;
+    fn to_bigint(&self) -> BigInt;
+    /// Bit-length of the absolute value (matches `BigInt::bits`).
+    fn bit_length(&self) -> u64;
+    /// Arithmetic right shift by `shift`, low 128 bits as `i128` — the windowed
+    /// top-word input to the `f64` k-estimation FFT.
+    fn shr_window(&self, shift: u32) -> i128;
+    /// Left shift by `bits` (multiply by `2^bits`).
+    fn shl(&self, bits: u32) -> Self;
+    /// `self - other`.
+    fn sub(&self, other: &Self) -> Self;
+    /// Reconstruct one `k·h` product coefficient from its RNS residues.
+    fn from_rns<const K: usize, P: NttPrimeList<K>>(r: &Rns<K, P>) -> Self;
 }
 
-/// Babai reduction with multi-word (`BigInt`) capital coefficients, but with
-/// the `k·f`/`k·g` products evaluated in RNS via the NTT instead of
-/// `BigInt` karatsuba.
+impl ReductionCapital for BigInt {
+    fn from_bigint(x: &BigInt) -> Self {
+        x.clone()
+    }
+    fn to_bigint(&self) -> BigInt {
+        self.clone()
+    }
+    fn bit_length(&self) -> u64 {
+        self.bits()
+    }
+    fn shr_window(&self, shift: u32) -> i128 {
+        i128::try_from(self >> (shift as i64)).unwrap()
+    }
+    fn shl(&self, bits: u32) -> Self {
+        self << (bits as u64)
+    }
+    fn sub(&self, other: &Self) -> Self {
+        self - other
+    }
+    fn from_rns<const K: usize, P: NttPrimeList<K>>(r: &Rns<K, P>) -> Self {
+        r.to_bigint()
+    }
+}
+
+impl<const L: usize> ReductionCapital for Packed<L> {
+    fn from_bigint(x: &BigInt) -> Self {
+        Packed::from_bigint(x)
+    }
+    fn to_bigint(&self) -> BigInt {
+        Packed::to_bigint(self)
+    }
+    fn bit_length(&self) -> u64 {
+        Packed::bit_length(self)
+    }
+    fn shr_window(&self, shift: u32) -> i128 {
+        self.shr_to_i128(shift)
+    }
+    fn shl(&self, bits: u32) -> Self {
+        Packed::shl(self, bits)
+    }
+    fn sub(&self, other: &Self) -> Self {
+        Packed::sub(self, other)
+    }
+    fn from_rns<const K: usize, P: NttPrimeList<K>>(r: &Rns<K, P>) -> Self {
+        Packed::from_rns(r)
+    }
+}
+
+/// Babai reduction where the capital coefficients live in `C` (a positional
+/// multi-word representation) and the `k·f`/`k·g` products are evaluated in RNS
+/// via the NTT instead of `BigInt` karatsuba.
 ///
-/// This is the prototype of the fn-dsa-style split: the capital coefficients
-/// stay in a positional (`BigInt`) representation so the reduction coefficient
-/// `k` can be estimated from their top words (the `f64` FFT windowing, shared
-/// verbatim with [`babai_reduce_bigint`]) and so they are not capped at 127
-/// bits — while the one expensive operation, the polynomial product, runs in
-/// the multiplication-friendly RNS/NTT domain (`f`, `g`, `k` only).
-///
-/// Unlike [`babai_reduce_rns`] (which stores capital in RNS and is therefore
-/// limited to recursion depths 1–2 by the i128 ceiling), this works at any
-/// depth for which `P` holds enough primes to represent the `k·f` product.
-pub(crate) fn babai_reduce_rns_bigint<const K: usize, P: NttPrimeList<K>>(
+/// This is the fn-dsa-style split, generic over the capital representation:
+/// the capital stays positional so the reduction coefficient `k` can be
+/// estimated from its top words (the `f64` FFT windowing, shared verbatim with
+/// [`babai_reduce_bigint`]) and is not capped at 127 bits, while the one
+/// expensive operation — the polynomial product — runs in the RNS/NTT domain
+/// (`f`, `g`, `k` only).  `k` is transformed once per iteration and reused for
+/// both products.  Unlike [`babai_reduce_rns`] (capital in RNS, i128-capped to
+/// depths 1–2), this works at any depth for which `P` covers the `k·f` product.
+fn babai_reduce_rns_generic<C, const K: usize, P>(
     f: &Polynomial<BigInt>,
     g: &Polynomial<BigInt>,
     capital_f: &mut Polynomial<BigInt>,
     capital_g: &mut Polynomial<BigInt>,
-) -> Result<(), String> {
+) -> Result<(), String>
+where
+    C: ReductionCapital,
+    P: NttPrimeList<K>,
+{
     let bitsize = |bi: &BigInt| bi.bits();
     let n = f.coefficients.len();
 
     // Precompute the per-prime twiddle tables once; reused by every transform.
     let tables = NttTables::<K>::new::<P>(n);
 
-    // Precompute the forward NTT of f and g once; reused every iteration.
+    // Forward NTT of f and g once (reused every iteration).  `from_bigint`
+    // works at any depth, including where the coefficients exceed i128.
     let mut f_ntt: Vec<Rns<K, P>> =
         f.coefficients.iter().map(Rns::<K, P>::from_bigint).collect();
     let mut g_ntt: Vec<Rns<K, P>> =
@@ -257,6 +308,21 @@ pub(crate) fn babai_reduce_rns_bigint<const K: usize, P: NttPrimeList<K>>(
     .into_iter()
     .max()
     .unwrap();
+
+    // Guard: the modulus must cover the `k·f` product.  With `k` windowed to
+    // ~53 bits the product is `≈ max|f,g| + 54` bits (the measured model — see
+    // `product_size_model_matches_measurements`); a too-small prime list `P`
+    // for this depth would silently wrap the centered CRT, so catch it here in
+    // debug builds instead of corrupting the reduction in release.
+    let modulus_signed_bits: f64 =
+        P::PRIMES.iter().map(|&p| (p as f64).log2()).sum::<f64>() - 1.0;
+    debug_assert!(
+        modulus_signed_bits >= (size + 54) as f64,
+        "RNS prime list too small: modulus {modulus_signed_bits:.0} signed bits < \
+         product ~{} bits (max|f,g|={size})",
+        size + 54
+    );
+
     let shift = (size as i64) - 53;
     let f_adjusted = f
         .map(|bi| Complex64::new(i64::try_from(bi >> shift).unwrap() as f64, 0.0))
@@ -270,95 +336,118 @@ pub(crate) fn babai_reduce_rns_bigint<const K: usize, P: NttPrimeList<K>>(
     let denominator_fft =
         f_adjusted.hadamard_mul(&f_star_adjusted) + g_adjusted.hadamard_mul(&g_star_adjusted);
 
+    // Capital coefficients move into the positional representation `C` for the
+    // duration of the loop; `BigInt` is touched only at entry and exit.
+    let mut cf: Vec<C> = capital_f.coefficients.iter().map(C::from_bigint).collect();
+    let mut cg: Vec<C> = capital_g.coefficients.iter().map(C::from_bigint).collect();
+
+    // Pointwise-multiply the (already forward-transformed) `k_ntt` by `h_ntt`,
+    // inverse-transform, and reconstruct each coefficient into `C`.
+    let mul = |k_ntt: &[Rns<K, P>], h_ntt: &[Rns<K, P>]| -> Vec<C> {
+        let mut prod: Vec<Rns<K, P>> =
+            k_ntt.iter().zip(h_ntt.iter()).map(|(&a, &b)| a * b).collect();
+        intt_inplace_cached::<K, P>(&mut prod, &tables);
+        prod.iter().map(C::from_rns).collect()
+    };
+    // Windowed top-word read of a capital vector, transformed for k-estimation.
+    let window = |cs: &[C], sh: u32| -> Polynomial<Complex64> {
+        Polynomial::new(
+            cs.iter()
+                .map(|c| Complex64::new(c.shr_window(sh) as f64, 0.0))
+                .collect::<Vec<_>>(),
+        )
+        .fft()
+    };
+    let cap_size = |cf: &[C], cg: &[C]| -> u64 {
+        cf.iter().chain(cg.iter()).map(C::bit_length).fold(53, u64::max)
+    };
+
     let mut prev_capital_size = u64::MAX;
     loop {
-        let capital_size = [
-            capital_f.map(bitsize).fold(0, |a, &b| u64::max(a, b)),
-            capital_g.map(bitsize).fold(0, |a, &b| u64::max(a, b)),
-            53,
-        ]
-        .into_iter()
-        .max()
-        .unwrap();
-
-        if capital_size < size {
-            break;
-        }
-        if capital_size >= prev_capital_size {
+        let capital_size = cap_size(&cf, &cg);
+        if capital_size < size || capital_size >= prev_capital_size {
             break;
         }
         prev_capital_size = capital_size;
 
         let d = capital_size - size;
         let (capital_shift, back_shift) = if d > 53 {
-            ((capital_size as i64) - 106, d - 53)
+            ((capital_size - 106) as u32, (d - 53) as u32)
         } else {
-            ((capital_size as i64) - 53, d)
+            ((capital_size - 53) as u32, d as u32)
         };
 
-        let capital_f_adjusted = capital_f
-            .map(|bi| Complex64::new(i128::try_from(bi >> capital_shift).unwrap() as f64, 0.0))
-            .fft();
-        let capital_g_adjusted = capital_g
-            .map(|bi| Complex64::new(i128::try_from(bi >> capital_shift).unwrap() as f64, 0.0))
-            .fft();
-
-        let numerator = capital_f_adjusted.hadamard_mul(&f_star_adjusted)
-            + capital_g_adjusted.hadamard_mul(&g_star_adjusted);
+        let numerator = window(&cf, capital_shift).hadamard_mul(&f_star_adjusted)
+            + window(&cg, capital_shift).hadamard_mul(&g_star_adjusted);
         let quotient = numerator.hadamard_div(&denominator_fft).ifft();
 
-        let k = quotient.map(|f| BigInt::from(f.re.round() as i128));
-
-        if k.is_zero() {
+        let k: Vec<i128> = quotient.coefficients.iter().map(|c| c.re.round() as i128).collect();
+        if k.iter().all(|&x| x == 0) {
             break;
         }
-        let kf = rns_negacyclic_mul::<K, P>(&k, &f_ntt, &tables);
-        let kg = rns_negacyclic_mul::<K, P>(&k, &g_ntt, &tables);
-        let shifted_kf = kf.map(|bi| bi << back_shift);
-        let shifted_kg = kg.map(|bi| bi << back_shift);
+
+        // Transform `k` once, reuse for both the k·f and k·g products.
+        let mut k_ntt: Vec<Rns<K, P>> = k.iter().map(|&v| Rns::from_i128(v)).collect();
+        ntt_inplace_cached::<K, P>(&mut k_ntt, &tables);
+        let kf = mul(&k_ntt, &f_ntt);
+        let kg = mul(&k_ntt, &g_ntt);
+        let shifted_kf: Vec<C> = kf.iter().map(|p| p.shl(back_shift)).collect();
+        let shifted_kg: Vec<C> = kg.iter().map(|p| p.shl(back_shift)).collect();
 
         if d > 53 {
-            let new_cs_f = capital_f
-                .coefficients
-                .iter()
-                .zip(shifted_kf.coefficients.iter())
-                .map(|(a, b)| (a - b).bits())
-                .max()
-                .unwrap_or(0);
-            let new_cs_g = capital_g
-                .coefficients
-                .iter()
-                .zip(shifted_kg.coefficients.iter())
-                .map(|(a, b)| (a - b).bits())
-                .max()
-                .unwrap_or(0);
+            let new_cs_f =
+                cf.iter().zip(shifted_kf.iter()).map(|(a, b)| a.sub(b).bit_length()).fold(0, u64::max);
+            let new_cs_g =
+                cg.iter().zip(shifted_kg.iter()).map(|(a, b)| a.sub(b).bit_length()).fold(0, u64::max);
             if u64::max(new_cs_f, new_cs_g) >= capital_size {
-                let cs_old = (capital_size as i64) - 53;
-                let cf_old = capital_f
-                    .map(|bi| Complex64::new(i64::try_from(bi >> cs_old).unwrap() as f64, 0.0))
-                    .fft();
-                let cg_old = capital_g
-                    .map(|bi| Complex64::new(i64::try_from(bi >> cs_old).unwrap() as f64, 0.0))
-                    .fft();
-                let num_old = cf_old.hadamard_mul(&f_star_adjusted)
-                    + cg_old.hadamard_mul(&g_star_adjusted);
+                let cs_old = (capital_size - 53) as u32;
+                let num_old = window(&cf, cs_old).hadamard_mul(&f_star_adjusted)
+                    + window(&cg, cs_old).hadamard_mul(&g_star_adjusted);
                 let quot_old = num_old.hadamard_div(&denominator_fft).ifft();
-                let k_old = quot_old.map(|f| BigInt::from(f.re.round() as i64));
-                if k_old.is_zero() {
+                let k_old: Vec<i128> =
+                    quot_old.coefficients.iter().map(|c| c.re.round() as i128).collect();
+                if k_old.iter().all(|&x| x == 0) {
                     break;
                 }
-                let kf_old = rns_negacyclic_mul::<K, P>(&k_old, &f_ntt, &tables);
-                let kg_old = rns_negacyclic_mul::<K, P>(&k_old, &g_ntt, &tables);
-                *capital_f -= kf_old.map(|bi| bi << d);
-                *capital_g -= kg_old.map(|bi| bi << d);
+                let mut k_old_ntt: Vec<Rns<K, P>> =
+                    k_old.iter().map(|&v| Rns::from_i128(v)).collect();
+                ntt_inplace_cached::<K, P>(&mut k_old_ntt, &tables);
+                let kf_old = mul(&k_old_ntt, &f_ntt);
+                let kg_old = mul(&k_old_ntt, &g_ntt);
+                for i in 0..n {
+                    cf[i] = cf[i].sub(&kf_old[i].shl(d as u32));
+                    cg[i] = cg[i].sub(&kg_old[i].shl(d as u32));
+                }
                 continue;
             }
         }
 
-        *capital_f -= shifted_kf;
-        *capital_g -= shifted_kg;
+        for i in 0..n {
+            cf[i] = cf[i].sub(&shifted_kf[i]);
+            cg[i] = cg[i].sub(&shifted_kg[i]);
+        }
+    }
+
+    // Move the reduced capital coefficients back out to BigInt.
+    for (c, p) in capital_f.coefficients.iter_mut().zip(cf.iter()) {
+        *c = p.to_bigint();
+    }
+    for (c, p) in capital_g.coefficients.iter_mut().zip(cg.iter()) {
+        *c = p.to_bigint();
     }
     Ok(())
+}
+
+/// Babai reduction with `BigInt` (uncapped) capital and an RNS/NTT `k·f`
+/// product.  Thin wrapper over [`babai_reduce_rns_generic`]; see it for the
+/// algorithm.
+pub(crate) fn babai_reduce_rns_bigint<const K: usize, P: NttPrimeList<K>>(
+    f: &Polynomial<BigInt>,
+    g: &Polynomial<BigInt>,
+    capital_f: &mut Polynomial<BigInt>,
+    capital_g: &mut Polynomial<BigInt>,
+) -> Result<(), String> {
+    babai_reduce_rns_generic::<BigInt, K, P>(f, g, capital_f, capital_g)
 }
 
 /// Reduce the vector (F,G) relative to (f,g). This method follows the python
@@ -721,11 +810,11 @@ pub fn babai_reduce_rns_depth2(
     Ok(())
 }
 
-/// Babai reduction with **packed** fixed-width capital coefficients.
+/// Babai reduction with **packed** fixed-width (`L`-limb) capital coefficients.
 ///
-/// Same algorithm as [`babai_reduce_rns_bigint`], but the capital coefficients
-/// live in [`Packed`] (256-bit two's complement) instead of [`BigInt`].  The
-/// per-iteration hot path is now allocation-free and word-level:
+/// [`babai_reduce_rns_generic`] specialized to [`Packed<L>`]: the capital lives
+/// in `64·L`-bit two's-complement limbs instead of `BigInt`, so the
+/// per-iteration hot path is allocation-free and word-level:
 ///
 /// * `capital_size` is a limb scan ([`Packed::bit_length`]);
 /// * the FFT input is a top-word read ([`Packed::shr_to_i128`]);
@@ -735,182 +824,15 @@ pub fn babai_reduce_rns_depth2(
 ///   CRT ([`Packed::from_rns`]), then shifted and subtracted in place.
 ///
 /// `BigInt` is touched only once at entry and once at exit.  This is the
-/// representation fn-dsa uses (base 2^31 there, base 2^64 here) and the point
-/// of the prototype: see whether removing the conversion overhead lets the
-/// NTT multiply actually beat `BigInt` karatsuba at depth ≥ 3.
+/// representation fn-dsa uses (base 2^31 there, base 2^64 here); it lets the
+/// NTT multiply beat `BigInt` karatsuba at depth 3 (see the per-depth bench).
 pub(crate) fn babai_reduce_rns_packed<const LP: usize, const K: usize, P: NttPrimeList<K>>(
     f: &Polynomial<BigInt>,
     g: &Polynomial<BigInt>,
     capital_f: &mut Polynomial<BigInt>,
     capital_g: &mut Polynomial<BigInt>,
 ) -> Result<(), String> {
-    let bitsize = |bi: &BigInt| bi.bits();
-    let n = f.coefficients.len();
-
-    // Precompute the per-prime twiddle tables once; every transform below (the
-    // one-off f/g forward NTTs and the per-iteration k transforms) reuses them
-    // instead of rebuilding the O(n) root-power arrays on each call.
-    let tables = NttTables::<K>::new::<P>(n);
-
-    // Precompute the forward NTT of f and g once (their coefficients fit i128).
-    let f_i128: Vec<i128> = f.coefficients.iter().map(|c| i128::try_from(c).unwrap()).collect();
-    let g_i128: Vec<i128> = g.coefficients.iter().map(|c| i128::try_from(c).unwrap()).collect();
-    let mut f_ntt: Vec<Rns<K, P>> = f_i128.iter().map(|&v| Rns::from_i128(v)).collect();
-    let mut g_ntt: Vec<Rns<K, P>> = g_i128.iter().map(|&v| Rns::from_i128(v)).collect();
-    ntt_inplace_cached::<K, P>(&mut f_ntt, &tables);
-    ntt_inplace_cached::<K, P>(&mut g_ntt, &tables);
-
-    let size = [
-        f.map(bitsize).fold(0, |a, &b| u64::max(a, b)),
-        g.map(bitsize).fold(0, |a, &b| u64::max(a, b)),
-        53,
-    ]
-    .into_iter()
-    .max()
-    .unwrap();
-    let shift = (size as i64) - 53;
-    let f_adjusted = f
-        .map(|bi| Complex64::new(i64::try_from(bi >> shift).unwrap() as f64, 0.0))
-        .fft();
-    let g_adjusted = g
-        .map(|bi| Complex64::new(i64::try_from(bi >> shift).unwrap() as f64, 0.0))
-        .fft();
-
-    let f_star_adjusted = f_adjusted.map(|c| c.conj());
-    let g_star_adjusted = g_adjusted.map(|c| c.conj());
-    let denominator_fft =
-        f_adjusted.hadamard_mul(&f_star_adjusted) + g_adjusted.hadamard_mul(&g_star_adjusted);
-
-    // Capital coefficients move into packed limbs for the duration of the loop.
-    let mut cf: Vec<Packed<LP>> =
-        capital_f.coefficients.iter().map(Packed::<LP>::from_bigint).collect();
-    let mut cg: Vec<Packed<LP>> =
-        capital_g.coefficients.iter().map(Packed::<LP>::from_bigint).collect();
-
-    // Reconstruct the RNS product of (already-transformed) `k_ntt` with the
-    // precomputed `h_ntt`, returning packed limbs (one word-level CRT per
-    // coefficient, no allocation).  `k_ntt` is forward-transformed once per
-    // iteration by the caller and reused for both the f and g products.
-    let product = |k_ntt: &[Rns<K, P>], h_ntt: &[Rns<K, P>]| -> Vec<Packed<LP>> {
-        let mut prod: Vec<Rns<K, P>> =
-            k_ntt.iter().zip(h_ntt.iter()).map(|(&a, &b)| a * b).collect();
-        intt_inplace_cached::<K, P>(&mut prod, &tables);
-        prod.iter().map(Packed::<LP>::from_rns).collect()
-    };
-
-    let cap_size = |cf: &[Packed<LP>], cg: &[Packed<LP>]| -> u64 {
-        cf.iter()
-            .chain(cg.iter())
-            .map(|p| p.bit_length())
-            .fold(53, u64::max)
-    };
-
-    let mut prev_capital_size = u64::MAX;
-    loop {
-        let capital_size = cap_size(&cf, &cg);
-        if capital_size < size || capital_size >= prev_capital_size {
-            break;
-        }
-        prev_capital_size = capital_size;
-
-        let d = capital_size - size;
-        let (capital_shift, back_shift) = if d > 53 {
-            ((capital_size - 106) as u32, (d - 53) as u32)
-        } else {
-            ((capital_size - 53) as u32, d as u32)
-        };
-
-        let capital_f_adjusted = Polynomial::new(
-            cf.iter()
-                .map(|p| Complex64::new(p.shr_to_i128(capital_shift) as f64, 0.0))
-                .collect::<Vec<_>>(),
-        )
-        .fft();
-        let capital_g_adjusted = Polynomial::new(
-            cg.iter()
-                .map(|p| Complex64::new(p.shr_to_i128(capital_shift) as f64, 0.0))
-                .collect::<Vec<_>>(),
-        )
-        .fft();
-
-        let numerator = capital_f_adjusted.hadamard_mul(&f_star_adjusted)
-            + capital_g_adjusted.hadamard_mul(&g_star_adjusted);
-        let quotient = numerator.hadamard_div(&denominator_fft).ifft();
-
-        let k: Vec<i128> = quotient.coefficients.iter().map(|c| c.re.round() as i128).collect();
-        if k.iter().all(|&x| x == 0) {
-            break;
-        }
-
-        // Forward-transform `k` once and reuse it for both the k·f and k·g
-        // products (k is identical for both).
-        let mut k_ntt: Vec<Rns<K, P>> = k.iter().map(|&v| Rns::from_i128(v)).collect();
-        ntt_inplace_cached::<K, P>(&mut k_ntt, &tables);
-        let kf: Vec<Packed<LP>> = product(&k_ntt, &f_ntt);
-        let kg: Vec<Packed<LP>> = product(&k_ntt, &g_ntt);
-        let shifted_kf: Vec<Packed<LP>> = kf.iter().map(|p| p.shl(back_shift)).collect();
-        let shifted_kg: Vec<Packed<LP>> = kg.iter().map(|p| p.shl(back_shift)).collect();
-
-        if d > 53 {
-            let new_cs_f = cf
-                .iter()
-                .zip(shifted_kf.iter())
-                .map(|(a, b)| a.sub(b).bit_length())
-                .fold(0, u64::max);
-            let new_cs_g = cg
-                .iter()
-                .zip(shifted_kg.iter())
-                .map(|(a, b)| a.sub(b).bit_length())
-                .fold(0, u64::max);
-            if u64::max(new_cs_f, new_cs_g) >= capital_size {
-                let cs_old = (capital_size - 53) as u32;
-                let cf_old = Polynomial::new(
-                    cf.iter()
-                        .map(|p| Complex64::new(p.shr_to_i128(cs_old) as f64, 0.0))
-                        .collect::<Vec<_>>(),
-                )
-                .fft();
-                let cg_old = Polynomial::new(
-                    cg.iter()
-                        .map(|p| Complex64::new(p.shr_to_i128(cs_old) as f64, 0.0))
-                        .collect::<Vec<_>>(),
-                )
-                .fft();
-                let num_old = cf_old.hadamard_mul(&f_star_adjusted)
-                    + cg_old.hadamard_mul(&g_star_adjusted);
-                let quot_old = num_old.hadamard_div(&denominator_fft).ifft();
-                let k_old: Vec<i128> =
-                    quot_old.coefficients.iter().map(|c| c.re.round() as i128).collect();
-                if k_old.iter().all(|&x| x == 0) {
-                    break;
-                }
-                let mut k_old_ntt: Vec<Rns<K, P>> =
-                    k_old.iter().map(|&v| Rns::from_i128(v)).collect();
-                ntt_inplace_cached::<K, P>(&mut k_old_ntt, &tables);
-                let kf_old = product(&k_old_ntt, &f_ntt);
-                let kg_old = product(&k_old_ntt, &g_ntt);
-                for i in 0..n {
-                    cf[i] = cf[i].sub(&kf_old[i].shl(d as u32));
-                    cg[i] = cg[i].sub(&kg_old[i].shl(d as u32));
-                }
-                continue;
-            }
-        }
-
-        for i in 0..n {
-            cf[i] -= &shifted_kf[i];
-            cg[i] -= &shifted_kg[i];
-        }
-    }
-
-    // Move the reduced capital coefficients back out to BigInt.
-    for (c, p) in capital_f.coefficients.iter_mut().zip(cf.iter()) {
-        *c = p.to_bigint();
-    }
-    for (c, p) in capital_g.coefficients.iter_mut().zip(cg.iter()) {
-        *c = p.to_bigint();
-    }
-    Ok(())
+    babai_reduce_rns_generic::<Packed<LP>, K, P>(f, g, capital_f, capital_g)
 }
 
 /// Run [`babai_reduce_rns_packed`] at recursion depth 3 (n = 128, K = 5 primes,
@@ -1650,6 +1572,19 @@ mod test {
         let cap7 = cap(&NttPrimes24Bit8::PRIMES[..7]);
         assert!(cap8 >= required, "K=8 capacity {cap8:.1} < depth-4 product {required:.1}");
         assert!(cap7 < required, "K=7 capacity {cap7:.1} unexpectedly covers {required:.1}");
+    }
+
+    /// The capacity guard in babai_reduce_rns_generic must fire (debug builds)
+    /// when the prime list is too small for the product, rather than silently
+    /// wrapping the CRT.  Depth-3 inputs need ~107 product bits; the 2-prime
+    /// list has only ~45-bit capacity.
+    #[test]
+    #[should_panic(expected = "prime list too small")]
+    fn rns_reduction_guards_against_undersized_primes() {
+        use crate::rns::NttPrimes24Bit2;
+        let mut rng = StdRng::seed_from_u64(0xdead_beef);
+        let (f, g, mut cf, mut cg) = depth3_inputs(&mut rng);
+        let _ = super::babai_reduce_rns_bigint::<2, NttPrimes24Bit2>(&f, &g, &mut cf, &mut cg);
     }
 
     /// rns-bigint backend must match BigInt karatsuba on realistic depth-4

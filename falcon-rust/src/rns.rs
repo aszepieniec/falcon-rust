@@ -444,16 +444,6 @@ fn primitive_root_2n(root_2048: u32, n: usize, p: u32) -> u32 {
     root as u32
 }
 
-/// Reverse the `bits` least-significant bits of `x`.
-fn bitrev(mut x: usize, bits: usize) -> usize {
-    let mut r = 0usize;
-    for _ in 0..bits {
-        r = (r << 1) | (x & 1);
-        x >>= 1;
-    }
-    r
-}
-
 /// Compute bit-reversed powers `[ω^0, ω^1, …, ω^{n-1}]` with `ω` given in
 /// Montgomery form, placing them in bit-reversed index order.  The returned
 /// slice has length `n`.
@@ -473,13 +463,7 @@ fn bitrev_powers_mont(
         *a = alpha;
         alpha = dispatch_log2r!(log2r, alpha, root_mont, p, neg_inv);
     }
-    let log2n = n.ilog2() as usize;
-    for i in 0..n {
-        let j = bitrev(i, log2n);
-        if i < j {
-            array.swap(i, j);
-        }
-    }
+    crate::cyclotomic_fourier::bitreverse_array(&mut array);
     array
 }
 
@@ -608,17 +592,22 @@ pub(crate) fn ntt_inplace_cached<const N: usize, P: NttPrimeList<N>>(
     tables: &NttTables<N>,
 ) {
     debug_assert_eq!(coeffs.len(), tables.n);
+    // One scratch buffer reused for all N primes: the butterfly needs the
+    // residues for a single prime contiguous, but they are strided (stride N)
+    // across `coeffs`, so we gather → transform → scatter per prime.
+    let mut scratch: Vec<u32> = vec![0u32; coeffs.len()];
     for prime_idx in 0..N {
-        let p = tables.primes[prime_idx];
-        let mut slice: Vec<u32> = coeffs.iter().map(|r| r.residues[prime_idx]).collect();
+        for (s, r) in scratch.iter_mut().zip(coeffs.iter()) {
+            *s = r.residues[prime_idx];
+        }
         ntt_u32(
-            &mut slice,
+            &mut scratch,
             &tables.psi_rev[prime_idx],
-            p,
+            tables.primes[prime_idx],
             tables.log2r[prime_idx],
             tables.neg_inv[prime_idx],
         );
-        for (coeff, val) in coeffs.iter_mut().zip(slice) {
+        for (coeff, &val) in coeffs.iter_mut().zip(scratch.iter()) {
             coeff.residues[prime_idx] = val;
         }
     }
@@ -631,92 +620,70 @@ pub(crate) fn intt_inplace_cached<const N: usize, P: NttPrimeList<N>>(
     tables: &NttTables<N>,
 ) {
     debug_assert_eq!(coeffs.len(), tables.n);
+    let mut scratch: Vec<u32> = vec![0u32; coeffs.len()];
     for prime_idx in 0..N {
-        let p = tables.primes[prime_idx];
-        let mut slice: Vec<u32> = coeffs.iter().map(|r| r.residues[prime_idx]).collect();
+        for (s, r) in scratch.iter_mut().zip(coeffs.iter()) {
+            *s = r.residues[prime_idx];
+        }
         intt_u32(
-            &mut slice,
+            &mut scratch,
             &tables.psi_inv_rev[prime_idx],
             tables.ninv_mont[prime_idx],
-            p,
+            tables.primes[prime_idx],
             tables.log2r[prime_idx],
             tables.neg_inv[prime_idx],
         );
-        for (coeff, val) in coeffs.iter_mut().zip(slice) {
+        for (coeff, &val) in coeffs.iter_mut().zip(scratch.iter()) {
             coeff.residues[prime_idx] = val;
         }
     }
 }
 
-/// Two 24-bit NTT-friendly primes (p ≡ 1 mod 2048, 2²³ ≤ p < 2²⁴).
-/// Signed capacity ≈ 45 bits; covers `babai_reduce_rns` at recursion depth 1.
-pub(crate) struct NttPrimes24Bit2;
-impl PrimeList<2> for NttPrimes24Bit2 {
-    const PRIMES: [u32; 2] = [8_404_993, 8_427_521];
-}
-impl NttPrimeList<2> for NttPrimes24Bit2 {
-    const ROOTS_OF_UNITY_2048: [u32; 2] = [
-        FpField::<8_404_993>::primitive_nth_root_of_unity(2048).value(),
-        FpField::<8_427_521>::primitive_nth_root_of_unity(2048).value(),
-    ];
-}
-
-/// Four 24-bit NTT-friendly primes (p ≡ 1 mod 2048, 2²³ ≤ p < 2²⁴).
-/// Signed capacity ≈ 91 bits; covers `babai_reduce_rns` at recursion depth 2.
-pub(crate) struct NttPrimes24Bit4;
-impl PrimeList<4> for NttPrimes24Bit4 {
-    const PRIMES: [u32; 4] = [8_404_993, 8_427_521, 8_441_857, 8_452_097];
-}
-impl NttPrimeList<4> for NttPrimes24Bit4 {
-    const ROOTS_OF_UNITY_2048: [u32; 4] = [
-        FpField::<8_404_993>::primitive_nth_root_of_unity(2048).value(),
-        FpField::<8_427_521>::primitive_nth_root_of_unity(2048).value(),
-        FpField::<8_441_857>::primitive_nth_root_of_unity(2048).value(),
-        FpField::<8_452_097>::primitive_nth_root_of_unity(2048).value(),
-    ];
+/// Define a 24-bit NTT-friendly prime-list type.  Each prime is written once;
+/// the `PRIMES` array and the matching `ROOTS_OF_UNITY_2048` (the primitive
+/// 2048th root of unity per prime) are both derived from it, so the two arrays
+/// cannot drift out of sync.  Every prime must satisfy `p ≡ 1 (mod 2048)`.
+macro_rules! ntt_prime_list {
+    ($(#[$meta:meta])* $name:ident, $k:literal, [$($p:literal),+ $(,)?]) => {
+        $(#[$meta])*
+        pub(crate) struct $name;
+        impl PrimeList<$k> for $name {
+            const PRIMES: [u32; $k] = [$($p),+];
+        }
+        impl NttPrimeList<$k> for $name {
+            const ROOTS_OF_UNITY_2048: [u32; $k] =
+                [$(FpField::<$p>::primitive_nth_root_of_unity(2048).value()),+];
+        }
+    };
 }
 
-/// Five 24-bit NTT-friendly primes (p ≡ 1 mod 2048, 2²³ ≤ p < 2²⁴).
-/// Signed capacity ≈ 114 bits.  Sized to cover the `k·f` *product* (not the
-/// capital) in the multiword `babai_reduce_rns_{packed,bigint}` paths at
-/// recursion depth 3, where the product is ≈112 bits.  The first four primes
-/// coincide with [`NttPrimes24Bit4`].
-pub(crate) struct NttPrimes24Bit5;
-impl PrimeList<5> for NttPrimes24Bit5 {
-    const PRIMES: [u32; 5] = [8_404_993, 8_427_521, 8_441_857, 8_452_097, 8_466_433];
-}
-impl NttPrimeList<5> for NttPrimes24Bit5 {
-    const ROOTS_OF_UNITY_2048: [u32; 5] = [
-        FpField::<8_404_993>::primitive_nth_root_of_unity(2048).value(),
-        FpField::<8_427_521>::primitive_nth_root_of_unity(2048).value(),
-        FpField::<8_441_857>::primitive_nth_root_of_unity(2048).value(),
-        FpField::<8_452_097>::primitive_nth_root_of_unity(2048).value(),
-        FpField::<8_466_433>::primitive_nth_root_of_unity(2048).value(),
-    ];
+ntt_prime_list! {
+    /// Two 24-bit NTT-friendly primes.  Signed capacity ≈ 45 bits; covers
+    /// `babai_reduce_rns` at recursion depth 1.
+    NttPrimes24Bit2, 2, [8_404_993, 8_427_521]
 }
 
-/// Eight 24-bit NTT-friendly primes (p ≡ 1 mod 2048, 2²³ ≤ p < 2²⁴).
-/// Signed capacity ≈ 183 bits.  The first four primes coincide with
-/// [`NttPrimes24Bit4`] so the lists agree where they overlap.  Covers the
-/// depth-4 `k·f` product (≈155 bits; see the depth-4 reduction entry points)
-/// and is used by tests that round-trip 3-limb (>128-bit) values through RNS.
-pub(crate) struct NttPrimes24Bit8;
-impl PrimeList<8> for NttPrimes24Bit8 {
-    const PRIMES: [u32; 8] = [
-        8_404_993, 8_427_521, 8_441_857, 8_452_097, 8_466_433, 8_513_537, 8_519_681, 8_527_873,
-    ];
+ntt_prime_list! {
+    /// Four 24-bit NTT-friendly primes.  Signed capacity ≈ 91 bits; covers
+    /// `babai_reduce_rns` at recursion depth 2.
+    NttPrimes24Bit4, 4, [8_404_993, 8_427_521, 8_441_857, 8_452_097]
 }
-impl NttPrimeList<8> for NttPrimes24Bit8 {
-    const ROOTS_OF_UNITY_2048: [u32; 8] = [
-        FpField::<8_404_993>::primitive_nth_root_of_unity(2048).value(),
-        FpField::<8_427_521>::primitive_nth_root_of_unity(2048).value(),
-        FpField::<8_441_857>::primitive_nth_root_of_unity(2048).value(),
-        FpField::<8_452_097>::primitive_nth_root_of_unity(2048).value(),
-        FpField::<8_466_433>::primitive_nth_root_of_unity(2048).value(),
-        FpField::<8_513_537>::primitive_nth_root_of_unity(2048).value(),
-        FpField::<8_519_681>::primitive_nth_root_of_unity(2048).value(),
-        FpField::<8_527_873>::primitive_nth_root_of_unity(2048).value(),
-    ];
+
+ntt_prime_list! {
+    /// Five 24-bit NTT-friendly primes.  Signed capacity ≈ 114 bits.  Sized to
+    /// cover the `k·f` *product* (not the capital) in the multiword
+    /// `babai_reduce_rns_{packed,bigint}` paths at recursion depth 3, where the
+    /// product is ≈107 bits.  The first four primes coincide with `NttPrimes24Bit4`.
+    NttPrimes24Bit5, 5, [8_404_993, 8_427_521, 8_441_857, 8_452_097, 8_466_433]
+}
+
+ntt_prime_list! {
+    /// Eight 24-bit NTT-friendly primes.  Signed capacity ≈ 183 bits.  Covers
+    /// the depth-4 `k·f` product (≈155 bits; see the depth-4 reduction entry
+    /// points) and is used by tests that round-trip 3-limb (>128-bit) values
+    /// through RNS.  The first four primes coincide with `NttPrimes24Bit4`.
+    NttPrimes24Bit8, 8,
+    [8_404_993, 8_427_521, 8_441_857, 8_452_097, 8_466_433, 8_513_537, 8_519_681, 8_527_873]
 }
 
 #[cfg(test)]

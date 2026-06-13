@@ -34,7 +34,11 @@ impl<const L: usize> Packed<L> {
     pub(crate) const ZERO: Self = Self { limbs: [0; L] };
 
     /// Sign-extend a signed 128-bit value into the `L`-limb representation.
+    /// (Test-only constructor; production builds `Packed` via `from_bigint` and
+    /// `from_rns`.)
+    #[cfg(test)]
     pub(crate) fn from_i128(v: i128) -> Self {
+        const { assert!(L >= 2, "Packed requires at least 2 limbs (128-bit input)") };
         let lo = v as u128;
         let ext = if v < 0 { u64::MAX } else { 0 };
         let mut limbs = [ext; L];
@@ -85,38 +89,41 @@ impl<const L: usize> Packed<L> {
     /// returning the low 128 bits of the result as `i128`.
     ///
     /// Used to feed the `f64` FFT: callers pick `shift` so the result lands in
-    /// `i128` range, exactly as the `BigInt` path does with `bi >> capital_shift`.
+    /// `i128` range, bit-for-bit identical to the `BigInt` path's
+    /// `bi >> capital_shift` (a true arithmetic shift, flooring toward −∞).
     pub(crate) fn shr_to_i128(&self, shift: u32) -> i128 {
-        let neg = self.is_negative();
-        // Work on the magnitude, then re-apply the sign.  Arithmetic shift of a
-        // negative value floors toward −∞; doing |v| >> shift and negating
-        // matches for the high-order extraction we need here (the discarded low
-        // bits never affect the rounded quotient).
-        let m = self.magnitude();
+        // Shift the two's-complement representation directly, sign-extending the
+        // vacated high bits.  This is an arithmetic shift, so it floors toward
+        // −∞ for negative values — matching `BigInt::shr` exactly, including the
+        // low retained bit (the previous magnitude-based version truncated
+        // toward zero and could differ by 1).
+        let sign = if self.is_negative() { u64::MAX } else { 0 };
         let limb = (shift / 64) as usize;
         let bit = shift % 64;
+        let get = |idx: usize| -> u64 { if idx < L { self.limbs[idx] } else { sign } };
         let mut lo = 0u128;
         for out_idx in 0..2 {
             let src = limb + out_idx;
-            let mut word = if src < L { m[src] as u128 } else { 0 };
+            let mut word = get(src) as u128;
             if bit != 0 {
-                let hi = if src + 1 < L { m[src + 1] as u128 } else { 0 };
+                let hi = get(src + 1) as u128;
                 word = (word >> bit) | (hi << (64 - bit));
                 word &= u64::MAX as u128;
             }
             lo |= word << (64 * out_idx);
         }
-        let v = lo as i128;
-        if neg {
-            v.wrapping_neg()
-        } else {
-            v
-        }
+        lo as i128
     }
 
     /// Logical left shift by `bits` (multiply by `2^bits`); bits beyond the
-    /// `64·L`-bit width are dropped (callers keep magnitudes well within range).
+    /// `64·L`-bit width are dropped.  The debug assertion guards callers against
+    /// a too-small `L`: the shifted magnitude must stay within `64·L` bits.
     pub(crate) fn shl(&self, bits: u32) -> Self {
+        debug_assert!(
+            self.bit_length() + bits as u64 <= 64 * L as u64,
+            "Packed<{L}> shl overflow: {}-bit value << {bits}",
+            self.bit_length()
+        );
         let limb = (bits / 64) as usize;
         let bit = bits % 64;
         let mut out = [0u64; L];
@@ -236,10 +243,20 @@ impl<const L: usize> Packed<L> {
     }
 
     /// Construct from a [`BigInt`] (used at the reduction entry point only).
+    ///
+    /// The magnitude must fit in `L` limbs; an oversized value would have its
+    /// high limbs silently dropped, so a too-small `L` for the depth's capital
+    /// is caught here in debug builds rather than corrupting the reduction.
     pub(crate) fn from_bigint(x: &BigInt) -> Self {
         let neg = x.sign() == num::bigint::Sign::Minus;
         let mag = if neg { -x } else { x.clone() };
         let (_, words) = mag.to_u64_digits();
+        debug_assert!(
+            words.len() <= L,
+            "Packed<{L}> too narrow: value needs {} limbs ({} bits)",
+            words.len(),
+            x.bits()
+        );
         let mut limbs = [0u64; L];
         for (i, w) in words.iter().take(L).enumerate() {
             limbs[i] = *w;
@@ -364,16 +381,12 @@ mod tests {
         for _ in 0..1000 {
             let (p, b) = rand_packed(&mut rng);
             for &s in &[0u32, 1, 33, 64, 90, 128] {
-                // Compare against BigInt floor-shift truncated to i128 magnitude.
+                // shr_to_i128 is a true arithmetic shift (floor toward −∞),
+                // bit-for-bit equal to BigInt `>>` whenever the result fits i128.
                 let want = &b >> s;
                 let got = BigInt::from(p.shr_to_i128(s));
-                // shr_to_i128 keeps only low 128 bits; only assert when the
-                // shifted magnitude fits i128 (the regime callers use).
                 if want.bits() <= 126 {
-                    // Allow off-by-one in the lowest bit from the magnitude-based
-                    // flooring of negatives (high-order extraction is exact).
-                    let diff = (&got - &want).abs();
-                    assert!(diff <= BigInt::from(1), "v={b} s={s} want={want} got={got}");
+                    assert_eq!(got, want, "v={b} s={s}");
                 }
             }
         }
