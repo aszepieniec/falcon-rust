@@ -936,6 +936,15 @@ pub fn babai_reduce_rns_packed_depth3(
 /// reduction coefficient `k`; see `product_size_model_matches_measurements`),
 /// so the 8-prime ≈183-bit list is required — the 5-prime list (≈114 bits)
 /// would wrap.  The ≈303-bit capital needs 5 limbs.
+///
+/// `#[doc(hidden)]` and NOT wired into [`ntru_solve`]: at depth 4 this is
+/// **slower** than `BigInt` karatsuba (n=64 bench: ≈1.6 ms vs ≈1.0 ms).  As `n`
+/// halves with depth, karatsuba on a small polynomial gets cheap while the RNS
+/// per-iteration overhead (k→RNS conversion, the now 8-prime NTT, word-level
+/// CRT reconstruction) and the extra reduction iterations dominate — the RNS
+/// crossover sits at ~depth 3.  This entry point exists only so the per-depth
+/// benchmark and equivalence test can measure that, and to keep the const-`L`
+/// machinery exercised; it is not part of the production reduction path.
 #[doc(hidden)]
 pub fn babai_reduce_rns_packed_depth4(
     f: &Polynomial<BigInt>,
@@ -963,7 +972,13 @@ pub fn babai_reduce_rns_bigint_depth3(
 
 /// Run [`babai_reduce_rns_bigint`] at recursion depth 4 (n = 64, K = 8 primes).
 /// Capital carried as `BigInt`; the ≈155-bit `k·f` product needs the 8-prime
-/// list.  Provided for the per-depth benchmark and the depth-4 correctness test.
+/// list.
+///
+/// `#[doc(hidden)]` and NOT wired into [`ntru_solve`]: like its packed sibling
+/// [`babai_reduce_rns_packed_depth4`], this loses to `BigInt` karatsuba at
+/// depth 4 — see that function's note for why the RNS crossover ends at
+/// ~depth 3.  Provided only for the per-depth benchmark and the depth-4
+/// equivalence test.
 #[doc(hidden)]
 pub fn babai_reduce_rns_bigint_depth4(
     f: &Polynomial<BigInt>,
