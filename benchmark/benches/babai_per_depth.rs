@@ -97,10 +97,11 @@ pub fn babai_per_depth(c: &mut Criterion) {
         );
     });
 
-    // RNS-bigint variant at depth 3 (K=8, n=128): multi-word (BigInt) capital
+    // RNS-bigint variant at depth 3 (K=5, n=128): multi-word (BigInt) capital
     // with the k·f product evaluated via the NTT.  Uses the same BigInt inputs
-    // as bigint/d=3, so the two are directly comparable.
-    group.bench_function("rns-bigint-k8/d=3", |b| {
+    // as bigint/d=3, so the two are directly comparable.  K=5 primes suffice:
+    // only the ≈107-bit product (not the ≈154-bit capital) passes through RNS.
+    group.bench_function("rns-bigint-k5/d=3", |b| {
         b.iter_batched(
             || generate_depth_inputs_bigint(3, &mut rng),
             |(f, g, mut cf, mut cg)| {
@@ -110,9 +111,9 @@ pub fn babai_per_depth(c: &mut Criterion) {
         );
     });
 
-    // Packed-limb variant at depth 3 (K=8, n=128): fixed-width capital, NTT
-    // multiply, word-level CRT.  Same inputs as bigint/d=3 and rns-bigint-k8/d=3.
-    group.bench_function("rns-packed-k8/d=3", |b| {
+    // Packed-limb variant at depth 3 (K=5, n=128): fixed-width capital, NTT
+    // multiply, word-level CRT.  Same inputs as bigint/d=3 and rns-bigint-k5/d=3.
+    group.bench_function("rns-packed-k5/d=3", |b| {
         b.iter_batched(
             || generate_depth_inputs_bigint(3, &mut rng),
             |(f, g, mut cf, mut cg)| {

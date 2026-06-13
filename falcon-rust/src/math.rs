@@ -16,7 +16,7 @@ use crate::{
     polynomial::Polynomial,
     rns::{
         intt_inplace_cached, ntt_inplace_cached, NttPrimeList, NttPrimes24Bit2, NttPrimes24Bit4,
-        NttPrimes24Bit8, NttTables, Rns,
+        NttPrimes24Bit5, NttTables, Rns,
     },
     samplerz::sampler_z,
     U32Field,
@@ -908,7 +908,11 @@ pub(crate) fn babai_reduce_rns_packed<const K: usize, P: NttPrimeList<K>>(
     Ok(())
 }
 
-/// Run [`babai_reduce_rns_packed`] at recursion depth 3 (n = 128, K = 8 primes).
+/// Run [`babai_reduce_rns_packed`] at recursion depth 3 (n = 128, K = 5 primes).
+///
+/// Only 5 primes are needed: the path pushes the `k·f` product (a hard ≈107-bit
+/// quantity, see `ntt_primes24_5_covers_depth3_product`) — not the ≈154-bit
+/// capital — through RNS.
 #[doc(hidden)]
 pub fn babai_reduce_rns_packed_depth3(
     f: &Polynomial<BigInt>,
@@ -916,10 +920,10 @@ pub fn babai_reduce_rns_packed_depth3(
     capital_f: &mut Polynomial<BigInt>,
     capital_g: &mut Polynomial<BigInt>,
 ) -> Result<(), String> {
-    babai_reduce_rns_packed::<8, NttPrimes24Bit8>(f, g, capital_f, capital_g)
+    babai_reduce_rns_packed::<5, NttPrimes24Bit5>(f, g, capital_f, capital_g)
 }
 
-/// Run [`babai_reduce_rns_bigint`] at recursion depth 3 (n = 128, K = 8 primes).
+/// Run [`babai_reduce_rns_bigint`] at recursion depth 3 (n = 128, K = 5 primes).
 ///
 /// Capital coefficients at this depth exceed 127 bits, so they are carried as
 /// `BigInt` rather than `i128`; the `k·f` product still runs in RNS via the
@@ -931,7 +935,7 @@ pub fn babai_reduce_rns_bigint_depth3(
     capital_f: &mut Polynomial<BigInt>,
     capital_g: &mut Polynomial<BigInt>,
 ) -> Result<(), String> {
-    babai_reduce_rns_bigint::<8, NttPrimes24Bit8>(f, g, capital_f, capital_g)
+    babai_reduce_rns_bigint::<5, NttPrimes24Bit5>(f, g, capital_f, capital_g)
 }
 
 /// Solve the NTRU equation. Given f, g in ZZ[X], find F, G in ZZ[X].
@@ -1441,39 +1445,47 @@ mod test {
         let _ = babai_reduce_bigint(&f, &g, &mut capital_f, &mut capital_g);
     }
 
+    /// Generate a random signed `BigInt` with up to `bits` magnitude bits.
+    fn rand_signed_bigint(rng: &mut StdRng, bits: u32) -> BigInt {
+        use rand::RngExt;
+        let mut v = BigInt::from(0);
+        for _ in 0..bits {
+            v = (v << 1) | BigInt::from(rng.random::<bool>() as u8);
+        }
+        if rng.random::<bool>() {
+            -v
+        } else {
+            v
+        }
+    }
+
+    /// Realistic depth-3 inputs: n = 128, max|f,g| ≈ 50 bits, max|F,G| ≈ 154
+    /// bits (the actual Falcon-1024 depth-3 magnitudes, from
+    /// `NTRU_SOLVE_BABAI_COEFF_BITS`).  These sizes exercise the full ≈107-bit
+    /// `k·f` product, so the equivalence tests double as a CRT-wrap detector
+    /// for the right-sized (K = 5) prime list.
+    fn depth3_inputs(
+        rng: &mut StdRng,
+    ) -> (Polynomial<BigInt>, Polynomial<BigInt>, Polynomial<BigInt>, Polynomial<BigInt>) {
+        let n = 128;
+        let f = Polynomial::new((0..n).map(|_| rand_signed_bigint(rng, 50)).collect::<Vec<_>>());
+        let g = Polynomial::new((0..n).map(|_| rand_signed_bigint(rng, 50)).collect::<Vec<_>>());
+        let cf = Polynomial::new((0..n).map(|_| rand_signed_bigint(rng, 154)).collect::<Vec<_>>());
+        let cg = Polynomial::new((0..n).map(|_| rand_signed_bigint(rng, 154)).collect::<Vec<_>>());
+        (f, g, cf, cg)
+    }
+
     /// The RNS-NTT multiply backend must produce exactly the same reduction as
-    /// the BigInt-karatsuba backend.  Inputs are sized like recursion depth 3
-    /// (n = 128, capital coefficients > 127 bits, exercising the `BigInt`
-    /// capital path that the i128-bound `babai_reduce_rns` cannot represent).
+    /// the BigInt-karatsuba backend, on realistic depth-3-sized inputs (capital
+    /// coefficients > 127 bits, exercising the `BigInt` capital path that the
+    /// i128-bound `babai_reduce_rns` cannot represent).
     #[test]
     fn babai_reduce_rns_bigint_depth3_matches_bigint() {
-        use rand::RngExt;
         use super::babai_reduce_rns_bigint_depth3;
 
-        let n = 128;
         let mut rng = StdRng::seed_from_u64(0xba_ba_13_d3);
-        for _ in 0..8 {
-            // f, g: small coefficients (well under the depth-3 ~50-bit size).
-            let f = Polynomial::new(
-                (0..n)
-                    .map(|_| BigInt::from(rng.random::<i32>() as i64))
-                    .collect::<Vec<_>>(),
-            );
-            let g = Polynomial::new(
-                (0..n)
-                    .map(|_| BigInt::from(rng.random::<i32>() as i64))
-                    .collect::<Vec<_>>(),
-            );
-            // capital: ~150-bit signed coefficients, beyond i128's reach.
-            let mk_cap = |rng: &mut StdRng| {
-                Polynomial::new(
-                    (0..n)
-                        .map(|_| BigInt::from(rng.random::<i128>()) << 24)
-                        .collect::<Vec<_>>(),
-                )
-            };
-            let cap_f = mk_cap(&mut rng);
-            let cap_g = mk_cap(&mut rng);
+        for _ in 0..32 {
+            let (f, g, cap_f, cap_g) = depth3_inputs(&mut rng);
 
             let (mut bf, mut bg) = (cap_f.clone(), cap_g.clone());
             babai_reduce_bigint(&f, &g, &mut bf, &mut bg).unwrap();
@@ -1487,34 +1499,14 @@ mod test {
     }
 
     /// The packed-limb backend must produce exactly the same reduction as the
-    /// BigInt backend (same depth-3-sized inputs as the rns-bigint test).
+    /// BigInt backend (same realistic depth-3-sized inputs).
     #[test]
     fn babai_reduce_rns_packed_depth3_matches_bigint() {
-        use rand::RngExt;
         use super::babai_reduce_rns_packed_depth3;
 
-        let n = 128;
         let mut rng = StdRng::seed_from_u64(0x9ac_ed_d3);
-        for _ in 0..8 {
-            let f = Polynomial::new(
-                (0..n)
-                    .map(|_| BigInt::from(rng.random::<i32>() as i64))
-                    .collect::<Vec<_>>(),
-            );
-            let g = Polynomial::new(
-                (0..n)
-                    .map(|_| BigInt::from(rng.random::<i32>() as i64))
-                    .collect::<Vec<_>>(),
-            );
-            let mk_cap = |rng: &mut StdRng| {
-                Polynomial::new(
-                    (0..n)
-                        .map(|_| BigInt::from(rng.random::<i128>()) << 24)
-                        .collect::<Vec<_>>(),
-                )
-            };
-            let cap_f = mk_cap(&mut rng);
-            let cap_g = mk_cap(&mut rng);
+        for _ in 0..32 {
+            let (f, g, cap_f, cap_g) = depth3_inputs(&mut rng);
 
             let (mut bf, mut bg) = (cap_f.clone(), cap_g.clone());
             babai_reduce_bigint(&f, &g, &mut bf, &mut bg).unwrap();
@@ -1525,6 +1517,29 @@ mod test {
             assert_eq!(bf, pf, "capital_F mismatch between bigint and packed");
             assert_eq!(bg, pg, "capital_G mismatch between bigint and packed");
         }
+    }
+
+    /// The multiword `babai_reduce_rns_{packed,bigint}` paths only push the
+    /// `k·f` *product* through RNS, not the capital.  Thanks to the `d>53`
+    /// windowing the product reconstructs a fixed ≈106-bit window of the
+    /// capital regardless of the capital's true size — measured empirically to
+    /// peak at a hard 107 bits at depth 3 (stays 107 even with f,g and capital
+    /// pushed well past their +6σ tails).  So the prime list need only cover
+    /// ~107 bits, not the ≈154-bit capital — hence `NttPrimes24Bit5` rather
+    /// than `NttPrimes24Bit8`.
+    #[test]
+    fn ntt_primes24_5_covers_depth3_product() {
+        use crate::rns::NttPrimes24Bit5;
+        const MEASURED_PRODUCT_BITS: f64 = 107.0;
+        let capacity: f64 = NttPrimes24Bit5::PRIMES
+            .iter()
+            .map(|&p| f64::log2(p as f64))
+            .sum::<f64>()
+            - 1.0; // sign bit for centered reconstruction
+        assert!(
+            capacity >= MEASURED_PRODUCT_BITS,
+            "NttPrimes24Bit5 capacity {capacity:.1} < depth-3 product {MEASURED_PRODUCT_BITS:.1}"
+        );
     }
 
     // #[test]
