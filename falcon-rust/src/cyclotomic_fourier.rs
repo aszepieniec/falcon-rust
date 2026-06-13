@@ -9,6 +9,35 @@ use num_complex::{Complex, Complex64};
 use crate::fixed_point::{FixedInt, FixedPoint};
 use crate::inverse::Inverse;
 
+/// Compute the integer whose `log2(n)`-bit binary expansion is the reverse of
+/// that of `arg` (`n` a power of two).  Shared by the complex/fixed-point FFT
+/// ([`CyclotomicFourier`]) and the RNS NTT (`rns::NttTables`).
+pub(crate) fn bitreverse_index(arg: usize, n: usize) -> usize {
+    assert!(n > 0);
+    assert_eq!(n & (n - 1), 0);
+    let mut rev = 0;
+    let mut m = n >> 1;
+    let mut k = 1;
+    while m > 0 {
+        rev |= (((arg & m) != 0) as usize) * k;
+        k <<= 1;
+        m >>= 1;
+    }
+    rev
+}
+
+/// Reorder the elements of `array` by reversing the binary expansions of their
+/// indices (length must be a power of two).
+pub(crate) fn bitreverse_array<T>(array: &mut [T]) {
+    let n = array.len();
+    for i in 0..n {
+        let j = bitreverse_index(i, n);
+        if i < j {
+            array.swap(i, j);
+        }
+    }
+}
+
 pub(crate) trait CyclotomicFourier
 where
     Self: Sized
@@ -27,17 +56,7 @@ where
     /// Compute the integer whose n-bit binary expansion is the reverse of
     /// that of the argument.
     fn bitreverse_index(arg: usize, n: usize) -> usize {
-        assert!(n > 0);
-        assert_eq!(n & (n - 1), 0);
-        let mut rev = 0;
-        let mut m = n >> 1;
-        let mut k = 1;
-        while m > 0 {
-            rev |= (((arg & m) != 0) as usize) * k;
-            k <<= 1;
-            m >>= 1;
-        }
-        rev
+        bitreverse_index(arg, n)
     }
 
     /// Compute the first n powers of the 2nth root of unity, and put them in
