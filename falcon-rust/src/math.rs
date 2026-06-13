@@ -785,12 +785,13 @@ pub(crate) fn babai_reduce_rns_packed<const K: usize, P: NttPrimeList<K>>(
     let mut cf: Vec<Packed> = capital_f.coefficients.iter().map(Packed::from_bigint).collect();
     let mut cg: Vec<Packed> = capital_g.coefficients.iter().map(Packed::from_bigint).collect();
 
-    // Reconstruct the RNS product of `k` with the precomputed `h_ntt`, returning
-    // packed limbs (one word-level CRT per coefficient, no allocation).
-    let product = |k_rns: &mut [Rns<K, P>], h_ntt: &[Rns<K, P>]| -> Vec<Packed> {
-        ntt_inplace_cached::<K, P>(k_rns, &tables);
+    // Reconstruct the RNS product of (already-transformed) `k_ntt` with the
+    // precomputed `h_ntt`, returning packed limbs (one word-level CRT per
+    // coefficient, no allocation).  `k_ntt` is forward-transformed once per
+    // iteration by the caller and reused for both the f and g products.
+    let product = |k_ntt: &[Rns<K, P>], h_ntt: &[Rns<K, P>]| -> Vec<Packed> {
         let mut prod: Vec<Rns<K, P>> =
-            k_rns.iter().zip(h_ntt.iter()).map(|(&a, &b)| a * b).collect();
+            k_ntt.iter().zip(h_ntt.iter()).map(|(&a, &b)| a * b).collect();
         intt_inplace_cached::<K, P>(&mut prod, &tables);
         prod.iter().map(Packed::from_rns).collect()
     };
@@ -839,10 +840,12 @@ pub(crate) fn babai_reduce_rns_packed<const K: usize, P: NttPrimeList<K>>(
             break;
         }
 
-        let mut kf_rns: Vec<Rns<K, P>> = k.iter().map(|&v| Rns::from_i128(v)).collect();
-        let mut kg_rns = kf_rns.clone();
-        let kf: Vec<Packed> = product(&mut kf_rns, &f_ntt);
-        let kg: Vec<Packed> = product(&mut kg_rns, &g_ntt);
+        // Forward-transform `k` once and reuse it for both the k·f and k·g
+        // products (k is identical for both).
+        let mut k_ntt: Vec<Rns<K, P>> = k.iter().map(|&v| Rns::from_i128(v)).collect();
+        ntt_inplace_cached::<K, P>(&mut k_ntt, &tables);
+        let kf: Vec<Packed> = product(&k_ntt, &f_ntt);
+        let kg: Vec<Packed> = product(&k_ntt, &g_ntt);
         let shifted_kf: Vec<Packed> = kf.iter().map(|p| p.shl(back_shift)).collect();
         let shifted_kg: Vec<Packed> = kg.iter().map(|p| p.shl(back_shift)).collect();
 
@@ -879,11 +882,11 @@ pub(crate) fn babai_reduce_rns_packed<const K: usize, P: NttPrimeList<K>>(
                 if k_old.iter().all(|&x| x == 0) {
                     break;
                 }
-                let mut kf_old_rns: Vec<Rns<K, P>> =
+                let mut k_old_ntt: Vec<Rns<K, P>> =
                     k_old.iter().map(|&v| Rns::from_i128(v)).collect();
-                let mut kg_old_rns = kf_old_rns.clone();
-                let kf_old = product(&mut kf_old_rns, &f_ntt);
-                let kg_old = product(&mut kg_old_rns, &g_ntt);
+                ntt_inplace_cached::<K, P>(&mut k_old_ntt, &tables);
+                let kf_old = product(&k_old_ntt, &f_ntt);
+                let kg_old = product(&k_old_ntt, &g_ntt);
                 for i in 0..n {
                     cf[i] = cf[i].sub(&kf_old[i].shl(d as u32));
                     cg[i] = cg[i].sub(&kg_old[i].shl(d as u32));
