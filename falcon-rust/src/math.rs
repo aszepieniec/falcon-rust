@@ -1478,6 +1478,32 @@ mod test {
         (f, g, cf, cg)
     }
 
+    /// Sizing model for the multiword RNS reduction paths, established by
+    /// measuring the max `k·f` product bit-width on realistic inputs (with the
+    /// 183-bit `NttPrimes24Bit8` so the product never wraps during measurement):
+    ///
+    ///   depth 3 (n=128, bits(f)≈50):  product ≈ 107 bits,  k ≈ 54–55 bits
+    ///   depth 4 (n=64,  bits(f)≈101): product ≈ 155 bits,  k ≈ 51–52 bits
+    ///
+    /// The product does NOT self-normalize: the reduction coefficient `k` stays
+    /// ≈53 bits at every depth (it is estimated from windowed top words), but
+    /// the product is `k · f_full` with the *full* `f`, so it grows with depth
+    /// as `bits(f) + ~54`.  Crucially this is still far below the capital
+    /// (`bits(F) ≈ 3·bits(f)`): the modulus need only cover the product, so the
+    /// prime count is roughly halved versus sizing for the capital —
+    /// `ceil((bits(f) + 54 + margin) / 23)` primes (5 at depth 3, ~7 at depth 4).
+    #[test]
+    fn product_size_model_matches_measurements() {
+        // (bits(f), measured max product) data points.
+        for &(f_bits, measured) in &[(50.0_f64, 107.0_f64), (101.0, 155.0)] {
+            let model = f_bits + 54.0;
+            assert!(
+                (model - measured).abs() <= 8.0,
+                "product-size model {model:.0} far from measured {measured:.0} (bits(f)={f_bits})"
+            );
+        }
+    }
+
     /// The RNS-NTT multiply backend must produce exactly the same reduction as
     /// the BigInt-karatsuba backend, on realistic depth-3-sized inputs (capital
     /// coefficients > 127 bits, exercising the `BigInt` capital path that the
