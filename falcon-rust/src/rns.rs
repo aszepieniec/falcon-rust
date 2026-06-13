@@ -542,66 +542,14 @@ fn intt_u32(
     }
 }
 
-/// In-place negacyclic NTT of a coefficient-ordered slice of RNS elements.
-///
-/// The length must be a power of two ≤ 1024.  Each prime in `P` must satisfy
-/// `p ≡ 1 (mod 2n)`.  After this call the slice is in NTT evaluation domain:
-/// element-wise multiplication of two such slices corresponds to polynomial
-/// multiplication mod X^n + 1 in RNS.
-pub(crate) fn ntt_inplace<const N: usize, P: NttPrimeList<N>>(coeffs: &mut [Rns<N, P>]) {
-    let n = coeffs.len();
-    debug_assert!(n >= 1 && n <= 1024 && n.is_power_of_two());
-    for prime_idx in 0..N {
-        let p = P::PRIMES[prime_idx];
-        let log2r = p.ilog2() + 1;
-        let neg_inv = negqinv_modr(p);
-        let r_sq = r_sq_modq(p);
-
-        let root_2n = primitive_root_2n(P::ROOTS_OF_UNITY_2048[prime_idx], n, p);
-        let root_2n_mont = dispatch_log2r!(log2r, root_2n, r_sq, p, neg_inv);
-        let psi_rev = bitrev_powers_mont(root_2n_mont, n, p, log2r, neg_inv, r_sq);
-
-        let mut slice: Vec<u32> = coeffs.iter().map(|r| r.residues[prime_idx]).collect();
-        ntt_u32(&mut slice, &psi_rev, p, log2r, neg_inv);
-        for (coeff, val) in coeffs.iter_mut().zip(slice) {
-            coeff.residues[prime_idx] = val;
-        }
-    }
-}
-
-/// In-place negacyclic INTT: inverse of [`ntt_inplace`].
-pub(crate) fn intt_inplace<const N: usize, P: NttPrimeList<N>>(coeffs: &mut [Rns<N, P>]) {
-    let n = coeffs.len();
-    debug_assert!(n >= 1 && n <= 1024 && n.is_power_of_two());
-    for prime_idx in 0..N {
-        let p = P::PRIMES[prime_idx];
-        let log2r = p.ilog2() + 1;
-        let neg_inv = negqinv_modr(p);
-        let r_sq = r_sq_modq(p);
-
-        let root_2n = primitive_root_2n(P::ROOTS_OF_UNITY_2048[prime_idx], n, p);
-        let root_inv = mod_pow(root_2n as u64, (p - 2) as u64, p as u64) as u32;
-        let root_inv_mont = dispatch_log2r!(log2r, root_inv, r_sq, p, neg_inv);
-        let psi_inv_rev = bitrev_powers_mont(root_inv_mont, n, p, log2r, neg_inv, r_sq);
-
-        let n_inv = mod_pow(n as u64, (p - 2) as u64, p as u64) as u32;
-        let ninv_mont = dispatch_log2r!(log2r, n_inv, r_sq, p, neg_inv);
-
-        let mut slice: Vec<u32> = coeffs.iter().map(|r| r.residues[prime_idx]).collect();
-        intt_u32(&mut slice, &psi_inv_rev, ninv_mont, p, log2r, neg_inv);
-        for (coeff, val) in coeffs.iter_mut().zip(slice) {
-            coeff.residues[prime_idx] = val;
-        }
-    }
-}
-
 /// Precomputed per-prime twiddle tables for an NTT of a fixed length `n`.
 ///
-/// [`ntt_inplace`]/[`intt_inplace`] rebuild the root powers (an O(n) array of
-/// Montgomery exponentiations) on every call.  Those tables depend only on the
-/// prime list and `n`, so for repeated transforms of the same size — e.g. the
-/// reduction loop in `babai_reduce_rns_packed`, which transforms once per
-/// iteration — they should be computed once and reused.  This mirrors the
+/// A negacyclic NTT needs, per prime, the bit-reversed root powers (an O(n)
+/// array of Montgomery exponentiations) plus — for the inverse — `n⁻¹`.  Those
+/// tables depend only on the prime list and `n`, so for repeated transforms of
+/// the same size — e.g. the reduction loop in `babai_reduce_rns_packed`, which
+/// transforms once per iteration — they are computed once here and reused
+/// rather than rebuilt on every call.  This mirrors the
 /// `CyclotomicFourier::fft` convention of passing `psi_rev` in as an argument.
 ///
 /// Pair with [`ntt_inplace_cached`] / [`intt_inplace_cached`].
@@ -649,8 +597,12 @@ impl<const N: usize> NttTables<N> {
     }
 }
 
-/// In-place negacyclic NTT using a precomputed [`NttTables`].  Equivalent to
-/// [`ntt_inplace`] but reuses the cached twiddle factors.
+/// In-place negacyclic NTT using a precomputed [`NttTables`].
+///
+/// The length must be a power of two ≤ 1024 and equal to `tables.n`.  Each
+/// prime in `P` must satisfy `p ≡ 1 (mod 2n)`.  After this call the slice is in
+/// NTT evaluation domain: element-wise multiplication of two such slices
+/// corresponds to polynomial multiplication mod X^n + 1 in RNS.
 pub(crate) fn ntt_inplace_cached<const N: usize, P: NttPrimeList<N>>(
     coeffs: &mut [Rns<N, P>],
     tables: &NttTables<N>,
@@ -672,8 +624,8 @@ pub(crate) fn ntt_inplace_cached<const N: usize, P: NttPrimeList<N>>(
     }
 }
 
-/// In-place negacyclic INTT using a precomputed [`NttTables`].  Equivalent to
-/// [`intt_inplace`] but reuses the cached inverse twiddle factors.
+/// In-place negacyclic INTT using a precomputed [`NttTables`]: inverse of
+/// [`ntt_inplace_cached`].
 pub(crate) fn intt_inplace_cached<const N: usize, P: NttPrimeList<N>>(
     coeffs: &mut [Rns<N, P>],
     tables: &NttTables<N>,
@@ -724,16 +676,39 @@ impl NttPrimeList<4> for NttPrimes24Bit4 {
     ];
 }
 
+/// Five 24-bit NTT-friendly primes (p ≡ 1 mod 2048, 2²³ ≤ p < 2²⁴).
+/// Signed capacity ≈ 114 bits.  Sized to cover the `k·f` *product* (not the
+/// capital) in the multiword `babai_reduce_rns_{packed,bigint}` paths at
+/// recursion depth 3, where the product is ≈112 bits.  The first four primes
+/// coincide with [`NttPrimes24Bit4`].
+pub(crate) struct NttPrimes24Bit5;
+impl PrimeList<5> for NttPrimes24Bit5 {
+    const PRIMES: [u32; 5] = [8_404_993, 8_427_521, 8_441_857, 8_452_097, 8_466_433];
+}
+impl NttPrimeList<5> for NttPrimes24Bit5 {
+    const ROOTS_OF_UNITY_2048: [u32; 5] = [
+        FpField::<8_404_993>::primitive_nth_root_of_unity(2048).value(),
+        FpField::<8_427_521>::primitive_nth_root_of_unity(2048).value(),
+        FpField::<8_441_857>::primitive_nth_root_of_unity(2048).value(),
+        FpField::<8_452_097>::primitive_nth_root_of_unity(2048).value(),
+        FpField::<8_466_433>::primitive_nth_root_of_unity(2048).value(),
+    ];
+}
+
 /// Eight 24-bit NTT-friendly primes (p ≡ 1 mod 2048, 2²³ ≤ p < 2²⁴).
-/// Signed capacity ≈ 183 bits; covers the RNS-NTT `k·f` product in
-/// `babai_reduce_rns_bigint` at recursion depths 3–4.  The first four primes
-/// coincide with [`NttPrimes24Bit4`] so the lists agree where they overlap.
+/// Signed capacity ≈ 183 bits.  The first four primes coincide with
+/// [`NttPrimes24Bit4`] so the lists agree where they overlap.  Retained only
+/// for tests that need to round-trip 3-limb (>128-bit) values through RNS; the
+/// reduction paths use [`NttPrimes24Bit5`] (the `k·f` product is ≈107 bits).
+#[cfg(test)]
 pub(crate) struct NttPrimes24Bit8;
+#[cfg(test)]
 impl PrimeList<8> for NttPrimes24Bit8 {
     const PRIMES: [u32; 8] = [
         8_404_993, 8_427_521, 8_441_857, 8_452_097, 8_466_433, 8_513_537, 8_519_681, 8_527_873,
     ];
 }
+#[cfg(test)]
 impl NttPrimeList<8> for NttPrimes24Bit8 {
     const ROOTS_OF_UNITY_2048: [u32; 8] = [
         FpField::<8_404_993>::primitive_nth_root_of_unity(2048).value(),
@@ -907,14 +882,15 @@ mod tests {
 
     #[test]
     fn ntt_intt_roundtrip() {
-        use super::{intt_inplace, ntt_inplace};
+        use super::{intt_inplace_cached, ntt_inplace_cached, NttTables};
         let n = 16;
+        let tables = NttTables::<3>::new::<SmallPrimes>(n);
         let orig: Vec<Rns3> = (0..n as i32).map(Rns3::from_i32).collect();
         let mut buf = orig.clone();
-        ntt_inplace::<3, SmallPrimes>(&mut buf);
+        ntt_inplace_cached::<3, SmallPrimes>(&mut buf, &tables);
         // After NTT the values should be different (unless poly is zero)
         assert_ne!(buf[0].residue(0), orig[0].residue(0));
-        intt_inplace::<3, SmallPrimes>(&mut buf);
+        intt_inplace_cached::<3, SmallPrimes>(&mut buf, &tables);
         // After INTT we should recover the original
         for (i, (a, b)) in orig.iter().zip(buf.iter()).enumerate() {
             for pi in 0..3 {
@@ -925,18 +901,19 @@ mod tests {
 
     #[test]
     fn ntt_multiplication_mod_cyclotomic() {
-        use super::{intt_inplace, ntt_inplace};
+        use super::{intt_inplace_cached, ntt_inplace_cached, NttTables};
         // Multiply [1, 1, 0, ...] * [1, 1, 0, ...] mod X^4+1
         // = [1, 2, 1, 0] mod X^4+1 = [1, 2, 1, 0] (degree < 4, no reduction)
         let n = 4;
+        let tables = NttTables::<3>::new::<SmallPrimes>(n);
         let a_coeffs = [1i32, 1, 0, 0];
         let b_coeffs = [1i32, 1, 0, 0];
         let mut a: Vec<Rns3> = a_coeffs.iter().copied().map(Rns3::from_i32).collect();
         let mut b: Vec<Rns3> = b_coeffs.iter().copied().map(Rns3::from_i32).collect();
-        ntt_inplace::<3, SmallPrimes>(&mut a);
-        ntt_inplace::<3, SmallPrimes>(&mut b);
+        ntt_inplace_cached::<3, SmallPrimes>(&mut a, &tables);
+        ntt_inplace_cached::<3, SmallPrimes>(&mut b, &tables);
         let mut c: Vec<Rns3> = a.iter().zip(b.iter()).map(|(&x, &y)| x * y).collect();
-        intt_inplace::<3, SmallPrimes>(&mut c);
+        intt_inplace_cached::<3, SmallPrimes>(&mut c, &tables);
         let expected = [1i32, 2, 1, 0];
         for (i, (e, r)) in expected.iter().zip(c.iter()).enumerate() {
             assert_eq!(*e, r.to_i64() as i32, "coeff={i}");
