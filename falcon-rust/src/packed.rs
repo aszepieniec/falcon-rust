@@ -5,9 +5,9 @@
 //! capital coefficients as [`num::BigInt`] is too slow: every iteration pays a
 //! full `BigInt`↔RNS Garner conversion, which swamps the NTT multiply saving.
 //!
-//! This module provides [`Packed`], a 256-bit two's-complement integer stored
-//! as four little-endian `u64` limbs.  It mirrors the part of fn-dsa's
-//! `zint31` design that matters for performance:
+//! This module provides [`Packed`], a signed two's-complement integer stored as
+//! `L` little-endian `u64` limbs (a `64·L`-bit range).  It mirrors the part of
+//! fn-dsa's `zint31` design that matters for performance:
 //!
 //! * top-word access ([`shr_to_i128`](Packed::shr_to_i128)) and size
 //!   ([`bit_length`](Packed::bit_length)) are O(1) limb reads — no
@@ -15,31 +15,32 @@
 //! * the RNS product is reconstructed straight into limbs with **word-level**
 //!   CRT ([`from_rns`](Packed::from_rns)) — no per-coefficient heap allocation.
 //!
-//! 256 bits comfortably covers recursion depth 3: capital and shifted products
-//! peak around 165 bits there, leaving > 90 bits of headroom including sign.
+//! `L` is chosen per recursion depth to cover the capital coefficients: `L = 4`
+//! (256-bit) at depth 3 (capital + shifted products peak ~165 bits), `L = 5`
+//! (320-bit) at depth 4 (capital ~303 bits), and so on.
 
 use num::{BigInt, Zero};
 
 use crate::rns::{NttPrimeList, Rns};
 
-/// Number of 64-bit limbs.  256-bit signed range.
-const L: usize = 4;
-
-/// A signed integer in `(-2^255, 2^255)`, two's complement, base `2^64`,
-/// little-endian (`limbs[0]` is least significant).
+/// A signed integer in `(−2^(64L−1), 2^(64L−1))`, two's complement, base `2^64`,
+/// little-endian (`limbs[0]` is least significant).  `L ≥ 2` is assumed.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(crate) struct Packed {
+pub(crate) struct Packed<const L: usize> {
     limbs: [u64; L],
 }
 
-impl Packed {
-    pub(crate) const ZERO: Packed = Packed { limbs: [0; L] };
+impl<const L: usize> Packed<L> {
+    pub(crate) const ZERO: Self = Self { limbs: [0; L] };
 
-    /// Sign-extend a signed 128-bit value into the 256-bit representation.
-    pub(crate) fn from_i128(v: i128) -> Packed {
+    /// Sign-extend a signed 128-bit value into the `L`-limb representation.
+    pub(crate) fn from_i128(v: i128) -> Self {
         let lo = v as u128;
         let ext = if v < 0 { u64::MAX } else { 0 };
-        Packed { limbs: [lo as u64, (lo >> 64) as u64, ext, ext] }
+        let mut limbs = [ext; L];
+        limbs[0] = lo as u64;
+        limbs[1] = (lo >> 64) as u64;
+        Self { limbs }
     }
 
     /// True when the value is negative (top bit of the most significant limb).
@@ -48,7 +49,7 @@ impl Packed {
     }
 
     /// Two's-complement negation (`!x + 1`).
-    fn neg(&self) -> Packed {
+    fn neg(&self) -> Self {
         let mut out = [0u64; L];
         let mut carry = 1u128;
         for i in 0..L {
@@ -56,7 +57,7 @@ impl Packed {
             out[i] = v as u64;
             carry = v >> 64;
         }
-        Packed { limbs: out }
+        Self { limbs: out }
     }
 
     /// Magnitude (absolute value) limbs.
@@ -114,8 +115,8 @@ impl Packed {
     }
 
     /// Logical left shift by `bits` (multiply by `2^bits`); bits beyond the
-    /// 256-bit width are dropped (callers keep magnitudes well within range).
-    pub(crate) fn shl(&self, bits: u32) -> Packed {
+    /// `64·L`-bit width are dropped (callers keep magnitudes well within range).
+    pub(crate) fn shl(&self, bits: u32) -> Self {
         let limb = (bits / 64) as usize;
         let bit = bits % 64;
         let mut out = [0u64; L];
@@ -132,11 +133,11 @@ impl Packed {
             }
             out[i] = word as u64;
         }
-        Packed { limbs: out }
+        Self { limbs: out }
     }
 
     /// `self - other`, wrapping in two's complement.
-    pub(crate) fn sub(&self, other: &Packed) -> Packed {
+    pub(crate) fn sub(&self, other: &Self) -> Self {
         let mut out = [0u64; L];
         let mut borrow = 0i128;
         for i in 0..L {
@@ -144,30 +145,15 @@ impl Packed {
             out[i] = v as u64;
             borrow = if v < 0 { 1 } else { 0 };
         }
-        Packed { limbs: out }
+        Self { limbs: out }
     }
 
-    fn sub_assign(&mut self, other: &Packed) {
+    fn sub_assign(&mut self, other: &Self) {
         *self = self.sub(other);
     }
 
-    /// `self + (u32)` (used by the CRT accumulation).
-    fn add_u32(&self, v: u32) -> Packed {
-        let mut out = self.limbs;
-        let mut carry = v as u128;
-        for limb in out.iter_mut() {
-            let s = *limb as u128 + carry;
-            *limb = s as u64;
-            carry = s >> 64;
-            if carry == 0 {
-                break;
-            }
-        }
-        Packed { limbs: out }
-    }
-
-    /// `self * (u32)`, truncated to 256 bits.
-    fn mul_u32(&self, v: u32) -> Packed {
+    /// `self * (u32)`, truncated to `64·L` bits.
+    fn mul_u32(&self, v: u32) -> Self {
         let mut out = [0u64; L];
         let mut carry = 0u128;
         for i in 0..L {
@@ -175,11 +161,11 @@ impl Packed {
             out[i] = prod as u64;
             carry = prod >> 64;
         }
-        Packed { limbs: out }
+        Self { limbs: out }
     }
 
-    /// Unsigned compare (treats both as non-negative 256-bit magnitudes).
-    fn ucmp(&self, other: &Packed) -> core::cmp::Ordering {
+    /// Unsigned compare (treats both as non-negative `64·L`-bit magnitudes).
+    fn ucmp(&self, other: &Self) -> core::cmp::Ordering {
         for i in (0..L).rev() {
             match self.limbs[i].cmp(&other.limbs[i]) {
                 core::cmp::Ordering::Equal => continue,
@@ -192,14 +178,18 @@ impl Packed {
     /// Reconstruct a signed value from its RNS residues via **word-level**
     /// Garner CRT (no `BigInt`), returning the symmetric representative.
     ///
-    /// The modulus `M = ∏ primes` must fit in 256 bits (true for the 8×24-bit
-    /// set, `M ≈ 2^184`) and exceed twice the represented magnitude.
-    pub(crate) fn from_rns<const K: usize, P: NttPrimeList<K>>(r: &Rns<K, P>) -> Packed {
+    /// The modulus `M = ∏ primes` must fit in `64·L` bits and exceed twice the
+    /// represented magnitude (callers size `L` and the prime set accordingly).
+    pub(crate) fn from_rns<const K: usize, P: NttPrimeList<K>>(r: &Rns<K, P>) -> Self {
         let digits = r.to_garner();
         // value = ((…((d_{K-1})·p_{K-2} + d_{K-2})…)·p_0 + d_0) — Horner over
         // the mixed-radix digits, most significant first.
-        let mut acc = Packed::ZERO;
-        let mut modulus = Packed { limbs: [1, 0, 0, 0] };
+        let mut acc = Self::ZERO;
+        let mut modulus = {
+            let mut l = [0u64; L];
+            l[0] = 1;
+            Self { limbs: l }
+        };
         for i in 0..K {
             // acc += digit_i · (∏_{j<i} p_j)
             acc = acc.add_packed(&modulus.mul_u32(digits[i]));
@@ -215,7 +205,7 @@ impl Packed {
     }
 
     /// `self + other` (full-width, wrapping).  Helper for CRT accumulation.
-    fn add_packed(&self, other: &Packed) -> Packed {
+    fn add_packed(&self, other: &Self) -> Self {
         let mut out = [0u64; L];
         let mut carry = 0u128;
         for i in 0..L {
@@ -223,12 +213,12 @@ impl Packed {
             out[i] = s as u64;
             carry = s >> 64;
         }
-        Packed { limbs: out }
+        Self { limbs: out }
     }
 
     /// Logical (unsigned) right shift by `bits`, used only on the positive
     /// modulus to form `M/2`.
-    fn shr_unsigned(&self, bits: u32) -> Packed {
+    fn shr_unsigned(&self, bits: u32) -> Self {
         let limb = (bits / 64) as usize;
         let bit = bits % 64;
         let mut out = [0u64; L];
@@ -242,11 +232,11 @@ impl Packed {
             }
             out[i] = word as u64;
         }
-        Packed { limbs: out }
+        Self { limbs: out }
     }
 
     /// Construct from a [`BigInt`] (used at the reduction entry point only).
-    pub(crate) fn from_bigint(x: &BigInt) -> Packed {
+    pub(crate) fn from_bigint(x: &BigInt) -> Self {
         let neg = x.sign() == num::bigint::Sign::Minus;
         let mag = if neg { -x } else { x.clone() };
         let (_, words) = mag.to_u64_digits();
@@ -254,7 +244,7 @@ impl Packed {
         for (i, w) in words.iter().take(L).enumerate() {
             limbs[i] = *w;
         }
-        let p = Packed { limbs };
+        let p = Self { limbs };
         if neg {
             p.neg()
         } else {
@@ -279,17 +269,20 @@ impl Packed {
     }
 }
 
-impl std::ops::SubAssign<&Packed> for Packed {
-    fn sub_assign(&mut self, rhs: &Packed) {
+impl<const L: usize> std::ops::SubAssign<&Packed<L>> for Packed<L> {
+    fn sub_assign(&mut self, rhs: &Packed<L>) {
         Packed::sub_assign(self, rhs)
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use num::{BigInt, Signed};
+    use crate::rns::{NttPrimes24Bit8, Rns};
+    use num::{BigInt, Signed, Zero};
     use rand::{rngs::StdRng, RngExt, SeedableRng};
+
+    // The unit tests exercise the 4-limb (256-bit) width.
+    type Packed = super::Packed<4>;
 
     fn rand_packed(rng: &mut StdRng) -> (Packed, BigInt) {
         // Random ~200-bit signed value built from i128 + shifted i128.
@@ -355,7 +348,6 @@ mod tests {
 
     #[test]
     fn from_rns_reconstructs_signed() {
-        use crate::rns::{NttPrimes24Bit8, Rns};
         let mut rng = StdRng::seed_from_u64(7);
         for _ in 0..2000 {
             // Values well within the 8-prime (~183-bit) signed capacity: build
