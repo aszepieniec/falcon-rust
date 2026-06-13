@@ -123,6 +123,29 @@ pub fn babai_per_depth(c: &mut Criterion) {
         );
     });
 
+    // Depth 4 (n=64): K=8 primes (the ≈155-bit k·f product needs them) and, for
+    // the packed path, L=5 limbs (≈303-bit capital).  Compare against bigint/d=4
+    // to see whether RNS's lead over karatsuba widens with depth.
+    group.bench_function("rns-bigint-k8/d=4", |b| {
+        b.iter_batched(
+            || generate_depth_inputs_bigint(4, &mut rng),
+            |(f, g, mut cf, mut cg)| {
+                let _ = falcon_rust::math::babai_reduce_rns_bigint_depth4(&f, &g, &mut cf, &mut cg);
+            },
+            BatchSize::SmallInput,
+        );
+    });
+
+    group.bench_function("rns-packed-k8/d=4", |b| {
+        b.iter_batched(
+            || generate_depth_inputs_bigint(4, &mut rng),
+            |(f, g, mut cf, mut cg)| {
+                let _ = falcon_rust::math::babai_reduce_rns_packed_depth4(&f, &g, &mut cf, &mut cg);
+            },
+            BatchSize::SmallInput,
+        );
+    });
+
     group.finish();
 }
 

@@ -697,18 +697,15 @@ impl NttPrimeList<5> for NttPrimes24Bit5 {
 
 /// Eight 24-bit NTT-friendly primes (p ≡ 1 mod 2048, 2²³ ≤ p < 2²⁴).
 /// Signed capacity ≈ 183 bits.  The first four primes coincide with
-/// [`NttPrimes24Bit4`] so the lists agree where they overlap.  Retained only
-/// for tests that need to round-trip 3-limb (>128-bit) values through RNS; the
-/// reduction paths use [`NttPrimes24Bit5`] (the `k·f` product is ≈107 bits).
-#[cfg(test)]
+/// [`NttPrimes24Bit4`] so the lists agree where they overlap.  Covers the
+/// depth-4 `k·f` product (≈155 bits; see the depth-4 reduction entry points)
+/// and is used by tests that round-trip 3-limb (>128-bit) values through RNS.
 pub(crate) struct NttPrimes24Bit8;
-#[cfg(test)]
 impl PrimeList<8> for NttPrimes24Bit8 {
     const PRIMES: [u32; 8] = [
         8_404_993, 8_427_521, 8_441_857, 8_452_097, 8_466_433, 8_513_537, 8_519_681, 8_527_873,
     ];
 }
-#[cfg(test)]
 impl NttPrimeList<8> for NttPrimes24Bit8 {
     const ROOTS_OF_UNITY_2048: [u32; 8] = [
         FpField::<8_404_993>::primitive_nth_root_of_unity(2048).value(),
