@@ -16,7 +16,7 @@ use crate::{
     polynomial::Polynomial,
     rns::{
         intt_inplace_cached, ntt_inplace_cached, NttPrimeList, NttPrimes24Bit2, NttPrimes24Bit4,
-        NttPrimes24Bit5, NttTables, Rns,
+        NttPrimes24Bit5, NttPrimes24Bit8, NttTables, Rns,
     },
     samplerz::sampler_z,
     U32Field,
@@ -738,7 +738,7 @@ pub fn babai_reduce_rns_depth2(
 /// representation fn-dsa uses (base 2^31 there, base 2^64 here) and the point
 /// of the prototype: see whether removing the conversion overhead lets the
 /// NTT multiply actually beat `BigInt` karatsuba at depth ≥ 3.
-pub(crate) fn babai_reduce_rns_packed<const K: usize, P: NttPrimeList<K>>(
+pub(crate) fn babai_reduce_rns_packed<const LP: usize, const K: usize, P: NttPrimeList<K>>(
     f: &Polynomial<BigInt>,
     g: &Polynomial<BigInt>,
     capital_f: &mut Polynomial<BigInt>,
@@ -782,24 +782,26 @@ pub(crate) fn babai_reduce_rns_packed<const K: usize, P: NttPrimeList<K>>(
         f_adjusted.hadamard_mul(&f_star_adjusted) + g_adjusted.hadamard_mul(&g_star_adjusted);
 
     // Capital coefficients move into packed limbs for the duration of the loop.
-    let mut cf: Vec<Packed> = capital_f.coefficients.iter().map(Packed::from_bigint).collect();
-    let mut cg: Vec<Packed> = capital_g.coefficients.iter().map(Packed::from_bigint).collect();
+    let mut cf: Vec<Packed<LP>> =
+        capital_f.coefficients.iter().map(Packed::<LP>::from_bigint).collect();
+    let mut cg: Vec<Packed<LP>> =
+        capital_g.coefficients.iter().map(Packed::<LP>::from_bigint).collect();
 
     // Reconstruct the RNS product of (already-transformed) `k_ntt` with the
     // precomputed `h_ntt`, returning packed limbs (one word-level CRT per
     // coefficient, no allocation).  `k_ntt` is forward-transformed once per
     // iteration by the caller and reused for both the f and g products.
-    let product = |k_ntt: &[Rns<K, P>], h_ntt: &[Rns<K, P>]| -> Vec<Packed> {
+    let product = |k_ntt: &[Rns<K, P>], h_ntt: &[Rns<K, P>]| -> Vec<Packed<LP>> {
         let mut prod: Vec<Rns<K, P>> =
             k_ntt.iter().zip(h_ntt.iter()).map(|(&a, &b)| a * b).collect();
         intt_inplace_cached::<K, P>(&mut prod, &tables);
-        prod.iter().map(Packed::from_rns).collect()
+        prod.iter().map(Packed::<LP>::from_rns).collect()
     };
 
-    let cap_size = |cf: &[Packed], cg: &[Packed]| -> u64 {
+    let cap_size = |cf: &[Packed<LP>], cg: &[Packed<LP>]| -> u64 {
         cf.iter()
             .chain(cg.iter())
-            .map(Packed::bit_length)
+            .map(|p| p.bit_length())
             .fold(53, u64::max)
     };
 
@@ -844,10 +846,10 @@ pub(crate) fn babai_reduce_rns_packed<const K: usize, P: NttPrimeList<K>>(
         // products (k is identical for both).
         let mut k_ntt: Vec<Rns<K, P>> = k.iter().map(|&v| Rns::from_i128(v)).collect();
         ntt_inplace_cached::<K, P>(&mut k_ntt, &tables);
-        let kf: Vec<Packed> = product(&k_ntt, &f_ntt);
-        let kg: Vec<Packed> = product(&k_ntt, &g_ntt);
-        let shifted_kf: Vec<Packed> = kf.iter().map(|p| p.shl(back_shift)).collect();
-        let shifted_kg: Vec<Packed> = kg.iter().map(|p| p.shl(back_shift)).collect();
+        let kf: Vec<Packed<LP>> = product(&k_ntt, &f_ntt);
+        let kg: Vec<Packed<LP>> = product(&k_ntt, &g_ntt);
+        let shifted_kf: Vec<Packed<LP>> = kf.iter().map(|p| p.shl(back_shift)).collect();
+        let shifted_kg: Vec<Packed<LP>> = kg.iter().map(|p| p.shl(back_shift)).collect();
 
         if d > 53 {
             let new_cs_f = cf
@@ -911,11 +913,12 @@ pub(crate) fn babai_reduce_rns_packed<const K: usize, P: NttPrimeList<K>>(
     Ok(())
 }
 
-/// Run [`babai_reduce_rns_packed`] at recursion depth 3 (n = 128, K = 5 primes).
+/// Run [`babai_reduce_rns_packed`] at recursion depth 3 (n = 128, K = 5 primes,
+/// L = 4 limbs / 256-bit capital).
 ///
 /// Only 5 primes are needed: the path pushes the `k·f` product (a hard ≈107-bit
 /// quantity, see `ntt_primes24_5_covers_depth3_product`) — not the ≈154-bit
-/// capital — through RNS.
+/// capital — through RNS.  The ≈154-bit capital fits in 4 limbs.
 #[doc(hidden)]
 pub fn babai_reduce_rns_packed_depth3(
     f: &Polynomial<BigInt>,
@@ -923,7 +926,24 @@ pub fn babai_reduce_rns_packed_depth3(
     capital_f: &mut Polynomial<BigInt>,
     capital_g: &mut Polynomial<BigInt>,
 ) -> Result<(), String> {
-    babai_reduce_rns_packed::<5, NttPrimes24Bit5>(f, g, capital_f, capital_g)
+    babai_reduce_rns_packed::<4, 5, NttPrimes24Bit5>(f, g, capital_f, capital_g)
+}
+
+/// Run [`babai_reduce_rns_packed`] at recursion depth 4 (n = 64, K = 8 primes,
+/// L = 5 limbs / 320-bit capital).
+///
+/// At depth 4 the `k·f` product is ≈155 bits (`bits(f)≈101` plus the ≈53-bit
+/// reduction coefficient `k`; see `product_size_model_matches_measurements`),
+/// so the 8-prime ≈183-bit list is required — the 5-prime list (≈114 bits)
+/// would wrap.  The ≈303-bit capital needs 5 limbs.
+#[doc(hidden)]
+pub fn babai_reduce_rns_packed_depth4(
+    f: &Polynomial<BigInt>,
+    g: &Polynomial<BigInt>,
+    capital_f: &mut Polynomial<BigInt>,
+    capital_g: &mut Polynomial<BigInt>,
+) -> Result<(), String> {
+    babai_reduce_rns_packed::<5, 8, NttPrimes24Bit8>(f, g, capital_f, capital_g)
 }
 
 /// Run [`babai_reduce_rns_bigint`] at recursion depth 3 (n = 128, K = 5 primes).
@@ -939,6 +959,19 @@ pub fn babai_reduce_rns_bigint_depth3(
     capital_g: &mut Polynomial<BigInt>,
 ) -> Result<(), String> {
     babai_reduce_rns_bigint::<5, NttPrimes24Bit5>(f, g, capital_f, capital_g)
+}
+
+/// Run [`babai_reduce_rns_bigint`] at recursion depth 4 (n = 64, K = 8 primes).
+/// Capital carried as `BigInt`; the ≈155-bit `k·f` product needs the 8-prime
+/// list.  Provided for the per-depth benchmark and the depth-4 correctness test.
+#[doc(hidden)]
+pub fn babai_reduce_rns_bigint_depth4(
+    f: &Polynomial<BigInt>,
+    g: &Polynomial<BigInt>,
+    capital_f: &mut Polynomial<BigInt>,
+    capital_g: &mut Polynomial<BigInt>,
+) -> Result<(), String> {
+    babai_reduce_rns_bigint::<8, NttPrimes24Bit8>(f, g, capital_f, capital_g)
 }
 
 /// Solve the NTRU equation. Given f, g in ZZ[X], find F, G in ZZ[X].
@@ -1478,6 +1511,20 @@ mod test {
         (f, g, cf, cg)
     }
 
+    /// Realistic depth-4 inputs: n = 64, max|f,g| ≈ 101 bits, max|F,G| ≈ 303
+    /// bits.  Exercises the full ≈155-bit `k·f` product (CRT-wrap detector for
+    /// the K = 8 prime list) and the 5-limb (320-bit) capital.
+    fn depth4_inputs(
+        rng: &mut StdRng,
+    ) -> (Polynomial<BigInt>, Polynomial<BigInt>, Polynomial<BigInt>, Polynomial<BigInt>) {
+        let n = 64;
+        let f = Polynomial::new((0..n).map(|_| rand_signed_bigint(rng, 101)).collect::<Vec<_>>());
+        let g = Polynomial::new((0..n).map(|_| rand_signed_bigint(rng, 101)).collect::<Vec<_>>());
+        let cf = Polynomial::new((0..n).map(|_| rand_signed_bigint(rng, 303)).collect::<Vec<_>>());
+        let cg = Polynomial::new((0..n).map(|_| rand_signed_bigint(rng, 303)).collect::<Vec<_>>());
+        (f, g, cf, cg)
+    }
+
     /// Sizing model for the multiword RNS reduction paths, established by
     /// measuring the max `k·f` product bit-width on realistic inputs (with the
     /// 183-bit `NttPrimes24Bit8` so the product never wraps during measurement):
@@ -1490,8 +1537,10 @@ mod test {
     /// the product is `k · f_full` with the *full* `f`, so it grows with depth
     /// as `bits(f) + ~54`.  Crucially this is still far below the capital
     /// (`bits(F) ≈ 3·bits(f)`): the modulus need only cover the product, so the
-    /// prime count is roughly halved versus sizing for the capital —
-    /// `ceil((bits(f) + 54 + margin) / 23)` primes (5 at depth 3, ~7 at depth 4).
+    /// prime count is roughly halved versus sizing for the capital.  Sizing for
+    /// the +6σ tail, `ceil((avg_f + 6·σ_f + 54 + 2) / 23)` primes: 5 at depth 3,
+    /// 8 at depth 4 (the +6σ tail pushes the product to ≈162 bits, past K=7's
+    /// ≈160-bit capacity).
     #[test]
     fn product_size_model_matches_measurements() {
         // (bits(f), measured max product) data points.
@@ -1549,13 +1598,13 @@ mod test {
     }
 
     /// The multiword `babai_reduce_rns_{packed,bigint}` paths only push the
-    /// `k·f` *product* through RNS, not the capital.  Thanks to the `d>53`
-    /// windowing the product reconstructs a fixed ≈106-bit window of the
-    /// capital regardless of the capital's true size — measured empirically to
-    /// peak at a hard 107 bits at depth 3 (stays 107 even with f,g and capital
-    /// pushed well past their +6σ tails).  So the prime list need only cover
-    /// ~107 bits, not the ≈154-bit capital — hence `NttPrimes24Bit5` rather
-    /// than `NttPrimes24Bit8`.
+    /// `k·f` *product* through RNS, not the capital.  At a fixed depth the
+    /// product does not grow with the capital's magnitude (the `d>53` windowing
+    /// keeps `k ≈ 53` bits), so it is `bits(f) + ~54` — measured to peak at a
+    /// hard 107 bits at depth 3.  So the prime list need only cover ~107 bits,
+    /// not the ≈154-bit capital — hence `NttPrimes24Bit5` (≈114-bit capacity)
+    /// rather than `NttPrimes24Bit8`.  (See `product_size_model_matches_…` for
+    /// why this grows with depth — at depth 4 the product is ≈155 bits.)
     #[test]
     fn ntt_primes24_5_covers_depth3_product() {
         use crate::rns::NttPrimes24Bit5;
@@ -1569,6 +1618,66 @@ mod test {
             capacity >= MEASURED_PRODUCT_BITS,
             "NttPrimes24Bit5 capacity {capacity:.1} < depth-3 product {MEASURED_PRODUCT_BITS:.1}"
         );
+    }
+
+    /// Depth 4: the ≈155-bit `k·f` product (`bits(f)≈101` + ≈54) needs the
+    /// 8-prime ≈183-bit list; the 5-prime ≈114-bit list would wrap.  Assert K=8
+    /// covers the +6σ tail (≈162 bits) and that K=7 would not.
+    #[test]
+    fn ntt_primes24_8_covers_depth4_product() {
+        use crate::rns::NttPrimes24Bit8;
+        // avg_f + 6σ_f + 54 + 2, from NTRU_SOLVE_BABAI_COEFF_BITS[4] = (101.62, 1.02, …).
+        let required = 101.62 + 6.0 * 1.02 + 54.0 + 2.0; // ≈ 163.8 bits
+        let cap = |primes: &[u32]| -> f64 {
+            primes.iter().map(|&p| f64::log2(p as f64)).sum::<f64>() - 1.0
+        };
+        let cap8 = cap(&NttPrimes24Bit8::PRIMES);
+        let cap7 = cap(&NttPrimes24Bit8::PRIMES[..7]);
+        assert!(cap8 >= required, "K=8 capacity {cap8:.1} < depth-4 product {required:.1}");
+        assert!(cap7 < required, "K=7 capacity {cap7:.1} unexpectedly covers {required:.1}");
+    }
+
+    /// rns-bigint backend must match BigInt karatsuba on realistic depth-4
+    /// inputs (n=64, capital ≈303 bits). Wrap-detector for the K=8 prime list.
+    #[test]
+    fn babai_reduce_rns_bigint_depth4_matches_bigint() {
+        use super::babai_reduce_rns_bigint_depth4;
+
+        let mut rng = StdRng::seed_from_u64(0xba_ba_14_d4);
+        for _ in 0..16 {
+            let (f, g, cap_f, cap_g) = depth4_inputs(&mut rng);
+
+            let (mut bf, mut bg) = (cap_f.clone(), cap_g.clone());
+            babai_reduce_bigint(&f, &g, &mut bf, &mut bg).unwrap();
+
+            let (mut rf, mut rg) = (cap_f, cap_g);
+            babai_reduce_rns_bigint_depth4(&f, &g, &mut rf, &mut rg).unwrap();
+
+            assert_eq!(bf, rf, "capital_F mismatch (depth 4, rns-bigint)");
+            assert_eq!(bg, rg, "capital_G mismatch (depth 4, rns-bigint)");
+        }
+    }
+
+    /// packed backend (L=5 / 320-bit capital) must match BigInt karatsuba on
+    /// realistic depth-4 inputs.  Exercises both the K=8 product sizing and the
+    /// widened limb count.
+    #[test]
+    fn babai_reduce_rns_packed_depth4_matches_bigint() {
+        use super::babai_reduce_rns_packed_depth4;
+
+        let mut rng = StdRng::seed_from_u64(0x9ac_ed_d4);
+        for _ in 0..16 {
+            let (f, g, cap_f, cap_g) = depth4_inputs(&mut rng);
+
+            let (mut bf, mut bg) = (cap_f.clone(), cap_g.clone());
+            babai_reduce_bigint(&f, &g, &mut bf, &mut bg).unwrap();
+
+            let (mut pf, mut pg) = (cap_f, cap_g);
+            babai_reduce_rns_packed_depth4(&f, &g, &mut pf, &mut pg).unwrap();
+
+            assert_eq!(bf, pf, "capital_F mismatch (depth 4, packed)");
+            assert_eq!(bg, pg, "capital_G mismatch (depth 4, packed)");
+        }
     }
 
     // #[test]
