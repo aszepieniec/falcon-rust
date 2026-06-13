@@ -595,6 +595,107 @@ pub(crate) fn intt_inplace<const N: usize, P: NttPrimeList<N>>(coeffs: &mut [Rns
     }
 }
 
+/// Precomputed per-prime twiddle tables for an NTT of a fixed length `n`.
+///
+/// [`ntt_inplace`]/[`intt_inplace`] rebuild the root powers (an O(n) array of
+/// Montgomery exponentiations) on every call.  Those tables depend only on the
+/// prime list and `n`, so for repeated transforms of the same size — e.g. the
+/// reduction loop in `babai_reduce_rns_packed`, which transforms once per
+/// iteration — they should be computed once and reused.  This mirrors the
+/// `CyclotomicFourier::fft` convention of passing `psi_rev` in as an argument.
+///
+/// Pair with [`ntt_inplace_cached`] / [`intt_inplace_cached`].
+pub(crate) struct NttTables<const N: usize> {
+    n: usize,
+    primes: [u32; N],
+    log2r: [u32; N],
+    neg_inv: [u32; N],
+    /// Forward bit-reversed root powers (Montgomery form), one Vec per prime.
+    psi_rev: [Vec<u32>; N],
+    /// Inverse bit-reversed root powers (Montgomery form), one Vec per prime.
+    psi_inv_rev: [Vec<u32>; N],
+    /// n⁻¹ in Montgomery form, one per prime (final INTT scaling).
+    ninv_mont: [u32; N],
+}
+
+impl<const N: usize> NttTables<N> {
+    /// Build the forward and inverse twiddle tables for length `n` once.
+    pub(crate) fn new<P: NttPrimeList<N>>(n: usize) -> Self {
+        debug_assert!(n >= 1 && n <= 1024 && n.is_power_of_two());
+        let primes = P::PRIMES;
+        let log2r: [u32; N] = std::array::from_fn(|i| primes[i].ilog2() + 1);
+        let neg_inv: [u32; N] = std::array::from_fn(|i| negqinv_modr(primes[i]));
+
+        let psi_rev: [Vec<u32>; N] = std::array::from_fn(|i| {
+            let (p, lr, ni, r_sq) = (primes[i], log2r[i], neg_inv[i], r_sq_modq(primes[i]));
+            let root_2n = primitive_root_2n(P::ROOTS_OF_UNITY_2048[i], n, p);
+            let root_2n_mont = dispatch_log2r!(lr, root_2n, r_sq, p, ni);
+            bitrev_powers_mont(root_2n_mont, n, p, lr, ni, r_sq)
+        });
+        let psi_inv_rev: [Vec<u32>; N] = std::array::from_fn(|i| {
+            let (p, lr, ni, r_sq) = (primes[i], log2r[i], neg_inv[i], r_sq_modq(primes[i]));
+            let root_2n = primitive_root_2n(P::ROOTS_OF_UNITY_2048[i], n, p);
+            let root_inv = mod_pow(root_2n as u64, (p - 2) as u64, p as u64) as u32;
+            let root_inv_mont = dispatch_log2r!(lr, root_inv, r_sq, p, ni);
+            bitrev_powers_mont(root_inv_mont, n, p, lr, ni, r_sq)
+        });
+        let ninv_mont: [u32; N] = std::array::from_fn(|i| {
+            let (p, lr, ni, r_sq) = (primes[i], log2r[i], neg_inv[i], r_sq_modq(primes[i]));
+            let n_inv = mod_pow(n as u64, (p - 2) as u64, p as u64) as u32;
+            dispatch_log2r!(lr, n_inv, r_sq, p, ni)
+        });
+
+        Self { n, primes, log2r, neg_inv, psi_rev, psi_inv_rev, ninv_mont }
+    }
+}
+
+/// In-place negacyclic NTT using a precomputed [`NttTables`].  Equivalent to
+/// [`ntt_inplace`] but reuses the cached twiddle factors.
+pub(crate) fn ntt_inplace_cached<const N: usize, P: NttPrimeList<N>>(
+    coeffs: &mut [Rns<N, P>],
+    tables: &NttTables<N>,
+) {
+    debug_assert_eq!(coeffs.len(), tables.n);
+    for prime_idx in 0..N {
+        let p = tables.primes[prime_idx];
+        let mut slice: Vec<u32> = coeffs.iter().map(|r| r.residues[prime_idx]).collect();
+        ntt_u32(
+            &mut slice,
+            &tables.psi_rev[prime_idx],
+            p,
+            tables.log2r[prime_idx],
+            tables.neg_inv[prime_idx],
+        );
+        for (coeff, val) in coeffs.iter_mut().zip(slice) {
+            coeff.residues[prime_idx] = val;
+        }
+    }
+}
+
+/// In-place negacyclic INTT using a precomputed [`NttTables`].  Equivalent to
+/// [`intt_inplace`] but reuses the cached inverse twiddle factors.
+pub(crate) fn intt_inplace_cached<const N: usize, P: NttPrimeList<N>>(
+    coeffs: &mut [Rns<N, P>],
+    tables: &NttTables<N>,
+) {
+    debug_assert_eq!(coeffs.len(), tables.n);
+    for prime_idx in 0..N {
+        let p = tables.primes[prime_idx];
+        let mut slice: Vec<u32> = coeffs.iter().map(|r| r.residues[prime_idx]).collect();
+        intt_u32(
+            &mut slice,
+            &tables.psi_inv_rev[prime_idx],
+            tables.ninv_mont[prime_idx],
+            p,
+            tables.log2r[prime_idx],
+            tables.neg_inv[prime_idx],
+        );
+        for (coeff, val) in coeffs.iter_mut().zip(slice) {
+            coeff.residues[prime_idx] = val;
+        }
+    }
+}
+
 /// Two 24-bit NTT-friendly primes (p ≡ 1 mod 2048, 2²³ ≤ p < 2²⁴).
 /// Signed capacity ≈ 45 bits; covers `babai_reduce_rns` at recursion depth 1.
 pub(crate) struct NttPrimes24Bit2;
