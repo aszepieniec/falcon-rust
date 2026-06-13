@@ -15,8 +15,8 @@ use crate::{
     packed::Packed,
     polynomial::Polynomial,
     rns::{
-        intt_inplace, ntt_inplace, NttPrimeList, NttPrimes24Bit2, NttPrimes24Bit4,
-        NttPrimes24Bit8, Rns,
+        intt_inplace, intt_inplace_cached, ntt_inplace, ntt_inplace_cached, NttPrimeList,
+        NttPrimes24Bit2, NttPrimes24Bit4, NttPrimes24Bit8, NttTables, Rns,
     },
     samplerz::sampler_z,
     U32Field,
@@ -204,13 +204,14 @@ pub fn babai_reduce_bigint(
 fn rns_negacyclic_mul<const K: usize, P: NttPrimeList<K>>(
     k: &Polynomial<BigInt>,
     h_ntt: &[Rns<K, P>],
+    tables: &NttTables<K>,
 ) -> Polynomial<BigInt> {
     let mut k_ntt: Vec<Rns<K, P>> =
         k.coefficients.iter().map(Rns::<K, P>::from_bigint).collect();
-    ntt_inplace::<K, P>(&mut k_ntt);
+    ntt_inplace_cached::<K, P>(&mut k_ntt, tables);
     let mut prod: Vec<Rns<K, P>> =
         k_ntt.iter().zip(h_ntt.iter()).map(|(&a, &b)| a * b).collect();
-    intt_inplace::<K, P>(&mut prod);
+    intt_inplace_cached::<K, P>(&mut prod, tables);
     Polynomial::new(prod.iter().map(|r| r.to_bigint()).collect())
 }
 
@@ -237,13 +238,16 @@ pub(crate) fn babai_reduce_rns_bigint<const K: usize, P: NttPrimeList<K>>(
     let bitsize = |bi: &BigInt| bi.bits();
     let n = f.coefficients.len();
 
+    // Precompute the per-prime twiddle tables once; reused by every transform.
+    let tables = NttTables::<K>::new::<P>(n);
+
     // Precompute the forward NTT of f and g once; reused every iteration.
     let mut f_ntt: Vec<Rns<K, P>> =
         f.coefficients.iter().map(Rns::<K, P>::from_bigint).collect();
     let mut g_ntt: Vec<Rns<K, P>> =
         g.coefficients.iter().map(Rns::<K, P>::from_bigint).collect();
-    ntt_inplace::<K, P>(&mut f_ntt);
-    ntt_inplace::<K, P>(&mut g_ntt);
+    ntt_inplace_cached::<K, P>(&mut f_ntt, &tables);
+    ntt_inplace_cached::<K, P>(&mut g_ntt, &tables);
 
     let size = [
         f.map(bitsize).fold(0, |a, &b| u64::max(a, b)),
@@ -308,8 +312,8 @@ pub(crate) fn babai_reduce_rns_bigint<const K: usize, P: NttPrimeList<K>>(
         if k.is_zero() {
             break;
         }
-        let kf = rns_negacyclic_mul::<K, P>(&k, &f_ntt);
-        let kg = rns_negacyclic_mul::<K, P>(&k, &g_ntt);
+        let kf = rns_negacyclic_mul::<K, P>(&k, &f_ntt, &tables);
+        let kg = rns_negacyclic_mul::<K, P>(&k, &g_ntt, &tables);
         let shifted_kf = kf.map(|bi| bi << back_shift);
         let shifted_kg = kg.map(|bi| bi << back_shift);
 
@@ -343,8 +347,8 @@ pub(crate) fn babai_reduce_rns_bigint<const K: usize, P: NttPrimeList<K>>(
                 if k_old.is_zero() {
                     break;
                 }
-                let kf_old = rns_negacyclic_mul::<K, P>(&k_old, &f_ntt);
-                let kg_old = rns_negacyclic_mul::<K, P>(&k_old, &g_ntt);
+                let kf_old = rns_negacyclic_mul::<K, P>(&k_old, &f_ntt, &tables);
+                let kg_old = rns_negacyclic_mul::<K, P>(&k_old, &g_ntt, &tables);
                 *capital_f -= kf_old.map(|bi| bi << d);
                 *capital_g -= kg_old.map(|bi| bi << d);
                 continue;
@@ -739,13 +743,18 @@ pub(crate) fn babai_reduce_rns_packed<const K: usize, P: NttPrimeList<K>>(
     let bitsize = |bi: &BigInt| bi.bits();
     let n = f.coefficients.len();
 
+    // Precompute the per-prime twiddle tables once; every transform below (the
+    // one-off f/g forward NTTs and the per-iteration k transforms) reuses them
+    // instead of rebuilding the O(n) root-power arrays on each call.
+    let tables = NttTables::<K>::new::<P>(n);
+
     // Precompute the forward NTT of f and g once (their coefficients fit i128).
     let f_i128: Vec<i128> = f.coefficients.iter().map(|c| i128::try_from(c).unwrap()).collect();
     let g_i128: Vec<i128> = g.coefficients.iter().map(|c| i128::try_from(c).unwrap()).collect();
     let mut f_ntt: Vec<Rns<K, P>> = f_i128.iter().map(|&v| Rns::from_i128(v)).collect();
     let mut g_ntt: Vec<Rns<K, P>> = g_i128.iter().map(|&v| Rns::from_i128(v)).collect();
-    ntt_inplace::<K, P>(&mut f_ntt);
-    ntt_inplace::<K, P>(&mut g_ntt);
+    ntt_inplace_cached::<K, P>(&mut f_ntt, &tables);
+    ntt_inplace_cached::<K, P>(&mut g_ntt, &tables);
 
     let size = [
         f.map(bitsize).fold(0, |a, &b| u64::max(a, b)),
@@ -775,10 +784,10 @@ pub(crate) fn babai_reduce_rns_packed<const K: usize, P: NttPrimeList<K>>(
     // Reconstruct the RNS product of `k` with the precomputed `h_ntt`, returning
     // packed limbs (one word-level CRT per coefficient, no allocation).
     let product = |k_rns: &mut [Rns<K, P>], h_ntt: &[Rns<K, P>]| -> Vec<Packed> {
-        ntt_inplace::<K, P>(k_rns);
+        ntt_inplace_cached::<K, P>(k_rns, &tables);
         let mut prod: Vec<Rns<K, P>> =
             k_rns.iter().zip(h_ntt.iter()).map(|(&a, &b)| a * b).collect();
-        intt_inplace::<K, P>(&mut prod);
+        intt_inplace_cached::<K, P>(&mut prod, &tables);
         prod.iter().map(Packed::from_rns).collect()
     };
 
