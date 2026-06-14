@@ -474,9 +474,11 @@ pub fn babai_reduce_i32(
     let g_ntt: Polynomial<U32Field> = g.map(|&i| U32Field::from(i)).fft();
 
     let bitsize = |itr: IntoIter<i32>| {
-        (itr.map(|i| i.abs()).max().unwrap() * 2)
-            .ilog2()
-            .next_multiple_of(8) as usize
+        // All-zero input has no meaningful bit size; `ilog2(0)` would panic.
+        match itr.map(|i| i.abs()).max().unwrap() {
+            0 => 0,
+            m => (m * 2).ilog2().next_multiple_of(8) as usize,
+        }
     };
     let size = usize::max(
         bitsize(
