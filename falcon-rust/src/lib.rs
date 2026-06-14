@@ -71,7 +71,12 @@ pub(crate) mod inverse;
 pub mod math; // pub for benching
 pub mod polynomial; // pub for benching
 pub(crate) mod samplerz;
-pub(crate) type U32Field = fp_field::FpField<1073754113>;
+// The depth-0 NTRU-solve NTT is RNS with a single prime; reuse a 24-bit prime
+// from the multi-prime RNS list (`NttPrimes24Bit*`) rather than a bespoke 30-bit
+// one.  The depth-0 products measure ~2^19.5, well within this prime's ~2^22
+// signed reconstruction range; `ntru_gen` self-checks `fG − gF = q` to catch any
+// rare overflow.
+pub(crate) type U32Field = fp_field::FpField<8404993>;
 
 #[cfg(feature = "profiling")]
 pub mod profiling;
