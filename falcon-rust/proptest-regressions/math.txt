@@ -5,3 +5,4 @@
 # It is recommended to check this file in to source control so that
 # everyone who runs the test benefits from these saved cases.
 cc 8068ff88d5662ee760a926c1c65c1a4bce5561421fe1b8513273b4f516efc837 # shrinks to input = _BigintAndSmallintBabaiReduceAgreeArgs { _logn: 2, _n: 4, f_coefficients: [0, 0, 0, 0], g_coefficients: [0, 0, 0, -4], capital_f_coefficients: [0, 0, 0, 0], capital_g_coefficients: [0, 0, 0, -59] }
+cc 9bd9a63828e93692cb0c5cc12f812ff6b147957a678fda5d06652c159a94208a # shrinks to input = _BigintAndSmallintBabaiReduceAgreeArgs { _logn: 1, _n: 2, f_coefficients: [0, 0], g_coefficients: [0, 0], capital_f_coefficients: [0, 0], capital_g_coefficients: [0, 0] }
