@@ -46,6 +46,40 @@ impl Felt {
         Felt(Self::montyred(self.0, other.0))
     }
 
+    /// `const` primitive `n`-th root of unity (`n` a power of two, `n ≤ 4096`).
+    ///
+    /// Same value as [`CyclotomicFourier::primitive_root_of_unity`], but usable
+    /// in `const` context so the NTT twiddle tables can be folded into the
+    /// binary (see `FELT_BITREVERSED_POWERS_1024`).  `1331` is a primitive
+    /// 4096th root of unity; squaring `12 − log₂n` times yields a primitive
+    /// `n`-th root.
+    pub(crate) const fn const_primitive_root_of_unity(n: usize) -> Self {
+        let log2n = n.ilog2();
+        assert!(log2n <= 12);
+        let mut a = Felt::new(1331);
+        let num_squarings = 12 - log2n;
+        let mut i = 0;
+        while i < num_squarings {
+            a = a.multiply(a);
+            i += 1;
+        }
+        a
+    }
+
+    /// `const` exponentiation by squaring: `self^exp mod Q`.
+    pub(crate) const fn const_pow(self, mut exp: u32) -> Self {
+        let mut base = self;
+        let mut result = Felt::new(1);
+        while exp > 0 {
+            if exp & 1 == 1 {
+                result = result.multiply(base);
+            }
+            base = base.multiply(base);
+            exp >>= 1;
+        }
+        result
+    }
+
     /// Multiply by 2⁻¹ mod Q without a full Montgomery reduction.
     ///
     /// The stored value x is an integer in {0, …, Q−1}.  Whether it is in
@@ -262,15 +296,7 @@ impl Div for Felt {
 
 impl CyclotomicFourier for Felt {
     fn primitive_root_of_unity(n: usize) -> Self {
-        let log2n = n.ilog2();
-        assert!(log2n <= 12);
-        // and 1331 is a twelfth root of unity
-        let mut a = Felt::new(1331);
-        let num_squarings = 12 - n.ilog2();
-        for _ in 0..num_squarings {
-            a *= a;
-        }
-        a
+        Self::const_primitive_root_of_unity(n)
     }
 }
 
