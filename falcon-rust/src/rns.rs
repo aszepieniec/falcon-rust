@@ -22,15 +22,15 @@ macro_rules! dispatch_log2r {
         let p = $p;
         let neg_inv = $neg_inv;
         match $log2r {
-            1  => montyred::<1> (a, b, p, neg_inv),
-            2  => montyred::<2> (a, b, p, neg_inv),
-            3  => montyred::<3> (a, b, p, neg_inv),
-            4  => montyred::<4> (a, b, p, neg_inv),
-            5  => montyred::<5> (a, b, p, neg_inv),
-            6  => montyred::<6> (a, b, p, neg_inv),
-            7  => montyred::<7> (a, b, p, neg_inv),
-            8  => montyred::<8> (a, b, p, neg_inv),
-            9  => montyred::<9> (a, b, p, neg_inv),
+            1 => montyred::<1>(a, b, p, neg_inv),
+            2 => montyred::<2>(a, b, p, neg_inv),
+            3 => montyred::<3>(a, b, p, neg_inv),
+            4 => montyred::<4>(a, b, p, neg_inv),
+            5 => montyred::<5>(a, b, p, neg_inv),
+            6 => montyred::<6>(a, b, p, neg_inv),
+            7 => montyred::<7>(a, b, p, neg_inv),
+            8 => montyred::<8>(a, b, p, neg_inv),
+            9 => montyred::<9>(a, b, p, neg_inv),
             10 => montyred::<10>(a, b, p, neg_inv),
             11 => montyred::<11>(a, b, p, neg_inv),
             12 => montyred::<12>(a, b, p, neg_inv),
@@ -54,7 +54,7 @@ macro_rules! dispatch_log2r {
             30 => montyred::<30>(a, b, p, neg_inv),
             31 => montyred::<31>(a, b, p, neg_inv),
             32 => montyred::<32>(a, b, p, neg_inv),
-            _  => unreachable!(),
+            _ => unreachable!(),
         }
     }};
 }
@@ -78,7 +78,10 @@ pub(crate) struct Rns<const N: usize, P: PrimeList<N>> {
 
 impl<const N: usize, P: PrimeList<N>> Clone for Rns<N, P> {
     fn clone(&self) -> Self {
-        Rns { residues: self.residues, _phantom: PhantomData }
+        Rns {
+            residues: self.residues,
+            _phantom: PhantomData,
+        }
     }
 }
 
@@ -94,7 +97,9 @@ impl<const N: usize, P: PrimeList<N>> Eq for Rns<N, P> {}
 
 impl<const N: usize, P: PrimeList<N>> fmt::Debug for Rns<N, P> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Rns").field("residues", &self.residues).finish()
+        f.debug_struct("Rns")
+            .field("residues", &self.residues)
+            .finish()
     }
 }
 
@@ -138,7 +143,13 @@ impl<const N: usize, P: PrimeList<N>> Rns<N, P> {
     /// Convert canonical value `v` (already reduced mod `PRIMES[i]`) to
     /// Montgomery form for prime index `i`.
     fn to_mont_at(v: u32, i: usize) -> u32 {
-        dispatch_log2r!(Self::LOG2R[i], v, Self::R_SQ[i], P::PRIMES[i], Self::NEG_INV[i])
+        dispatch_log2r!(
+            Self::LOG2R[i],
+            v,
+            Self::R_SQ[i],
+            P::PRIMES[i],
+            Self::NEG_INV[i]
+        )
     }
 
     /// Convert Montgomery-form value `a` back to canonical form for prime index `i`.
@@ -152,16 +163,10 @@ impl<const N: usize, P: PrimeList<N>> Rns<N, P> {
         for i in 0..N {
             residues[i] = Self::to_mont_at(v % P::PRIMES[i], i);
         }
-        Rns { residues, _phantom: PhantomData }
-    }
-
-    /// Construct from a `u64`, reducing modulo each prime.
-    pub(crate) fn from_u64(v: u64) -> Self {
-        let mut residues = [0u32; N];
-        for i in 0..N {
-            residues[i] = Self::to_mont_at((v % P::PRIMES[i] as u64) as u32, i);
+        Rns {
+            residues,
+            _phantom: PhantomData,
         }
-        Rns { residues, _phantom: PhantomData }
     }
 
     /// Return the canonical representative of the `i`-th residue in `[0, PRIMES[i])`.
@@ -196,21 +201,6 @@ impl<const N: usize, P: PrimeList<N>> Rns<N, P> {
         u
     }
 
-    /// Reconstruct as a `u64` via Garner's algorithm.
-    ///
-    /// Only correct when the true value is less than 2^64; wraps silently
-    /// otherwise.
-    pub(crate) fn to_u64(&self) -> u64 {
-        let a = self.to_garner();
-        let mut result = 0u64;
-        let mut base = 1u64;
-        for i in 0..N {
-            result = result.wrapping_add(base.wrapping_mul(a[i] as u64));
-            base = base.wrapping_mul(P::PRIMES[i] as u64);
-        }
-        result
-    }
-
     /// Construct from a signed `i32`, reducing modulo each prime with correct
     /// sign handling.
     pub(crate) fn from_i32(x: i32) -> Self {
@@ -220,7 +210,10 @@ impl<const N: usize, P: PrimeList<N>> Rns<N, P> {
             let r = x.rem_euclid(p as i32) as u32;
             residues[i] = Self::to_mont_at(r, i);
         }
-        Rns { residues, _phantom: PhantomData }
+        Rns {
+            residues,
+            _phantom: PhantomData,
+        }
     }
 
     /// Construct from a signed `i128`, reducing modulo each prime with correct
@@ -231,7 +224,10 @@ impl<const N: usize, P: PrimeList<N>> Rns<N, P> {
             let r = x.rem_euclid(P::PRIMES[i] as i128) as u32;
             residues[i] = Self::to_mont_at(r, i);
         }
-        Rns { residues, _phantom: PhantomData }
+        Rns {
+            residues,
+            _phantom: PhantomData,
+        }
     }
 
     /// Reconstruct as a signed `i64` via Garner's algorithm.
@@ -272,7 +268,10 @@ impl<const N: usize, P: PrimeList<N>> Rns<N, P> {
             }
             residues[i] = Self::to_mont_at(r.to_u32().unwrap(), i);
         }
-        Rns { residues, _phantom: PhantomData }
+        Rns {
+            residues,
+            _phantom: PhantomData,
+        }
     }
 
     /// Reconstruct as a signed [`BigInt`] via Garner's algorithm.
@@ -318,7 +317,7 @@ impl<const N: usize, P: PrimeList<N>> Rns<N, P> {
 
 /// Binary exponentiation: base^exp mod modulus.  All three values are u64;
 /// intermediate products use u128 to avoid overflow.
-fn mod_pow(mut base: u64, mut exp: u64, modulus: u64) -> u64 {
+const fn mod_pow(mut base: u64, mut exp: u64, modulus: u64) -> u64 {
     let mut result = 1u64;
     while exp > 0 {
         if exp & 1 == 1 {
@@ -340,7 +339,10 @@ impl<const N: usize, P: PrimeList<N>> Add for Rns<N, P> {
             let s = self.residues[i] as u64 + rhs.residues[i] as u64;
             residues[i] = (if s >= p { s - p } else { s }) as u32;
         }
-        Rns { residues, _phantom: PhantomData }
+        Rns {
+            residues,
+            _phantom: PhantomData,
+        }
     }
 }
 
@@ -359,7 +361,10 @@ impl<const N: usize, P: PrimeList<N>> Neg for Rns<N, P> {
             let r = self.residues[i];
             residues[i] = if r == 0 { 0 } else { P::PRIMES[i] - r };
         }
-        Rns { residues, _phantom: PhantomData }
+        Rns {
+            residues,
+            _phantom: PhantomData,
+        }
     }
 }
 
@@ -391,7 +396,10 @@ impl<const N: usize, P: PrimeList<N>> Mul for Rns<N, P> {
                 Self::NEG_INV[i]
             );
         }
-        Rns { residues, _phantom: PhantomData }
+        Rns {
+            residues,
+            _phantom: PhantomData,
+        }
     }
 }
 
@@ -403,7 +411,10 @@ impl<const N: usize, P: PrimeList<N>> MulAssign for Rns<N, P> {
 
 impl<const N: usize, P: PrimeList<N>> Zero for Rns<N, P> {
     fn zero() -> Self {
-        Rns { residues: [0u32; N], _phantom: PhantomData }
+        Rns {
+            residues: [0u32; N],
+            _phantom: PhantomData,
+        }
     }
 
     fn is_zero(&self) -> bool {
@@ -429,17 +440,33 @@ impl<const N: usize, P: PrimeList<N>> One for Rns<N, P> {
 /// `PRIMES[i]` in canonical (non-Montgomery) form.
 pub(crate) trait NttPrimeList<const N: usize>: PrimeList<N> {
     const ROOTS_OF_UNITY_2048: [u32; N];
+
+    /// Twiddle tables for an NTT of length `n` over this prime list.
+    ///
+    /// The default recomputes them at runtime via [`NttTables::new`].  The
+    /// production prime lists (each used at one fixed length) override this to
+    /// return tables copied from a compile-time [`ConstNttTables`] `static`,
+    /// avoiding the per-call Montgomery recomputation.  The override falls back
+    /// to the runtime build when `n` differs from the baked-in length.
+    fn ntt_tables(n: usize) -> NttTables<N>
+    where
+        Self: Sized,
+    {
+        NttTables::new::<Self>(n)
+    }
 }
 
 /// Given a primitive 2048th root of unity (canonical) for prime `p`, return
 /// the primitive 2n-th root needed for an NTT of length `n` (n ≤ 1024, power
 /// of two) by squaring `log2(1024/n)` times.
-fn primitive_root_2n(root_2048: u32, n: usize, p: u32) -> u32 {
+const fn primitive_root_2n(root_2048: u32, n: usize, p: u32) -> u32 {
     debug_assert!(n >= 1 && n <= 1024 && n.is_power_of_two());
     let squarings = 10u32 - n.ilog2(); // 2^10 = 1024
     let mut root = root_2048 as u64;
-    for _ in 0..squarings {
+    let mut s = 0;
+    while s < squarings {
         root = root * root % p as u64;
+        s += 1;
     }
     root as u32
 }
@@ -467,6 +494,98 @@ fn bitrev_powers_mont(
     array
 }
 
+/// Const-evaluable form of [`bitrev_powers_mont`] for a statically known length
+/// `DEG`: returns the bit-reversed Montgomery root powers as a fixed array so
+/// the table can be baked into the binary instead of allocated at runtime.
+const fn bitrev_powers_mont_const<const DEG: usize>(
+    root_mont: u32,
+    p: u32,
+    log2r: u32,
+    neg_inv: u32,
+    r_sq: u32,
+) -> [u32; DEG] {
+    let one_mont = dispatch_log2r!(log2r, 1u32, r_sq, p, neg_inv);
+    let mut array = [0u32; DEG];
+    let mut alpha = one_mont;
+    let mut idx = 0;
+    while idx < DEG {
+        array[idx] = alpha;
+        alpha = dispatch_log2r!(log2r, alpha, root_mont, p, neg_inv);
+        idx += 1;
+    }
+    // In-place bit reversal (const fn cannot use `[T]::swap`, so index manually).
+    let mut i = 0;
+    while i < DEG {
+        let j = crate::cyclotomic_fourier::bitreverse_index(i, DEG);
+        if i < j {
+            let tmp = array[i];
+            array[i] = array[j];
+            array[j] = tmp;
+        }
+        i += 1;
+    }
+    array
+}
+
+/// Const-evaluable construction of all per-prime twiddle tables for an NTT of
+/// length `DEG` over the `N` primes of `P`.  Returns `(psi_rev, psi_inv_rev,
+/// ninv_mont)` — the same three tables [`NttTables::new`] builds at runtime, but
+/// foldable into `const`/`static` data.  Every input it reads (`P::PRIMES`,
+/// `P::ROOTS_OF_UNITY_2048`) is an associated const, and every operation
+/// (`negqinv_modr`, `r_sq_modq`, `montyred`, `mod_pow`, the bit reversal) is a
+/// const fn, so the whole table is computed by the compiler.
+const fn ntt_tables_const<const N: usize, const DEG: usize, P: NttPrimeList<N>>(
+) -> ([[u32; DEG]; N], [[u32; DEG]; N], [u32; N]) {
+    let mut psi_rev = [[0u32; DEG]; N];
+    let mut psi_inv_rev = [[0u32; DEG]; N];
+    let mut ninv_mont = [0u32; N];
+    let mut i = 0;
+    while i < N {
+        let p = P::PRIMES[i];
+        let log2r = p.ilog2() + 1;
+        let neg_inv = negqinv_modr(p);
+        let r_sq = r_sq_modq(p);
+        let root_2n = primitive_root_2n(P::ROOTS_OF_UNITY_2048[i], DEG, p);
+
+        let root_2n_mont = dispatch_log2r!(log2r, root_2n, r_sq, p, neg_inv);
+        psi_rev[i] = bitrev_powers_mont_const::<DEG>(root_2n_mont, p, log2r, neg_inv, r_sq);
+
+        let root_inv = mod_pow(root_2n as u64, (p - 2) as u64, p as u64) as u32;
+        let root_inv_mont = dispatch_log2r!(log2r, root_inv, r_sq, p, neg_inv);
+        psi_inv_rev[i] = bitrev_powers_mont_const::<DEG>(root_inv_mont, p, log2r, neg_inv, r_sq);
+
+        let n_inv = mod_pow(DEG as u64, (p - 2) as u64, p as u64) as u32;
+        ninv_mont[i] = dispatch_log2r!(log2r, n_inv, r_sq, p, neg_inv);
+
+        i += 1;
+    }
+    (psi_rev, psi_inv_rev, ninv_mont)
+}
+
+/// Compile-time twiddle tables for an NTT of length `DEG` over `N` primes.
+///
+/// Built once at compile time by [`ntt_tables_const`] and stored in a `static`,
+/// so the production reduction paths never recompute the Montgomery root powers
+/// at runtime — they copy them straight out of this baked-in data (see
+/// [`NttPrimeList::ntt_tables`]).
+pub(crate) struct ConstNttTables<const N: usize, const DEG: usize> {
+    psi_rev: [[u32; DEG]; N],
+    psi_inv_rev: [[u32; DEG]; N],
+    ninv_mont: [u32; N],
+}
+
+impl<const N: usize, const DEG: usize> ConstNttTables<N, DEG> {
+    /// Fold the tables for prime list `P` into the binary at compile time.
+    pub(crate) const fn build<P: NttPrimeList<N>>() -> Self {
+        let (psi_rev, psi_inv_rev, ninv_mont) = ntt_tables_const::<N, DEG, P>();
+        Self {
+            psi_rev,
+            psi_inv_rev,
+            ninv_mont,
+        }
+    }
+}
+
 /// Cooley-Tukey NTT butterfly over Z/pZ with Montgomery arithmetic.  All
 /// values in `a` and `psi_rev` are in Montgomery form.
 fn ntt_u32(a: &mut [u32], psi_rev: &[u32], p: u32, log2r: u32, neg_inv: u32) {
@@ -482,7 +601,11 @@ fn ntt_u32(a: &mut [u32], psi_rev: &[u32], p: u32, log2r: u32, neg_inv: u32) {
                 let u = a[j];
                 let v = dispatch_log2r!(log2r, a[j + t], s, p, neg_inv);
                 let sum = u as u64 + v as u64;
-                a[j] = if sum >= p as u64 { (sum - p as u64) as u32 } else { sum as u32 };
+                a[j] = if sum >= p as u64 {
+                    (sum - p as u64) as u32
+                } else {
+                    sum as u32
+                };
                 a[j + t] = if u >= v { u - v } else { u + p - v };
             }
         }
@@ -492,14 +615,7 @@ fn ntt_u32(a: &mut [u32], psi_rev: &[u32], p: u32, log2r: u32, neg_inv: u32) {
 
 /// Gentleman-Sande INTT butterfly over Z/pZ with Montgomery arithmetic.
 /// Includes the final scaling by `ninv_mont` (= n⁻¹ in Montgomery form).
-fn intt_u32(
-    a: &mut [u32],
-    psi_inv_rev: &[u32],
-    ninv_mont: u32,
-    p: u32,
-    log2r: u32,
-    neg_inv: u32,
-) {
+fn intt_u32(a: &mut [u32], psi_inv_rev: &[u32], ninv_mont: u32, p: u32, log2r: u32, neg_inv: u32) {
     let n = a.len();
     let mut t = 1;
     let mut m = n;
@@ -512,7 +628,11 @@ fn intt_u32(
                 let u = a[j];
                 let v = a[j + t];
                 let sum = u as u64 + v as u64;
-                a[j] = if sum >= p as u64 { (sum - p as u64) as u32 } else { sum as u32 };
+                a[j] = if sum >= p as u64 {
+                    (sum - p as u64) as u32
+                } else {
+                    sum as u32
+                };
                 let sub = if u >= v { u - v } else { u + p - v };
                 a[j + t] = dispatch_log2r!(log2r, sub, s, p, neg_inv);
             }
@@ -577,7 +697,40 @@ impl<const N: usize> NttTables<N> {
             dispatch_log2r!(lr, n_inv, r_sq, p, ni)
         });
 
-        Self { n, primes, log2r, neg_inv, psi_rev, psi_inv_rev, ninv_mont }
+        Self {
+            n,
+            primes,
+            log2r,
+            neg_inv,
+            psi_rev,
+            psi_inv_rev,
+            ninv_mont,
+        }
+    }
+
+    /// Build the tables for prime list `P` by copying the compile-time
+    /// [`ConstNttTables`] (length `DEG`) instead of recomputing the root powers.
+    /// The per-prime scalars (`primes`, `log2r`, `neg_inv`) are trivial and
+    /// recomputed; only the `O(DEG)` root-power vectors are taken from the baked
+    /// data.  Used by the overridden [`NttPrimeList::ntt_tables`] on the
+    /// production prime lists.
+    pub(crate) fn from_const<P: NttPrimeList<N>, const DEG: usize>(
+        c: &ConstNttTables<N, DEG>,
+    ) -> Self {
+        let primes = P::PRIMES;
+        let log2r: [u32; N] = std::array::from_fn(|i| primes[i].ilog2() + 1);
+        let neg_inv: [u32; N] = std::array::from_fn(|i| negqinv_modr(primes[i]));
+        let psi_rev: [Vec<u32>; N] = std::array::from_fn(|i| c.psi_rev[i].to_vec());
+        let psi_inv_rev: [Vec<u32>; N] = std::array::from_fn(|i| c.psi_inv_rev[i].to_vec());
+        Self {
+            n: DEG,
+            primes,
+            log2r,
+            neg_inv,
+            psi_rev,
+            psi_inv_rev,
+            ninv_mont: c.ninv_mont,
+        }
     }
 }
 
@@ -644,7 +797,7 @@ pub(crate) fn intt_inplace_cached<const N: usize, P: NttPrimeList<N>>(
 /// 2048th root of unity per prime) are both derived from it, so the two arrays
 /// cannot drift out of sync.  Every prime must satisfy `p ≡ 1 (mod 2048)`.
 macro_rules! ntt_prime_list {
-    ($(#[$meta:meta])* $name:ident, $k:literal, [$($p:literal),+ $(,)?]) => {
+    ($(#[$meta:meta])* $name:ident, $k:literal, $deg:literal, [$($p:literal),+ $(,)?]) => {
         $(#[$meta])*
         pub(crate) struct $name;
         impl PrimeList<$k> for $name {
@@ -653,6 +806,18 @@ macro_rules! ntt_prime_list {
         impl NttPrimeList<$k> for $name {
             const ROOTS_OF_UNITY_2048: [u32; $k] =
                 [$(FpField::<$p>::primitive_nth_root_of_unity(2048).value()),+];
+
+            fn ntt_tables(n: usize) -> NttTables<$k> {
+                // The tables for the one length this list is used at are baked
+                // into the binary at compile time; other lengths (tests) fall
+                // back to the runtime build.
+                static TABLES: ConstNttTables<$k, $deg> = ConstNttTables::build::<$name>();
+                if n == $deg {
+                    NttTables::from_const::<$name, $deg>(&TABLES)
+                } else {
+                    NttTables::new::<$name>(n)
+                }
+            }
         }
     };
 }
@@ -660,13 +825,13 @@ macro_rules! ntt_prime_list {
 ntt_prime_list! {
     /// Two 24-bit NTT-friendly primes.  Signed capacity ≈ 45 bits; covers
     /// `babai_reduce_rns` at recursion depth 1.
-    NttPrimes24Bit2, 2, [8_404_993, 8_427_521]
+    NttPrimes24Bit2, 2, 512, [8_404_993, 8_427_521]
 }
 
 ntt_prime_list! {
     /// Four 24-bit NTT-friendly primes.  Signed capacity ≈ 91 bits; covers
     /// `babai_reduce_rns` at recursion depth 2.
-    NttPrimes24Bit4, 4, [8_404_993, 8_427_521, 8_441_857, 8_452_097]
+    NttPrimes24Bit4, 4, 256, [8_404_993, 8_427_521, 8_441_857, 8_452_097]
 }
 
 ntt_prime_list! {
@@ -674,7 +839,7 @@ ntt_prime_list! {
     /// cover the `k·f` *product* (not the capital) in the multiword
     /// `babai_reduce_rns_{packed,bigint}` paths at recursion depth 3, where the
     /// product is ≈107 bits.  The first four primes coincide with `NttPrimes24Bit4`.
-    NttPrimes24Bit5, 5, [8_404_993, 8_427_521, 8_441_857, 8_452_097, 8_466_433]
+    NttPrimes24Bit5, 5, 128, [8_404_993, 8_427_521, 8_441_857, 8_452_097, 8_466_433]
 }
 
 ntt_prime_list! {
@@ -682,7 +847,7 @@ ntt_prime_list! {
     /// the depth-4 `k·f` product (≈155 bits; see the depth-4 reduction entry
     /// points) and is used by tests that round-trip 3-limb (>128-bit) values
     /// through RNS.  The first four primes coincide with `NttPrimes24Bit4`.
-    NttPrimes24Bit8, 8,
+    NttPrimes24Bit8, 8, 64,
     [8_404_993, 8_427_521, 8_441_857, 8_452_097, 8_466_433, 8_513_537, 8_519_681, 8_527_873]
 }
 
@@ -713,6 +878,56 @@ mod tests {
     }
     type Rns2L = Rns<2, LargePrimes>;
 
+    /// `u64` round-trip helpers used only by the tests below.  Production code
+    /// reconstructs through `to_garner` (lossless) or `to_i128`, never `u64`.
+    impl<const N: usize, P: PrimeList<N>> Rns<N, P> {
+        /// Construct from a `u64`, reducing modulo each prime.
+        fn from_u64(v: u64) -> Self {
+            let mut residues = [0u32; N];
+            for i in 0..N {
+                residues[i] = Self::to_mont_at((v % P::PRIMES[i] as u64) as u32, i);
+            }
+            Rns {
+                residues,
+                _phantom: PhantomData,
+            }
+        }
+
+        /// Reconstruct as a `u64` via Garner's algorithm.
+        ///
+        /// Only correct when the true value is less than 2^64; wraps silently
+        /// otherwise.
+        fn to_u64(&self) -> u64 {
+            let a = self.to_garner();
+            let mut result = 0u64;
+            let mut base = 1u64;
+            for i in 0..N {
+                result = result.wrapping_add(base.wrapping_mul(a[i] as u64));
+                base = base.wrapping_mul(P::PRIMES[i] as u64);
+            }
+            result
+        }
+    }
+
+    #[test]
+    fn const_tables_match_runtime_build() {
+        // Bake the depth-3 tables (5 primes, length 128) at compile time and
+        // assert they are byte-identical to what `NttTables::new` builds at
+        // runtime — proving the const path is a drop-in for the runtime path.
+        const TABLES: ([[u32; 128]; 5], [[u32; 128]; 5], [u32; 5]) =
+            ntt_tables_const::<5, 128, NttPrimes24Bit5>();
+        let runtime = NttTables::<5>::new::<NttPrimes24Bit5>(128);
+        for i in 0..5 {
+            assert_eq!(TABLES.0[i].as_slice(), runtime.psi_rev[i].as_slice(), "psi_rev[{i}]");
+            assert_eq!(
+                TABLES.1[i].as_slice(),
+                runtime.psi_inv_rev[i].as_slice(),
+                "psi_inv_rev[{i}]"
+            );
+        }
+        assert_eq!(TABLES.2, runtime.ninv_mont, "ninv_mont");
+    }
+
     #[test]
     fn residues_equal_naive_reduction() {
         let primes = SmallPrimes::PRIMES;
@@ -736,7 +951,14 @@ mod tests {
 
     #[test]
     fn to_u64_roundtrip() {
-        for v in [0u64, 1, 999_999_999, 0xFFFF_FFFF, 0x1_0000_0000, 0xDEAD_BEEF_1234] {
+        for v in [
+            0u64,
+            1,
+            999_999_999,
+            0xFFFF_FFFF,
+            0x1_0000_0000,
+            0xDEAD_BEEF_1234,
+        ] {
             assert_eq!(Rns3::from_u64(v).to_u64(), v, "v={v}");
         }
     }
@@ -744,13 +966,22 @@ mod tests {
     #[test]
     fn add_agrees_with_naive() {
         let primes = SmallPrimes::PRIMES;
-        let pairs = [(0u32, 1u32), (999, 1_073_754_112), (786_432, 786_432), (12345, 67890)];
+        let pairs = [
+            (0u32, 1u32),
+            (999, 1_073_754_112),
+            (786_432, 786_432),
+            (12345, 67890),
+        ];
         for (a, b) in pairs {
             let ra = Rns3::from_u32(a);
             let rb = Rns3::from_u32(b);
             let rc = ra + rb;
             for i in 0..3 {
-                assert_eq!(rc.residue(i), (a as u64 + b as u64) as u32 % primes[i], "a={a}, b={b}, i={i}");
+                assert_eq!(
+                    rc.residue(i),
+                    (a as u64 + b as u64) as u32 % primes[i],
+                    "a={a}, b={b}, i={i}"
+                );
             }
         }
     }

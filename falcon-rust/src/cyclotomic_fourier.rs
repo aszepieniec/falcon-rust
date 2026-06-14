@@ -12,9 +12,9 @@ use crate::inverse::Inverse;
 /// Compute the integer whose `log2(n)`-bit binary expansion is the reverse of
 /// that of `arg` (`n` a power of two).  Shared by the complex/fixed-point FFT
 /// ([`CyclotomicFourier`]) and the RNS NTT (`rns::NttTables`).
-pub(crate) fn bitreverse_index(arg: usize, n: usize) -> usize {
+pub(crate) const fn bitreverse_index(arg: usize, n: usize) -> usize {
     assert!(n > 0);
-    assert_eq!(n & (n - 1), 0);
+    assert!(n & (n - 1) == 0);
     let mut rev = 0;
     let mut m = n >> 1;
     let mut k = 1;
@@ -75,6 +75,12 @@ where
 
     /// Compute the first n powers of the 2nth root of unity, invert them, and
     /// put them in bit-reversed order.
+    ///
+    /// The integer-field NTTs (`Felt`, `U32Field`) now read inverse twiddles
+    /// from compile-time tables, so this default is reached only via tests and
+    /// the `Complex64` override; kept as the inverse counterpart of
+    /// [`Self::bitreversed_powers`].
+    #[allow(dead_code)]
     fn bitreversed_powers_inverse(n: usize) -> Vec<Self> {
         let psi = Self::primitive_root_of_unity(2 * n).inverse_or_zero();
         let mut array = vec![Self::zero(); n];

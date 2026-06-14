@@ -7,16 +7,14 @@ use num_complex::Complex64;
 use rand::Rng;
 
 use crate::{
-    cyclotomic_fourier::CyclotomicFourier,
     falcon_field::{Felt, Q},
     fast_fft::FastFft,
     fixed_point::FixedPoint64,
-    inverse::Inverse,
     packed::Packed,
     polynomial::Polynomial,
     rns::{
         intt_inplace_cached, ntt_inplace_cached, NttPrimeList, NttPrimes24Bit2, NttPrimes24Bit4,
-        NttPrimes24Bit5, NttPrimes24Bit8, NttTables, Rns,
+        NttPrimes24Bit5, NttPrimes24Bit8, Rns,
     },
     samplerz::sampler_z,
     U32Field,
@@ -289,7 +287,8 @@ where
     let n = f.coefficients.len();
 
     // Precompute the per-prime twiddle tables once; reused by every transform.
-    let tables = NttTables::<K>::new::<P>(n);
+    // Production prime lists return compile-time tables; see `NttPrimeList::ntt_tables`.
+    let tables = P::ntt_tables(n);
 
     // Forward NTT of f and g once (reused every iteration).  `from_bigint`
     // works at any depth, including where the coefficients exceed i128.
@@ -579,7 +578,8 @@ pub(crate) fn babai_reduce_rns<const K: usize, P: NttPrimeList<K>>(
 
     // Precompute the per-prime twiddle tables once; reused by every transform
     // (the one-off f/g forward NTTs and the per-iteration k transform).
-    let tables = NttTables::<K>::new::<P>(n);
+    // Production prime lists return compile-time tables; see `NttPrimeList::ntt_tables`.
+    let tables = P::ntt_tables(n);
 
     // Precompute RNS NTT of f,g for polynomial multiplication.
     let mut f_rns_ntt: Vec<Rns<K, P>> = f.coefficients.iter().map(|&i| Rns::from_i32(i)).collect();
@@ -985,8 +985,6 @@ fn ntru_solve_entrypoint(
     g: Polynomial<i32>,
     max_rns_depth: usize,
 ) -> Option<(Polynomial<i32>, Polynomial<i32>)> {
-    let n = f.coefficients.len();
-
     let g_prime = g.field_norm().map(|c| BigInt::from(*c));
     let f_prime = f.field_norm().map(|c| BigInt::from(*c));
     let (capital_f_prime_bi, capital_g_prime_bi) =
@@ -1028,21 +1026,14 @@ fn ntru_solve_entrypoint(
     let f_minx = f.galois_adjoint();
     let g_minx = g.galois_adjoint();
 
-    let psi_rev = U32Field::bitreversed_powers(n);
-    let psi_rev_inv = U32Field::bitreversed_powers_inverse(n);
-    let ninv = U32Field::new(n as u32).inverse_or_zero();
-    let mut cfp_ntt = capital_f_prime_xsq.map(|c| U32Field::from(*c));
-    let mut cgp_ntt = capital_g_prime_xsq.map(|c| U32Field::from(*c));
-    let mut gm_ntt = g_minx.map(|c| U32Field::from(*c));
-    let mut fm_ntt = f_minx.map(|c| U32Field::from(*c));
-    U32Field::fft(&mut cfp_ntt.coefficients, &psi_rev);
-    U32Field::fft(&mut cgp_ntt.coefficients, &psi_rev);
-    U32Field::fft(&mut gm_ntt.coefficients, &psi_rev);
-    U32Field::fft(&mut fm_ntt.coefficients, &psi_rev);
-    let mut cf_ntt = cfp_ntt.hadamard_mul(&gm_ntt);
-    let mut cg_ntt = cgp_ntt.hadamard_mul(&fm_ntt);
-    U32Field::ifft(&mut cf_ntt.coefficients, &psi_rev_inv, ninv);
-    U32Field::ifft(&mut cg_ntt.coefficients, &psi_rev_inv, ninv);
+    // Multiply via the single-prime NTT, reusing the compile-time twiddle
+    // tables through `FastFft` (no per-call `bitreversed_powers` recompute).
+    let cfp_ntt = capital_f_prime_xsq.map(|c| U32Field::from(*c)).fft();
+    let cgp_ntt = capital_g_prime_xsq.map(|c| U32Field::from(*c)).fft();
+    let gm_ntt = g_minx.map(|c| U32Field::from(*c)).fft();
+    let fm_ntt = f_minx.map(|c| U32Field::from(*c)).fft();
+    let cf_ntt = cfp_ntt.hadamard_mul(&gm_ntt).ifft();
+    let cg_ntt = cgp_ntt.hadamard_mul(&fm_ntt).ifft();
 
     let mut capital_f = cf_ntt.map(|c| c.balanced_value() as i32);
     let mut capital_g = cg_ntt.map(|c| c.balanced_value() as i32);
@@ -1098,6 +1089,20 @@ pub fn ntru_gen(
         if let Some((capital_f, capital_g)) =
             ntru_solve_entrypoint(f.map(|&i| i as i32), g.map(|&i| i as i32), 2)
         {
+            // Verify the NTRU equation fG − gF = q.  The depth-0 reduction NTT
+            // uses a single 24-bit prime whose ~2^22 reconstruction range only
+            // narrowly covers the products; this check turns any rare overflow
+            // into a retry instead of a silently invalid key.  Computed in i64
+            // so the unreduced products cannot overflow.
+            let f_i64 = f.map(|&i| i as i64);
+            let g_i64 = g.map(|&i| i as i64);
+            let cf_i64 = capital_f.map(|&i| i as i64);
+            let cg_i64 = capital_g.map(|&i| i as i64);
+            let ntru_eq = (f_i64 * cg_i64).reduce_by_cyclotomic(n)
+                - (g_i64 * cf_i64).reduce_by_cyclotomic(n);
+            if ntru_eq != Polynomial::constant(Q as i64) {
+                continue;
+            }
             return (
                 f,
                 g,

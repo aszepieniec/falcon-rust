@@ -1,23 +1,34 @@
-//! Fixed-width signed multi-word integers for the packed-limb prototype of
-//! RNS Babai reduction.
+//! [`Packed`]: a signed two's-complement integer stored as `L` little-endian
+//! `u64` limbs, holding the value in `(−2^(64L−1), 2^(64L−1))`.
 //!
-//! The earlier `babai_reduce_rns_bigint` prototype showed that storing the
-//! capital coefficients as [`num::BigInt`] is too slow: every iteration pays a
-//! full `BigInt`↔RNS Garner conversion, which swamps the NTT multiply saving.
+//! It carries the capital coefficients (`F`, `G`) through RNS Babai reduction.
+//! That loop straddles two number representations: the `k·f` correction is
+//! formed in the RNS/NTT domain (where multiplication is cheap), but estimating
+//! the quotient `k` and testing convergence both need the *positional* value of
+//! each coefficient. So the capital has to live in a form that is cheap to read
+//! positionally and cheap to update from an RNS product, every iteration. A
+//! heap big-integer answers neither well — each iteration would pay a full
+//! Garner reconstruction and fresh allocations. Fixed-width limbs make all three
+//! hot operations allocation-free:
 //!
-//! This module provides [`Packed`], a signed two's-complement integer stored as
-//! `L` little-endian `u64` limbs (a `64·L`-bit range).  It mirrors the part of
-//! fn-dsa's `zint31` design that matters for performance:
+//! * the quotient FFT only needs the top bits of each coefficient, which
+//!   [`shr_to_i128`](Packed::shr_to_i128) supplies as a constant number of limb
+//!   reads;
+//! * convergence is tested against the magnitude, and [`bit_length`](Packed::bit_length)
+//!   reads it from the leading limb in O(1);
+//! * the RNS product is reassembled straight into the limbs by a word-level CRT
+//!   ([`from_rns`](Packed::from_rns)) that writes one fixed-width buffer rather
+//!   than allocating per coefficient.
 //!
-//! * top-word access ([`shr_to_i128`](Packed::shr_to_i128)) and size
-//!   ([`bit_length`](Packed::bit_length)) are O(1) limb reads — no
-//!   reconstruction, so the `k`-estimation FFT input is cheap;
-//! * the RNS product is reconstructed straight into limbs with **word-level**
-//!   CRT ([`from_rns`](Packed::from_rns)) — no per-coefficient heap allocation.
+//! `L` is fixed per recursion depth, just large enough to hold the capital
+//! without overflow. The capital coefficients roughly triple in bit length each
+//! level: at depth 3 they (together with the shifted partial products formed
+//! mid-reduction) peak near 165 bits, so `L = 4` (256-bit) suffices; at depth 4
+//! they reach ~303 bits, needing `L = 5` (320-bit); deeper levels scale up
+//! likewise.
 //!
-//! `L` is chosen per recursion depth to cover the capital coefficients: `L = 4`
-//! (256-bit) at depth 3 (capital + shifted products peak ~165 bits), `L = 5`
-//! (320-bit) at depth 4 (capital ~303 bits), and so on.
+//! The word-level-CRT-into-fixed-limbs layout follows the approach of fn-dsa's
+//! `zint31`.
 
 use num::{BigInt, Zero};
 
@@ -100,7 +111,13 @@ impl<const L: usize> Packed<L> {
         let sign = if self.is_negative() { u64::MAX } else { 0 };
         let limb = (shift / 64) as usize;
         let bit = shift % 64;
-        let get = |idx: usize| -> u64 { if idx < L { self.limbs[idx] } else { sign } };
+        let get = |idx: usize| -> u64 {
+            if idx < L {
+                self.limbs[idx]
+            } else {
+                sign
+            }
+        };
         let mut lo = 0u128;
         for out_idx in 0..2 {
             let src = limb + out_idx;
@@ -135,7 +152,11 @@ impl<const L: usize> Packed<L> {
             let src = src as usize;
             let mut word = self.limbs[src] as u128;
             if bit != 0 {
-                let lower = if src >= 1 { self.limbs[src - 1] as u128 } else { 0 };
+                let lower = if src >= 1 {
+                    self.limbs[src - 1] as u128
+                } else {
+                    0
+                };
                 word = (word << bit) | (lower >> (64 - bit));
             }
             out[i] = word as u64;
@@ -233,7 +254,11 @@ impl<const L: usize> Packed<L> {
             let src = i + limb;
             let mut word = if src < L { self.limbs[src] as u128 } else { 0 };
             if bit != 0 {
-                let hi = if src + 1 < L { self.limbs[src + 1] as u128 } else { 0 };
+                let hi = if src + 1 < L {
+                    self.limbs[src + 1] as u128
+                } else {
+                    0
+                };
                 word = (word >> bit) | (hi << (64 - bit));
                 word &= u64::MAX as u128;
             }
@@ -295,7 +320,7 @@ impl<const L: usize> std::ops::SubAssign<&Packed<L>> for Packed<L> {
 #[cfg(test)]
 mod tests {
     use crate::rns::{NttPrimes24Bit8, Rns};
-    use num::{BigInt, Signed, Zero};
+    use num::{BigInt, Zero};
     use rand::{rngs::StdRng, RngExt, SeedableRng};
 
     // The unit tests exercise the 4-limb (256-bit) width.
@@ -305,7 +330,9 @@ mod tests {
         // Random ~200-bit signed value built from i128 + shifted i128.
         let hi = rng.random::<i64>() as i128; // ~64 bits signed (top)
         let lo = rng.random::<i128>();
-        let p = Packed::from_i128(hi).shl(96).add_packed(&Packed::from_i128(lo & ((1i128 << 96) - 1)));
+        let p = Packed::from_i128(hi)
+            .shl(96)
+            .add_packed(&Packed::from_i128(lo & ((1i128 << 96) - 1)));
         let b = p.to_bigint();
         (p, b)
     }

@@ -353,16 +353,12 @@ impl<const Q: u32> Div for FpField<Q> {
     }
 }
 
-impl CyclotomicFourier for FpField<1073754113> {
+impl<const Q: u32> CyclotomicFourier for FpField<Q> {
     fn primitive_root_of_unity(n: usize) -> Self {
-        let log2n = n.ilog2();
-        assert!(log2n <= 12);
-        // 48440 is a primitive 12th root of unity mod 1073754113
-        let mut a = Self::new(48440);
-        for _ in 0..(12 - log2n) {
-            a *= a;
-        }
-        a
+        // Generic over the prime: find a primitive n-th root directly (requires
+        // n | Q-1).  Replaces the per-prime hardcoded root, so any `FpField<Q>`
+        // used for an NTT — including the depth-0 `U32Field` — gets it.
+        Self::primitive_nth_root_of_unity(n as u32)
     }
 }
 
