@@ -317,7 +317,7 @@ impl<const N: usize, P: PrimeList<N>> Rns<N, P> {
 
 /// Binary exponentiation: base^exp mod modulus.  All three values are u64;
 /// intermediate products use u128 to avoid overflow.
-const fn mod_pow(mut base: u64, mut exp: u64, modulus: u64) -> u64 {
+pub(crate) const fn mod_pow(mut base: u64, mut exp: u64, modulus: u64) -> u64 {
     let mut result = 1u64;
     while exp > 0 {
         if exp & 1 == 1 {
@@ -459,7 +459,7 @@ pub(crate) trait NttPrimeList<const N: usize>: PrimeList<N> {
 /// Given a primitive 2048th root of unity (canonical) for prime `p`, return
 /// the primitive 2n-th root needed for an NTT of length `n` (n ≤ 1024, power
 /// of two) by squaring `log2(1024/n)` times.
-const fn primitive_root_2n(root_2048: u32, n: usize, p: u32) -> u32 {
+pub(crate) const fn primitive_root_2n(root_2048: u32, n: usize, p: u32) -> u32 {
     debug_assert!(n >= 1 && n <= 1024 && n.is_power_of_two());
     let squarings = 10u32 - n.ilog2(); // 2^10 = 1024
     let mut root = root_2048 as u64;
@@ -474,7 +474,7 @@ const fn primitive_root_2n(root_2048: u32, n: usize, p: u32) -> u32 {
 /// Compute bit-reversed powers `[ω^0, ω^1, …, ω^{n-1}]` with `ω` given in
 /// Montgomery form, placing them in bit-reversed index order.  The returned
 /// slice has length `n`.
-fn bitrev_powers_mont(
+pub(crate) fn bitrev_powers_mont(
     root_mont: u32,
     n: usize,
     p: u32,
@@ -586,9 +586,16 @@ impl<const N: usize, const DEG: usize> ConstNttTables<N, DEG> {
     }
 }
 
+/// Montgomery multiplication with a runtime `log2r` (dispatches to the
+/// const-generic [`montyred`]).  Exposed for the runtime-`K` RNS path, which
+/// chooses its prime list — and hence `log2r` — at run time.
+pub(crate) fn montmul_dyn(a: u32, b: u32, p: u32, log2r: u32, neg_inv: u32) -> u32 {
+    dispatch_log2r!(log2r, a, b, p, neg_inv)
+}
+
 /// Cooley-Tukey NTT butterfly over Z/pZ with Montgomery arithmetic.  All
 /// values in `a` and `psi_rev` are in Montgomery form.
-fn ntt_u32(a: &mut [u32], psi_rev: &[u32], p: u32, log2r: u32, neg_inv: u32) {
+pub(crate) fn ntt_u32(a: &mut [u32], psi_rev: &[u32], p: u32, log2r: u32, neg_inv: u32) {
     let n = a.len();
     let mut t = n;
     let mut m = 1;
@@ -615,7 +622,7 @@ fn ntt_u32(a: &mut [u32], psi_rev: &[u32], p: u32, log2r: u32, neg_inv: u32) {
 
 /// Gentleman-Sande INTT butterfly over Z/pZ with Montgomery arithmetic.
 /// Includes the final scaling by `ninv_mont` (= n⁻¹ in Montgomery form).
-fn intt_u32(a: &mut [u32], psi_inv_rev: &[u32], ninv_mont: u32, p: u32, log2r: u32, neg_inv: u32) {
+pub(crate) fn intt_u32(a: &mut [u32], psi_inv_rev: &[u32], ninv_mont: u32, p: u32, log2r: u32, neg_inv: u32) {
     let n = a.len();
     let mut t = 1;
     let mut m = n;
