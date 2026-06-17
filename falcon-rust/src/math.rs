@@ -10,12 +10,15 @@ use crate::{
     falcon_field::{Felt, Q},
     fast_fft::FastFft,
     fixed_point::FixedPoint64,
+    multiword_int::MultiwordInt,
+    multiword_poly::MultiwordPoly,
     packed::Packed,
     polynomial::Polynomial,
     rns::{
         intt_inplace_cached, ntt_inplace_cached, NttPrimeList, NttPrimes24Bit2, NttPrimes24Bit4,
         NttPrimes24Bit5, NttPrimes24Bit8, Rns,
     },
+    rns_runtime::RuntimeNtt,
     samplerz::sampler_z,
     U32Field,
 };
@@ -433,6 +436,140 @@ where
     }
     for (c, p) in capital_g.coefficients.iter_mut().zip(cg.iter()) {
         *c = p.to_bigint();
+    }
+    Ok(())
+}
+
+/// Runtime-`K` Babai reduction: capital lives in [`MultiwordPoly`] limbs and the
+/// `k·f`/`k·g` corrections are formed by the runtime-prime-count RNS multiply
+/// ([`RuntimeNtt`]), so it works at any recursion depth without a compile-time
+/// prime list.  Algorithmically identical to [`babai_reduce_rns_generic`] (same
+/// windowed k-estimation, same `d > 53` two-step), differing only in the
+/// representation: capital and operands are flat words, no `BigInt` in the loop.
+///
+/// `k_primes` must cover the `k·f` product (`≈ max|f,g| + 54` bits); `cap_w` is
+/// the capital limb width (must hold the capital plus the mid-reduction shifts).
+/// `BigInt` is touched only at entry (operands, capital) and exit (capital).
+#[profiling]
+pub(crate) fn babai_reduce_rns_runtime(
+    f: &Polynomial<BigInt>,
+    g: &Polynomial<BigInt>,
+    capital_f: &mut Polynomial<BigInt>,
+    capital_g: &mut Polynomial<BigInt>,
+    k_primes: usize,
+    cap_w: usize,
+) -> Result<(), String> {
+    use crate::multiword_int as mw;
+    let n = f.coefficients.len();
+    let ntt = RuntimeNtt::cached(n, k_primes);
+
+    let bitsize = |bi: &BigInt| bi.bits();
+    let size = [
+        f.map(bitsize).fold(0, |a, &b| u64::max(a, b)),
+        g.map(bitsize).fold(0, |a, &b| u64::max(a, b)),
+        53,
+    ]
+    .into_iter()
+    .max()
+    .unwrap();
+
+    // f64 FFT denominator from windowed f,g (identical to the BigInt path).
+    let shift = (size as i64) - 53;
+    let f_adjusted = f
+        .map(|bi| Complex64::new(i64::try_from(bi >> shift).unwrap() as f64, 0.0))
+        .fft();
+    let g_adjusted = g
+        .map(|bi| Complex64::new(i64::try_from(bi >> shift).unwrap() as f64, 0.0))
+        .fft();
+    let f_star = f_adjusted.map(|c| c.conj());
+    let g_star = g_adjusted.map(|c| c.conj());
+    let denominator_fft = f_adjusted.hadamard_mul(&f_star) + g_adjusted.hadamard_mul(&g_star);
+
+    // Operands as flat-word polynomials (multiply inputs); capital likewise.
+    let fw = (size as usize / 64) + 2;
+    // Transform f, g once; only k changes per reduction pass.
+    let f_ntt = ntt.forward(&MultiwordPoly::from_bigint_poly(f, fw));
+    let g_ntt = ntt.forward(&MultiwordPoly::from_bigint_poly(g, fw));
+    let mut cf = MultiwordPoly::from_bigint_poly(capital_f, cap_w);
+    let mut cg = MultiwordPoly::from_bigint_poly(capital_g, cap_w);
+
+    let window = |cs: &MultiwordPoly, sh: u32| -> Polynomial<Complex64> {
+        Polynomial::new(
+            (0..n)
+                .map(|i| Complex64::new(mw::shr_to_i128(cs.coeff(i), sh) as f64, 0.0))
+                .collect::<Vec<_>>(),
+        )
+        .fft()
+    };
+    let cap_size = |cf: &MultiwordPoly, cg: &MultiwordPoly| -> u64 {
+        (0..n)
+            .flat_map(|i| [mw::bit_length(cf.coeff(i)), mw::bit_length(cg.coeff(i))])
+            .fold(53, u64::max)
+    };
+    // k (i128 per coefficient) -> width-2 flat-word polynomial.
+    let k_poly = |k: &[i128]| -> MultiwordPoly {
+        let mut kp = MultiwordPoly::zeros(n, 2);
+        for (i, &v) in k.iter().enumerate() {
+            kp.coeff_mut(i).copy_from_slice(MultiwordInt::from_i128(v, 2).limbs());
+        }
+        kp
+    };
+    let estimate_k = |cf: &MultiwordPoly, cg: &MultiwordPoly, sh: u32| -> Vec<i128> {
+        let numerator =
+            window(cf, sh).hadamard_mul(&f_star) + window(cg, sh).hadamard_mul(&g_star);
+        let quotient = numerator.hadamard_div(&denominator_fft).ifft();
+        quotient.coefficients.iter().map(|c| c.re.round() as i128).collect()
+    };
+
+    let mut prev_capital_size = u64::MAX;
+    loop {
+        let capital_size = cap_size(&cf, &cg);
+        if capital_size < size || capital_size >= prev_capital_size {
+            break;
+        }
+        prev_capital_size = capital_size;
+
+        let d = capital_size - size;
+        let (capital_shift, back_shift) = if d > 53 {
+            ((capital_size - 106) as u32, (d - 53) as u32)
+        } else {
+            ((capital_size - 53) as u32, d as u32)
+        };
+
+        let k = estimate_k(&cf, &cg, capital_shift);
+        if k.iter().all(|&x| x == 0) {
+            break;
+        }
+        let kp = k_poly(&k);
+        let shifted_kf = ntt.mul_transformed(&kp, &f_ntt, cap_w).shl_coeffs(back_shift);
+        let shifted_kg = ntt.mul_transformed(&kp, &g_ntt, cap_w).shl_coeffs(back_shift);
+
+        if d > 53 {
+            let new_cs = cap_size(&cf.sub(&shifted_kf), &cg.sub(&shifted_kg));
+            if new_cs >= capital_size {
+                // Overshoot: fall back to the single-bit (d) formula this pass.
+                let k_old = estimate_k(&cf, &cg, (capital_size - 53) as u32);
+                if k_old.iter().all(|&x| x == 0) {
+                    break;
+                }
+                let kpo = k_poly(&k_old);
+                let kf_old = ntt.mul_transformed(&kpo, &f_ntt, cap_w).shl_coeffs(d as u32);
+                let kg_old = ntt.mul_transformed(&kpo, &g_ntt, cap_w).shl_coeffs(d as u32);
+                cf.sub_assign(&kf_old);
+                cg.sub_assign(&kg_old);
+                continue;
+            }
+        }
+
+        cf.sub_assign(&shifted_kf);
+        cg.sub_assign(&shifted_kg);
+    }
+
+    for (c, i) in capital_f.coefficients.iter_mut().zip(0..n) {
+        *c = mw::to_bigint(cf.coeff(i));
+    }
+    for (c, i) in capital_g.coefficients.iter_mut().zip(0..n) {
+        *c = mw::to_bigint(cg.coeff(i));
     }
     Ok(())
 }
@@ -922,6 +1059,44 @@ pub fn babai_reduce_rns_bigint_depth4(
 ///
 /// [1]: https://falcon-sign.info/falcon.pdf
 #[profiling]
+/// Per-depth parameters for the runtime-`K` flat-word babai reduction
+/// ([`babai_reduce_rns_runtime`]): `(k_primes, cap_w)`.  `k_primes` covers the
+/// `≈ bits(f)+54`-bit `k·f` product with a +6σ tail; `cap_w` (64-bit limbs)
+/// holds the depth's capital (`max|F,G|`, +6σ) plus the mid-reduction shifts.
+/// Derived from [`NTRU_SOLVE_BABAI_COEFF_BITS`].
+const fn rns_runtime_babai_params(depth: usize) -> (usize, usize) {
+    match depth {
+        3 => (6, 5),
+        4 => (8, 7),
+        5 => (13, 12),
+        6 => (22, 22),
+        7 => (41, 40),
+        8 => (77, 77),
+        9 => (149, 152),
+        _ => (0, 0),
+    }
+}
+
+/// Deepest recursion depth at which the allocation-free runtime-`K` RNS babai
+/// reduction is used instead of `babai_reduce_bigint`.  Depths 3..=this use the
+/// flat-word path; deeper levels (tiny `n`, hundreds of primes) fall back to
+/// BigInt karatsuba, where the RNS multiply's per-prime overhead dominates.
+/// Tuned by the Stage 6 benchmark.  Overridable at runtime via the
+/// `RNS_RUNTIME_MAX_DEPTH` env var (for the crossover sweep).  Default 4: after
+/// hoisting the per-pass f/g forward-NTT and caching the per-depth `RuntimeNtt`,
+/// the keygen(1024) crossover sits at depth 4 (266 ms vs 301 ms with RNS off;
+/// d5≈268, d6≈277, then rising — d9≈600).
+fn rns_runtime_max_depth() -> usize {
+    use std::sync::LazyLock;
+    static D: LazyLock<usize> = LazyLock::new(|| {
+        std::env::var("RNS_RUNTIME_MAX_DEPTH")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(4)
+    });
+    *D
+}
+
 fn ntru_solve(
     f: &Polynomial<BigInt>,
     g: &Polynomial<BigInt>,
@@ -953,18 +1128,19 @@ fn ntru_solve(
     let mut capital_f = (capital_f_prime_xsq.karatsuba(&g_minx)).reduce_by_cyclotomic(n);
     let mut capital_g = (capital_g_prime_xsq.karatsuba(&f_minx)).reduce_by_cyclotomic(n);
 
-    let babai_result = if depth <= max_rns_depth {
-        match depth {
-            1 => {
-                babai_rns_with_fallback::<2, NttPrimes24Bit2>(f, g, &mut capital_f, &mut capital_g)
-            }
-            2 => {
-                babai_rns_with_fallback::<4, NttPrimes24Bit4>(f, g, &mut capital_f, &mut capital_g)
-            }
-            _ => babai_reduce_bigint(f, g, &mut capital_f, &mut capital_g),
+    let babai_result = match depth {
+        1 if max_rns_depth >= 1 => {
+            babai_rns_with_fallback::<2, NttPrimes24Bit2>(f, g, &mut capital_f, &mut capital_g)
         }
-    } else {
-        babai_reduce_bigint(f, g, &mut capital_f, &mut capital_g)
+        2 if max_rns_depth >= 2 => {
+            babai_rns_with_fallback::<4, NttPrimes24Bit4>(f, g, &mut capital_f, &mut capital_g)
+        }
+        // Deep levels: allocation-free runtime-K flat-word RNS reduction.
+        d if (3..=rns_runtime_max_depth()).contains(&d) => {
+            let (k_primes, cap_w) = rns_runtime_babai_params(d);
+            babai_reduce_rns_runtime(f, g, &mut capital_f, &mut capital_g, k_primes, cap_w)
+        }
+        _ => babai_reduce_bigint(f, g, &mut capital_f, &mut capital_g),
     };
     match babai_result {
         Ok(_) => Some((capital_f, capital_g)),
@@ -1541,6 +1717,51 @@ mod test {
         }
     }
 
+    /// Realistic depth-5 inputs: n = 32, max|f,g| ≈ 202 bits, max|F,G| ≈ 600
+    /// bits.  Exercises a ≈256-bit `k·f` product that needs ~12 runtime primes.
+    fn depth5_inputs(
+        rng: &mut StdRng,
+    ) -> (Polynomial<BigInt>, Polynomial<BigInt>, Polynomial<BigInt>, Polynomial<BigInt>) {
+        let n = 32;
+        let f = Polynomial::new((0..n).map(|_| rand_signed_bigint(rng, 202)).collect::<Vec<_>>());
+        let g = Polynomial::new((0..n).map(|_| rand_signed_bigint(rng, 202)).collect::<Vec<_>>());
+        let cf = Polynomial::new((0..n).map(|_| rand_signed_bigint(rng, 600)).collect::<Vec<_>>());
+        let cg = Polynomial::new((0..n).map(|_| rand_signed_bigint(rng, 600)).collect::<Vec<_>>());
+        (f, g, cf, cg)
+    }
+
+    /// The runtime-`K` flat-word backend ([`babai_reduce_rns_runtime`]) must
+    /// produce exactly the same reduction as the BigInt-karatsuba oracle, across
+    /// depths 3–5 (n = 128, 64, 32) with the matching runtime prime counts.
+    #[test]
+    fn babai_reduce_rns_runtime_matches_bigint() {
+        use super::babai_reduce_rns_runtime;
+        type Inputs = (Polynomial<BigInt>, Polynomial<BigInt>, Polynomial<BigInt>, Polynomial<BigInt>);
+        type Gen = fn(&mut StdRng) -> Inputs;
+        // (inputs, k_primes, cap_w) per depth.  k_primes covers ~bits(f)+54;
+        // cap_w (limbs) holds the capital plus the mid-reduction shifts.
+        let cases: &[(&str, Gen, usize, usize, u64)] = &[
+            ("depth3", depth3_inputs as Gen, 5, 6, 0xd3),
+            ("depth4", depth4_inputs as Gen, 8, 8, 0xd4),
+            ("depth5", depth5_inputs as Gen, 12, 12, 0xd5),
+        ];
+        for &(name, gen, k_primes, cap_w, seed) in cases {
+            let mut rng = StdRng::seed_from_u64(0x5117_0000 + seed);
+            for _ in 0..16 {
+                let (f, g, cap_f, cap_g) = gen(&mut rng);
+
+                let (mut bf, mut bg) = (cap_f.clone(), cap_g.clone());
+                babai_reduce_bigint(&f, &g, &mut bf, &mut bg).unwrap();
+
+                let (mut rf, mut rg) = (cap_f, cap_g);
+                babai_reduce_rns_runtime(&f, &g, &mut rf, &mut rg, k_primes, cap_w).unwrap();
+
+                assert_eq!(bf, rf, "{name}: capital_F mismatch (runtime vs bigint)");
+                assert_eq!(bg, rg, "{name}: capital_G mismatch (runtime vs bigint)");
+            }
+        }
+    }
+
     /// The multiword `babai_reduce_rns_{packed,bigint}` paths only push the
     /// `k·f` *product* through RNS, not the capital.  At a fixed depth the
     /// product does not grow with the capital's magnitude (the `d>53` windowing
@@ -1800,5 +2021,21 @@ mod test {
         let g_times_capital_f = (g * capital_f).reduce_by_cyclotomic(n);
         let difference = f_times_capital_g - g_times_capital_f;
         assert_eq!(Polynomial::constant(12289), difference);
+    }
+
+    /// Full n=1024 keygen exercises the runtime-K flat-word babai reduction down
+    /// to depth 9 (n=2, ~149 primes).  Validates `fG − gF = q` end-to-end.
+    #[test]
+    fn test_ntru_gen_1024() {
+        let n = 1024;
+        let seed: [u8; 32] = *b"\xc0ffee_multiword_alloc_free_2026!";
+        let mut rng: StdRng = SeedableRng::from_seed(seed);
+        let (f, g, capital_f, capital_g) = ntru_gen(n, &mut rng);
+        let f_times_capital_g = (f * capital_g).reduce_by_cyclotomic(n);
+        let g_times_capital_f = (g * capital_f).reduce_by_cyclotomic(n);
+        assert_eq!(
+            Polynomial::constant(12289),
+            f_times_capital_g - g_times_capital_f
+        );
     }
 }
