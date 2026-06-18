@@ -1050,15 +1050,6 @@ pub fn babai_reduce_rns_bigint_depth4(
     babai_reduce_rns_bigint::<8, NttPrimes24Bit8>(f, g, capital_f, capital_g)
 }
 
-/// Solve the NTRU equation. Given f, g in ZZ[X], find F, G in ZZ[X].
-/// such that
-///
-///    f G - g F = q  mod (X^n + 1)
-///
-/// Algorithm 6 of the specification [1, p.35].
-///
-/// [1]: https://falcon-sign.info/falcon.pdf
-#[profiling]
 /// Per-depth parameters for the runtime-`K` flat-word babai reduction
 /// ([`babai_reduce_rns_runtime`]): `(k_primes, cap_w)`.  `k_primes` covers the
 /// `≈ bits(f)+54`-bit `k·f` product with a +6σ tail; `cap_w` (64-bit limbs)
@@ -1097,6 +1088,15 @@ fn rns_runtime_max_depth() -> usize {
     *D
 }
 
+/// Solve the NTRU equation. Given f, g in ZZ[X], find F, G in ZZ[X].
+/// such that
+///
+///    f G - g F = q  mod (X^n + 1)
+///
+/// Algorithm 6 of the specification [1, p.35].
+///
+/// [1]: https://falcon-sign.info/falcon.pdf
+#[profiling]
 fn ntru_solve(
     f: &Polynomial<BigInt>,
     g: &Polynomial<BigInt>,
@@ -1264,8 +1264,12 @@ pub fn ntru_gen(
             continue;
         }
 
+        // max_rns_depth=1: use the i128 RNS babai only at depth 1 (n=512, K=2),
+        // where it beats BigInt.  Depth 2 (K=4) is a measured net loss, so it
+        // stays on BigInt.  The deeper allocation-free runtime-K RNS path is
+        // gated separately by `rns_runtime_max_depth()`, not by this argument.
         if let Some((capital_f, capital_g)) =
-            ntru_solve_entrypoint(f.map(|&i| i as i32), g.map(|&i| i as i32), 2)
+            ntru_solve_entrypoint(f.map(|&i| i as i32), g.map(|&i| i as i32), 1)
         {
             // Verify the NTRU equation fG − gF = q.  The depth-0 reduction NTT
             // uses a single 24-bit prime whose ~2^22 reconstruction range only
