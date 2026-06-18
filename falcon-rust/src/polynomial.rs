@@ -265,8 +265,12 @@ impl<
         }
         let f0 = Polynomial::new(f0_coefficients);
         let f1 = Polynomial::new(f1_coefficients);
-        let f0_squared = (f0.clone() * f0).reduce_by_cyclotomic(n / 2);
-        let f1_squared = (f1.clone() * f1).reduce_by_cyclotomic(n / 2);
+        // Use Karatsuba (O(n^1.58)) rather than the naive `*` operator's O(n^2)
+        // schoolbook: these two squarings are the dominant cost of the deep
+        // NTRU-solve recursion (at n=256 the schoolbook does 256^2 allocating
+        // BigInt multiplies per call).
+        let f0_squared = f0.karatsuba(&f0).reduce_by_cyclotomic(n / 2);
+        let f1_squared = f1.karatsuba(&f1).reduce_by_cyclotomic(n / 2);
         let x = Polynomial::new(vec![F::zero(), F::one()]);
         f0_squared - (x * f1_squared).reduce_by_cyclotomic(n / 2)
     }
