@@ -20,6 +20,16 @@ use num::BigInt;
 use crate::multiword_int as mw;
 use crate::polynomial::Polynomial;
 
+/// At or below this degree, the flat-word schoolbook negacyclic multiply beats
+/// the runtime-`K` RNS/NTT multiply's per-prime overhead. Tuned against the
+/// keygen(1024) benchmark with every consumer (field_norm squarings, the
+/// asymmetric F,G construction multiplies, and the deep babai `k·f`) routed
+/// through [`MultiwordPoly::negacyclic_mul`]: a sweep put the crossover plateau at
+/// 64–128 (min ~68 ms), regressing again by 256 as schoolbook's O(n²) loses at
+/// large `n`. Shared with the deep babai reduction so it skips building the
+/// expensive `RuntimeNtt` in the schoolbook regime.
+pub(crate) const SCHOOLBOOK_MAX_N: usize = 64;
+
 /// A degree-`< n` polynomial with signed multi-word coefficients (`w` limbs
 /// each), laid out as one contiguous `n·w` buffer.
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -183,13 +193,6 @@ impl MultiwordPoly {
     /// `out_w` limbs. Schoolbook for tiny `n` (deep recursion); runtime-`K` RNS/NTT
     /// otherwise, with the prime count sized from the operands' bit lengths.
     pub(crate) fn negacyclic_mul(&self, other: &Self, out_w: usize) -> Self {
-        /// At or below this degree, flat-word schoolbook beats the RNS multiply's
-        /// per-prime overhead. Tuned against the keygen(1024) benchmark with both
-        /// consumers (field_norm squarings + the asymmetric F,G construction
-        /// multiplies) routed through here: a sweep put the crossover plateau at
-        /// 64–128 (min ~68 ms), regressing again by 256 as schoolbook's O(n²)
-        /// loses at large n.
-        const SCHOOLBOOK_MAX_N: usize = 64;
         if self.n <= SCHOOLBOOK_MAX_N {
             self.schoolbook_negacyclic_mul(other, out_w)
         } else {

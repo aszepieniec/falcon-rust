@@ -460,8 +460,18 @@ pub(crate) fn babai_reduce_rns_runtime(
     cap_w: usize,
 ) -> Result<(), String> {
     use crate::multiword_int as mw;
+    use crate::multiword_poly::SCHOOLBOOK_MAX_N;
     let n = f.coefficients.len();
-    let ntt = RuntimeNtt::cached(n, k_primes);
+    // At deep levels (tiny `n`, huge coefficients) the flat-word schoolbook
+    // multiply beats the RNS/NTT one, and building the `RuntimeNtt` — `k_primes`
+    // root-finds plus an O(k²) Garner table, with `k_primes` reaching ~149 at
+    // depth 9 — is pure waste.  Only build it in the large-`n` (RNS) regime.
+    let use_schoolbook = n <= SCHOOLBOOK_MAX_N;
+    let ntt = if use_schoolbook {
+        None
+    } else {
+        Some(RuntimeNtt::cached(n, k_primes))
+    };
 
     let bitsize = |bi: &BigInt| bi.bits();
     let size = [
@@ -487,9 +497,27 @@ pub(crate) fn babai_reduce_rns_runtime(
 
     // Operands as flat-word polynomials (multiply inputs); capital likewise.
     let fw = (size as usize / 64) + 2;
-    // Transform f, g once; only k changes per reduction pass.
-    let f_ntt = ntt.forward(&MultiwordPoly::from_bigint_poly(f, fw));
-    let g_ntt = ntt.forward(&MultiwordPoly::from_bigint_poly(g, fw));
+    let f_mw = MultiwordPoly::from_bigint_poly(f, fw);
+    let g_mw = MultiwordPoly::from_bigint_poly(g, fw);
+    // RNS regime only: transform f, g once (only k changes per reduction pass).
+    let (f_ntt, g_ntt) = match &ntt {
+        Some(ctx) => (Some(ctx.forward(&f_mw)), Some(ctx.forward(&g_mw))),
+        None => (None, None),
+    };
+    // `k·f` / `k·g` per pass: pre-transformed RNS multiply for large `n`, flat-word
+    // schoolbook for tiny `n` (where the RNS overhead dominates).
+    let mul_kf = |kp: &MultiwordPoly| -> MultiwordPoly {
+        match &ntt {
+            Some(ctx) => ctx.mul_transformed(kp, f_ntt.as_ref().unwrap(), cap_w),
+            None => kp.schoolbook_negacyclic_mul(&f_mw, cap_w),
+        }
+    };
+    let mul_kg = |kp: &MultiwordPoly| -> MultiwordPoly {
+        match &ntt {
+            Some(ctx) => ctx.mul_transformed(kp, g_ntt.as_ref().unwrap(), cap_w),
+            None => kp.schoolbook_negacyclic_mul(&g_mw, cap_w),
+        }
+    };
     let mut cf = MultiwordPoly::from_bigint_poly(capital_f, cap_w);
     let mut cg = MultiwordPoly::from_bigint_poly(capital_g, cap_w);
 
@@ -541,8 +569,8 @@ pub(crate) fn babai_reduce_rns_runtime(
             break;
         }
         let kp = k_poly(&k);
-        let shifted_kf = ntt.mul_transformed(&kp, &f_ntt, cap_w).shl_coeffs(back_shift);
-        let shifted_kg = ntt.mul_transformed(&kp, &g_ntt, cap_w).shl_coeffs(back_shift);
+        let shifted_kf = mul_kf(&kp).shl_coeffs(back_shift);
+        let shifted_kg = mul_kg(&kp).shl_coeffs(back_shift);
 
         if d > 53 {
             let new_cs = cap_size(&cf.sub(&shifted_kf), &cg.sub(&shifted_kg));
@@ -553,8 +581,8 @@ pub(crate) fn babai_reduce_rns_runtime(
                     break;
                 }
                 let kpo = k_poly(&k_old);
-                let kf_old = ntt.mul_transformed(&kpo, &f_ntt, cap_w).shl_coeffs(d as u32);
-                let kg_old = ntt.mul_transformed(&kpo, &g_ntt, cap_w).shl_coeffs(d as u32);
+                let kf_old = mul_kf(&kpo).shl_coeffs(d as u32);
+                let kg_old = mul_kg(&kpo).shl_coeffs(d as u32);
                 cf.sub_assign(&kf_old);
                 cg.sub_assign(&kg_old);
                 continue;
@@ -1068,22 +1096,23 @@ const fn rns_runtime_babai_params(depth: usize) -> (usize, usize) {
     }
 }
 
-/// Deepest recursion depth at which the allocation-free runtime-`K` RNS babai
-/// reduction is used instead of `babai_reduce_bigint`.  Depths 3..=this use the
-/// flat-word path; deeper levels (tiny `n`, hundreds of primes) fall back to
-/// BigInt karatsuba, where the RNS multiply's per-prime overhead dominates.
-/// Tuned by the Stage 6 benchmark.  Overridable at runtime via the
-/// `RNS_RUNTIME_MAX_DEPTH` env var (for the crossover sweep).  Default 4: after
-/// hoisting the per-pass f/g forward-NTT and caching the per-depth `RuntimeNtt`,
-/// the keygen(1024) crossover sits at depth 4 (266 ms vs 301 ms with RNS off;
-/// d5≈268, d6≈277, then rising — d9≈600).
+/// Deepest recursion depth at which the allocation-free flat-word babai reduction
+/// ([`babai_reduce_rns_runtime`]) is used instead of `babai_reduce_bigint`.
+/// Depths 3..=this use the flat-word path; deeper levels fall back to BigInt.
+/// Overridable at runtime via the `RNS_RUNTIME_MAX_DEPTH` env var.
+///
+/// Default 9 (all depths): the flat-word babai now dispatches its `k·f` multiply
+/// internally — RNS/NTT at large `n` (depth 3, n=128) and flat-word schoolbook at
+/// tiny `n` (depths 4–9, n≤64), the latter skipping the expensive `RuntimeNtt`
+/// entirely.  This replaces the old RNS-only crossover (which had to fall back to
+/// BigInt at depth 5 because the RNS multiply lost at small `n`).
 fn rns_runtime_max_depth() -> usize {
     use std::sync::LazyLock;
     static D: LazyLock<usize> = LazyLock::new(|| {
         std::env::var("RNS_RUNTIME_MAX_DEPTH")
             .ok()
             .and_then(|s| s.parse().ok())
-            .unwrap_or(4)
+            .unwrap_or(9)
     });
     *D
 }
@@ -1776,9 +1805,24 @@ mod test {
         (f, g, cf, cg)
     }
 
+    /// Realistic depth-7 inputs: n = 8, max|f,g| ≈ 850 bits, max|F,G| ≈ 2000
+    /// bits.  Deep in the schoolbook regime (n ≤ 64), where the flat-word babai
+    /// uses `schoolbook_negacyclic_mul` and skips the `RuntimeNtt` entirely.
+    fn depth7_inputs(
+        rng: &mut StdRng,
+    ) -> (Polynomial<BigInt>, Polynomial<BigInt>, Polynomial<BigInt>, Polynomial<BigInt>) {
+        let n = 8;
+        let f = Polynomial::new((0..n).map(|_| rand_signed_bigint(rng, 850)).collect::<Vec<_>>());
+        let g = Polynomial::new((0..n).map(|_| rand_signed_bigint(rng, 850)).collect::<Vec<_>>());
+        let cf = Polynomial::new((0..n).map(|_| rand_signed_bigint(rng, 2000)).collect::<Vec<_>>());
+        let cg = Polynomial::new((0..n).map(|_| rand_signed_bigint(rng, 2000)).collect::<Vec<_>>());
+        (f, g, cf, cg)
+    }
+
     /// The runtime-`K` flat-word backend ([`babai_reduce_rns_runtime`]) must
     /// produce exactly the same reduction as the BigInt-karatsuba oracle, across
-    /// depths 3–5 (n = 128, 64, 32) with the matching runtime prime counts.
+    /// depths 3–7 (n = 128, 64, 32, 8): depth 3 (n>64) takes the RNS multiply,
+    /// depths 4–7 the flat-word schoolbook multiply.
     #[test]
     fn babai_reduce_rns_runtime_matches_bigint() {
         use super::babai_reduce_rns_runtime;
@@ -1790,6 +1834,7 @@ mod test {
             ("depth3", depth3_inputs as Gen, 5, 6, 0xd3),
             ("depth4", depth4_inputs as Gen, 8, 8, 0xd4),
             ("depth5", depth5_inputs as Gen, 12, 12, 0xd5),
+            ("depth7", depth7_inputs as Gen, 41, 40, 0xd7),
         ];
         for &(name, gen, k_primes, cap_w, seed) in cases {
             let mut rng = StdRng::seed_from_u64(0x5117_0000 + seed);
