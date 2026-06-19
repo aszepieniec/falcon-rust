@@ -1088,6 +1088,22 @@ fn rns_runtime_max_depth() -> usize {
     *D
 }
 
+/// Field norm via the allocation-free flat-word [`MultiwordPoly`] path instead of
+/// `Polynomial<BigInt>::field_norm`.  The two squarings inside dominate the deep
+/// NTRU-solve recursion; routing them through the size-dispatched negacyclic
+/// multiply (RNS/NTT at shallow large `n`, flat-word schoolbook at deep tiny `n`)
+/// removes the per-`BigInt`-operation heap allocation.  Bit-exact with the
+/// `BigInt` field norm (see `field_norm_matches_bigint`).
+#[profiling]
+fn field_norm_flatword(p: &Polynomial<BigInt>) -> Polynomial<BigInt> {
+    let max_bits = p.coefficients.iter().map(|c| c.bits()).max().unwrap_or(0);
+    // ceil(max_bits/64) limbs for the magnitude, +1 for the sign bit / safety.
+    let w_in = (max_bits / 64 + 1) as usize;
+    MultiwordPoly::from_bigint_poly(p, w_in)
+        .field_norm()
+        .to_bigint_poly()
+}
+
 /// Solve the NTRU equation. Given f, g in ZZ[X], find F, G in ZZ[X].
 /// such that
 ///
@@ -1115,8 +1131,8 @@ fn ntru_solve(
         ));
     }
 
-    let f_prime = f.field_norm();
-    let g_prime = g.field_norm();
+    let f_prime = field_norm_flatword(f);
+    let g_prime = field_norm_flatword(g);
     let (capital_f_prime, capital_g_prime) =
         ntru_solve(&f_prime, &g_prime, depth + 1, max_rns_depth)?;
 

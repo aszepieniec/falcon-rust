@@ -126,6 +126,121 @@ impl MultiwordPoly {
         }
     }
 
+    /// Bit length of the largest-magnitude coefficient (0 for the zero poly).
+    pub(crate) fn max_coeff_bits(&self) -> u64 {
+        (0..self.n)
+            .map(|i| mw::bit_length(self.coeff(i)))
+            .max()
+            .unwrap_or(0)
+    }
+
+    /// Split into (magnitudes, signs): a same-shape polynomial whose coefficients
+    /// are `|c|`, plus the sign of each. Hoists sign handling out of the schoolbook
+    /// inner loop so it does only unsigned limb multiplies.
+    fn magnitudes(&self) -> (Self, Vec<bool>) {
+        let mut mag = self.clone();
+        let mut signs = vec![false; self.n];
+        for i in 0..self.n {
+            let c = mag.coeff_mut(i);
+            if mw::is_negative(c) {
+                mw::neg_in_place(c);
+                signs[i] = true;
+            }
+        }
+        (mag, signs)
+    }
+
+    /// `self * other mod (X^n + 1)` by O(n²) schoolbook over flat-word
+    /// coefficients, each product accumulated into an `out_w`-limb result. The
+    /// allocation-free deep-recursion counterpart to the RNS path: at tiny `n`
+    /// (huge coefficients) the RNS multiply's per-prime O(K²) Garner overhead
+    /// dominates, and this beats it. Magnitudes/signs are hoisted out of the inner
+    /// loop, so the hot path is a single reusable `prod` buffer.
+    pub(crate) fn schoolbook_negacyclic_mul(&self, other: &Self, out_w: usize) -> Self {
+        debug_assert_eq!(self.n, other.n);
+        let n = self.n;
+        let (amag, asign) = self.magnitudes();
+        let (bmag, bsign) = other.magnitudes();
+        let mut out = Self::zeros(n, out_w);
+        let mut prod = vec![0u64; out_w];
+        for i in 0..n {
+            for j in 0..n {
+                mw::umul_into(&mut prod, amag.coeff(i), bmag.coeff(j));
+                let k = i + j;
+                let (slot, wrap) = if k < n { (k, false) } else { (k - n, true) };
+                // Negacyclic wrap flips sign once; operand signs flip it too.
+                if asign[i] ^ bsign[j] ^ wrap {
+                    mw::sub_into_self(out.coeff_mut(slot), &prod);
+                } else {
+                    mw::add_into_self(out.coeff_mut(slot), &prod);
+                }
+            }
+        }
+        out
+    }
+
+    /// Size-dispatched negacyclic product `self * other mod (X^n + 1)` into
+    /// `out_w` limbs. Schoolbook for tiny `n` (deep recursion); runtime-`K` RNS/NTT
+    /// otherwise, with the prime count sized from the operands' bit lengths.
+    pub(crate) fn negacyclic_mul(&self, other: &Self, out_w: usize) -> Self {
+        /// At or below this degree, flat-word schoolbook beats the RNS multiply's
+        /// per-prime overhead. Tuned against the keygen(1024) benchmark: a sweep
+        /// put the crossover at 16 (min 81 ms vs 85 ms at 8, 93 ms RNS-always).
+        const SCHOOLBOOK_MAX_N: usize = 16;
+        if self.n <= SCHOOLBOOK_MAX_N {
+            self.schoolbook_negacyclic_mul(other, out_w)
+        } else {
+            let b = self.max_coeff_bits().max(other.max_coeff_bits());
+            // |product coeff| < n · (2^b)^2  ->  ~ 2b + log2(n) bits; cover M > 2·that
+            // with 24-bit primes (~23 usable bits each), plus a safety prime.
+            let prod_bits = 2 * b + self.n.ilog2() as u64 + 2;
+            let k = (prod_bits as usize) / 23 + 2;
+            let ctx = crate::rns_runtime::RuntimeNtt::cached(self.n, k);
+            ctx.negacyclic_mul(self, other, out_w)
+        }
+    }
+
+    /// Field norm relative to the half-size cyclotomic ring (mirrors
+    /// [`Polynomial::field_norm`]): deinterleave into even/odd parts `f0`, `f1`,
+    /// then return `f0² - x·f1²` in `Z[X]/(X^{n/2}+1)`. The two squarings go
+    /// through [`negacyclic_mul`](Self::negacyclic_mul); the rest is flat-word
+    /// shuffles with no per-coefficient allocation.
+    pub(crate) fn field_norm(&self) -> Self {
+        let n = self.n;
+        debug_assert!(n >= 2 && n % 2 == 0);
+        let half = n / 2;
+
+        let mut f0 = Self::zeros(half, self.w);
+        let mut f1 = Self::zeros(half, self.w);
+        for i in 0..half {
+            f0.coeff_mut(i).copy_from_slice(self.coeff(2 * i));
+            f1.coeff_mut(i).copy_from_slice(self.coeff(2 * i + 1));
+        }
+
+        // Squared coefficients: |c|² summed over `half` terms.
+        let b = f0.max_coeff_bits().max(f1.max_coeff_bits());
+        let prod_bits = 2 * b + (half.max(1)).ilog2() as u64 + 2;
+        let out_w = (prod_bits / 64 + 1) as usize;
+
+        let f0_sq = f0.negacyclic_mul(&f0, out_w);
+        let f1_sq = f1.negacyclic_mul(&f1, out_w);
+
+        // result = f0² - (x·f1²) reduced by X^half + 1.  x·f1² shifts each
+        // coefficient up one slot; the top wraps to slot 0 negated, so
+        //   result[0]   = f0²[0]   + f1²[half-1]
+        //   result[i>0] = f0²[i]   - f1²[i-1]
+        let mut out = f0_sq;
+        mw::add_into_self(out.coeff_mut(0), f1_sq.coeff(half - 1));
+        for i in 1..half {
+            let (dst, src) = (
+                &mut out.data[i * out_w..(i + 1) * out_w],
+                f1_sq.coeff(i - 1),
+            );
+            mw::sub_into_self(dst, src);
+        }
+        out
+    }
+
     /// Reduce by `X^n_target + 1`, folding this polynomial's `self.n`
     /// coefficients down to `n_target`: coefficient block `b = i / n_target`
     /// contributes with sign `(-1)^b` into slot `i % n_target`. Mirrors
@@ -229,6 +344,69 @@ mod tests {
             for &s in &[0u32, 1, 13, 64, 130] {
                 let want = Polynomial::new(p.coefficients.iter().map(|c| c << s).collect());
                 same(&m.shl_coeffs(s), &want);
+            }
+        }
+    }
+
+    /// Schoolbook negacyclic product oracle.
+    fn negacyclic_bigint(a: &Polynomial<BigInt>, b: &Polynomial<BigInt>) -> Polynomial<BigInt> {
+        let n = a.coefficients.len();
+        let mut out = vec![BigInt::from(0); n];
+        for i in 0..n {
+            for j in 0..n {
+                let prod = &a.coefficients[i] * &b.coefficients[j];
+                let k = i + j;
+                if k < n {
+                    out[k] += &prod;
+                } else {
+                    out[k - n] -= &prod;
+                }
+            }
+        }
+        Polynomial::new(out)
+    }
+
+    #[test]
+    fn schoolbook_negacyclic_matches_bigint() {
+        let mut rng = StdRng::seed_from_u64(20);
+        const OUT_W: usize = 12;
+        for &n in &[1usize, 2, 4, 8] {
+            for _ in 0..50 {
+                let a = rand_poly(&mut rng, n);
+                let b = rand_poly(&mut rng, n);
+                let ma = MultiwordPoly::from_bigint_poly(&a, W);
+                let mb = MultiwordPoly::from_bigint_poly(&b, W);
+                let got = ma.schoolbook_negacyclic_mul(&mb, OUT_W);
+                same(&got, &negacyclic_bigint(&a, &b));
+            }
+        }
+    }
+
+    #[test]
+    fn negacyclic_mul_dispatch_matches_bigint() {
+        // n >= 16 exercises the RNS path; n <= 8 the schoolbook path.
+        let mut rng = StdRng::seed_from_u64(21);
+        const OUT_W: usize = 12;
+        for &n in &[4usize, 8, 16, 32, 64] {
+            for _ in 0..10 {
+                let a = rand_poly(&mut rng, n);
+                let b = rand_poly(&mut rng, n);
+                let ma = MultiwordPoly::from_bigint_poly(&a, W);
+                let mb = MultiwordPoly::from_bigint_poly(&b, W);
+                same(&ma.negacyclic_mul(&mb, OUT_W), &negacyclic_bigint(&a, &b));
+            }
+        }
+    }
+
+    #[test]
+    fn field_norm_matches_bigint() {
+        let mut rng = StdRng::seed_from_u64(22);
+        // Even n; half >= 16 (n >= 32) hits the RNS squaring path.
+        for &n in &[2usize, 4, 8, 16, 32, 64] {
+            for _ in 0..10 {
+                let p = rand_poly(&mut rng, n);
+                let mp = MultiwordPoly::from_bigint_poly(&p, W);
+                same(&mp.field_norm(), &p.field_norm());
             }
         }
     }
