@@ -1085,6 +1085,7 @@ pub fn babai_reduce_rns_bigint_depth4(
 /// Derived from [`NTRU_SOLVE_BABAI_COEFF_BITS`].
 const fn rns_runtime_babai_params(depth: usize) -> (usize, usize) {
     match depth {
+        2 => (5, 4),
         3 => (6, 5),
         4 => (8, 7),
         5 => (13, 12),
@@ -1206,8 +1207,11 @@ fn ntru_solve(
         2 if max_rns_depth >= 2 => {
             babai_rns_with_fallback::<4, NttPrimes24Bit4>(f, g, &mut capital_f, &mut capital_g)
         }
-        // Deep levels: allocation-free runtime-K flat-word RNS reduction.
-        d if (3..=rns_runtime_max_depth()).contains(&d) => {
+        // Depth 2 (production, where max_rns_depth=1 so the i128 arm above is
+        // skipped) and the deep levels: allocation-free flat-word reduction. At
+        // depth 2 (n=256 > schoolbook cutoff) this is the transform-once RNS
+        // multiply; deeper levels dispatch to the flat-word schoolbook internally.
+        d if (2..=rns_runtime_max_depth()).contains(&d) => {
             let (k_primes, cap_w) = rns_runtime_babai_params(d);
             babai_reduce_rns_runtime(f, g, &mut capital_f, &mut capital_g, k_primes, cap_w)
         }
@@ -1690,6 +1694,22 @@ mod test {
         }
     }
 
+    /// Realistic depth-2 inputs: n = 256, max|f,g| ≈ 24 bits, max|F,G| ≈ 78
+    /// bits (from `NTRU_SOLVE_BABAI_COEFF_BITS`).  Exercises the ≈80-bit `k·f`
+    /// product through the runtime path (K = 5 primes, 4-limb capital) — the
+    /// CRT-wrap detector for the depth-2 params now that production routes
+    /// depth 2 through `babai_reduce_rns_runtime`.
+    fn depth2_inputs(
+        rng: &mut StdRng,
+    ) -> (Polynomial<BigInt>, Polynomial<BigInt>, Polynomial<BigInt>, Polynomial<BigInt>) {
+        let n = 256;
+        let f = Polynomial::new((0..n).map(|_| rand_signed_bigint(rng, 24)).collect::<Vec<_>>());
+        let g = Polynomial::new((0..n).map(|_| rand_signed_bigint(rng, 24)).collect::<Vec<_>>());
+        let cf = Polynomial::new((0..n).map(|_| rand_signed_bigint(rng, 78)).collect::<Vec<_>>());
+        let cg = Polynomial::new((0..n).map(|_| rand_signed_bigint(rng, 78)).collect::<Vec<_>>());
+        (f, g, cf, cg)
+    }
+
     /// Realistic depth-3 inputs: n = 128, max|f,g| ≈ 50 bits, max|F,G| ≈ 154
     /// bits (the actual Falcon-1024 depth-3 magnitudes, from
     /// `NTRU_SOLVE_BABAI_COEFF_BITS`).  These sizes exercise the full ≈107-bit
@@ -1821,8 +1841,8 @@ mod test {
 
     /// The runtime-`K` flat-word backend ([`babai_reduce_rns_runtime`]) must
     /// produce exactly the same reduction as the BigInt-karatsuba oracle, across
-    /// depths 3–7 (n = 128, 64, 32, 8): depth 3 (n>64) takes the RNS multiply,
-    /// depths 4–7 the flat-word schoolbook multiply.
+    /// depths 2–7 (n = 256, 128, 64, 32, 8): depths 2–3 (n>64) take the RNS
+    /// multiply, depths 4–7 the flat-word schoolbook multiply.
     #[test]
     fn babai_reduce_rns_runtime_matches_bigint() {
         use super::babai_reduce_rns_runtime;
@@ -1831,6 +1851,7 @@ mod test {
         // (inputs, k_primes, cap_w) per depth.  k_primes covers ~bits(f)+54;
         // cap_w (limbs) holds the capital plus the mid-reduction shifts.
         let cases: &[(&str, Gen, usize, usize, u64)] = &[
+            ("depth2", depth2_inputs as Gen, 5, 4, 0xd2),
             ("depth3", depth3_inputs as Gen, 5, 6, 0xd3),
             ("depth4", depth4_inputs as Gen, 8, 8, 0xd4),
             ("depth5", depth5_inputs as Gen, 12, 12, 0xd5),
