@@ -1104,6 +1104,32 @@ fn field_norm_flatword(p: &Polynomial<BigInt>) -> Polynomial<BigInt> {
         .to_bigint_poly()
 }
 
+/// Negacyclic product `a * b mod (X^n + 1)` via the allocation-free flat-word
+/// multiply, replacing `a.karatsuba(&b).reduce_by_cyclotomic(n)` on
+/// `Polynomial<BigInt>`.  Used for the two F,G construction multiplies in
+/// `ntru_solve` (`capital_*_prime_xsq × *_minx`), which are asymmetric — a large
+/// lifted capital times a small galois-adjoint operand.  Bit-exact with
+/// karatsuba-then-reduce (`negacyclic_mul_dispatch_matches_bigint`).
+#[profiling]
+fn construction_mul_flatword(
+    a: &Polynomial<BigInt>,
+    b: &Polynomial<BigInt>,
+) -> Polynomial<BigInt> {
+    let n = a.coefficients.len();
+    let bits_a = a.coefficients.iter().map(|c| c.bits()).max().unwrap_or(0);
+    let bits_b = b.coefficients.iter().map(|c| c.bits()).max().unwrap_or(0);
+    // ceil(bits/64) magnitude limbs + 1 sign/safety limb per operand.
+    let wa = (bits_a / 64 + 1) as usize;
+    let wb = (bits_b / 64 + 1) as usize;
+    // |product coeff| < n · 2^(bits_a+bits_b); +1 sign limb.
+    let prod_bits = bits_a + bits_b + (n as u64).max(1).ilog2() as u64 + 2;
+    let out_w = (prod_bits / 64 + 1) as usize;
+
+    let ma = MultiwordPoly::from_bigint_poly(a, wa);
+    let mb = MultiwordPoly::from_bigint_poly(b, wb);
+    ma.negacyclic_mul(&mb, out_w).to_bigint_poly()
+}
+
 /// Solve the NTRU equation. Given f, g in ZZ[X], find F, G in ZZ[X].
 /// such that
 ///
@@ -1141,8 +1167,8 @@ fn ntru_solve(
     let f_minx = f.galois_adjoint();
     let g_minx = g.galois_adjoint();
 
-    let mut capital_f = (capital_f_prime_xsq.karatsuba(&g_minx)).reduce_by_cyclotomic(n);
-    let mut capital_g = (capital_g_prime_xsq.karatsuba(&f_minx)).reduce_by_cyclotomic(n);
+    let mut capital_f = construction_mul_flatword(&capital_f_prime_xsq, &g_minx);
+    let mut capital_g = construction_mul_flatword(&capital_g_prime_xsq, &f_minx);
 
     let babai_result = match depth {
         1 if max_rns_depth >= 1 => {
