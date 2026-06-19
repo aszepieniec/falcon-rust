@@ -184,16 +184,21 @@ impl MultiwordPoly {
     /// otherwise, with the prime count sized from the operands' bit lengths.
     pub(crate) fn negacyclic_mul(&self, other: &Self, out_w: usize) -> Self {
         /// At or below this degree, flat-word schoolbook beats the RNS multiply's
-        /// per-prime overhead. Tuned against the keygen(1024) benchmark: a sweep
-        /// put the crossover at 16 (min 81 ms vs 85 ms at 8, 93 ms RNS-always).
-        const SCHOOLBOOK_MAX_N: usize = 16;
+        /// per-prime overhead. Tuned against the keygen(1024) benchmark with both
+        /// consumers (field_norm squarings + the asymmetric F,G construction
+        /// multiplies) routed through here: a sweep put the crossover plateau at
+        /// 64–128 (min ~68 ms), regressing again by 256 as schoolbook's O(n²)
+        /// loses at large n.
+        const SCHOOLBOOK_MAX_N: usize = 64;
         if self.n <= SCHOOLBOOK_MAX_N {
             self.schoolbook_negacyclic_mul(other, out_w)
         } else {
-            let b = self.max_coeff_bits().max(other.max_coeff_bits());
-            // |product coeff| < n · (2^b)^2  ->  ~ 2b + log2(n) bits; cover M > 2·that
-            // with 24-bit primes (~23 usable bits each), plus a safety prime.
-            let prod_bits = 2 * b + self.n.ilog2() as u64 + 2;
+            // |product coeff| < n · 2^(ba+bb)  ->  ~ ba+bb+log2(n) bits; cover
+            // M > 2·that with 24-bit primes (~23 usable bits each), plus a safety
+            // prime. Using ba+bb (not 2·max) keeps K tight for asymmetric operands
+            // like the F,G construction multiply (large capital × small g_minx).
+            let prod_bits =
+                self.max_coeff_bits() + other.max_coeff_bits() + self.n.ilog2() as u64 + 2;
             let k = (prod_bits as usize) / 23 + 2;
             let ctx = crate::rns_runtime::RuntimeNtt::cached(self.n, k);
             ctx.negacyclic_mul(self, other, out_w)
