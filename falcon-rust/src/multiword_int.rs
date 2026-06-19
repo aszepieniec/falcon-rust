@@ -109,6 +109,67 @@ pub(crate) fn mul_u32_into(out: &mut [u64], a: &[u64], v: u32) {
     }
 }
 
+/// Unsigned schoolbook multiply `out = a * b`, treating all three slices as
+/// non-negative magnitudes, truncated to `out.len()` limbs. No allocation. `a`,
+/// `b`, and `out` may have independent lengths.
+pub(crate) fn umul_into(out: &mut [u64], a: &[u64], b: &[u64]) {
+    for w in out.iter_mut() {
+        *w = 0;
+    }
+    let lo = out.len();
+    for i in 0..a.len() {
+        if i >= lo {
+            break;
+        }
+        let ai = a[i] as u128;
+        if ai == 0 {
+            continue;
+        }
+        let mut carry = 0u128;
+        let mut idx = i;
+        for &bj in b.iter() {
+            if idx >= lo {
+                carry = 0;
+                break;
+            }
+            let prod = ai * bj as u128 + out[idx] as u128 + carry;
+            out[idx] = prod as u64;
+            carry = prod >> 64;
+            idx += 1;
+        }
+        // Propagate the leftover carry into the higher limbs.
+        while carry != 0 && idx < lo {
+            let v = out[idx] as u128 + carry;
+            out[idx] = v as u64;
+            carry = v >> 64;
+            idx += 1;
+        }
+    }
+}
+
+/// Signed two's-complement multiply `out = a * b`, truncated to `out.len()`
+/// limbs. Allocates two magnitude scratch buffers (sized to `a`/`b`); the
+/// allocation-free hot path is [`MultiwordPoly`](crate::multiword_poly)'s
+/// schoolbook multiply, which hoists the magnitudes out of the inner loop. Used
+/// only by the differential test for the unsigned core ([`umul_into`]).
+#[cfg(test)]
+pub(crate) fn mul_into(out: &mut [u64], a: &[u64], b: &[u64]) {
+    let na = is_negative(a);
+    let nb = is_negative(b);
+    let mut ma = a.to_vec();
+    let mut mb = b.to_vec();
+    if na {
+        neg_in_place(&mut ma);
+    }
+    if nb {
+        neg_in_place(&mut mb);
+    }
+    umul_into(out, &ma, &mb);
+    if na ^ nb {
+        neg_in_place(out);
+    }
+}
+
 /// Logical left shift `out = a << bits`; bits beyond `out.len()·64` are dropped.
 pub(crate) fn shl_into(out: &mut [u64], a: &[u64], bits: u32) {
     debug_assert_eq!(out.len(), a.len());
@@ -336,6 +397,15 @@ impl MultiwordInt {
         Self { limbs: out }
     }
 
+    /// Signed product in `out_len` limbs (truncated). Test/helper wrapper over
+    /// [`mul_into`].
+    #[cfg(test)]
+    pub(crate) fn mul(&self, other: &Self, out_len: usize) -> Self {
+        let mut out = vec![0u64; out_len];
+        mul_into(&mut out, &self.limbs, &other.limbs);
+        Self { limbs: out }
+    }
+
     fn shr_unsigned(&self, bits: u32) -> Self {
         let mut out = vec![0u64; self.len()];
         shr_unsigned_into(&mut out, &self.limbs, bits);
@@ -480,6 +550,18 @@ mod tests {
                     assert_eq!(BigInt::from(p.shr_to_i128(s)), want, "v={b} s={s}");
                 }
             }
+        }
+    }
+
+    #[test]
+    fn mul_matches_bigint() {
+        let mut rng = StdRng::seed_from_u64(8);
+        // Wide output so products never truncate.
+        const OUT: usize = 8;
+        for _ in 0..2000 {
+            let (pa, ba) = rand_value(&mut rng);
+            let (pb, bb) = rand_value(&mut rng);
+            assert_eq!(pa.mul(&pb, OUT).to_bigint(), &ba * &bb);
         }
     }
 
