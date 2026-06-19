@@ -161,6 +161,94 @@ mod test {
 
     use crate::fixed_point::{FixedPoint128, FixedPoint64};
     use crate::samplerz::{approx_exp, ber_exp, sampler_z};
+    use rand::{rngs::StdRng, SeedableRng};
+
+    /// Verbatim copy of `base_sampler` *before* the allocation optimization
+    /// (commit 892304c): builds the 16-byte buffer via `Vec::concat`.
+    fn old_base_sampler(bytes: [u8; 9]) -> i16 {
+        const RCDT: [u128; 18] = [
+            3024686241123004913666,
+            1564742784480091954050,
+            636254429462080897535,
+            199560484645026482916,
+            47667343854657281903,
+            8595902006365044063,
+            1163297957344668388,
+            117656387352093658,
+            8867391802663976,
+            496969357462633,
+            20680885154299,
+            638331848991,
+            14602316184,
+            247426747,
+            3104126,
+            28824,
+            198,
+            1,
+        ];
+        let u =
+            u128::from_be_bytes([vec![0u8; 7], bytes.to_vec()].concat().try_into().unwrap());
+        RCDT.into_iter().filter(|r| u < *r).count() as i16
+    }
+
+    /// Verbatim copy of `sampler_z` *before* the constant-hoisting optimization
+    /// (commit 892304c): recomputes the sigma constants and uses `old_base_sampler`.
+    fn old_sampler_z(
+        mu: FixedPoint64,
+        sigma: FixedPoint64,
+        sigma_min: FixedPoint64,
+        rng: &mut dyn rand::Rng,
+    ) -> i16 {
+        let sigma_max = FixedPoint64::from(1.8205f64);
+        let inv_2sigma_max_sq =
+            FixedPoint64::ONE / (FixedPoint64::from(2.0f64) * sigma_max * sigma_max);
+        let isigma = FixedPoint64::ONE / sigma;
+        let dss = FixedPoint64::from(0.5f64) * isigma * isigma;
+        let s = mu.floor().trunc();
+        let r = mu - FixedPoint64::from(s);
+        let ccs = sigma_min * isigma;
+        loop {
+            let z0 = old_base_sampler(rng.random());
+            let random_byte: u8 = rng.random();
+            let b = (random_byte & 1) as i16;
+            let z = b + ((b << 1) - 1) * z0;
+            let zf_min_r = FixedPoint64::from(z as i32) - r;
+            let x = zf_min_r * zf_min_r * dss
+                - FixedPoint64::from(z0 as i32 * z0 as i32) * inv_2sigma_max_sq;
+            if ber_exp(x, ccs, rng.random()) {
+                return z + (s as i16);
+            }
+        }
+    }
+
+    /// The optimized `sampler_z`/`base_sampler` must produce byte-for-byte the
+    /// same output sequence as the pre-optimization code on the same RNG stream —
+    /// across a range of (sigma, sigma_min, mu). Identical outputs over a long run
+    /// also prove the randomness is consumed in the same order/amount (any
+    /// mismatch would desync the two RNGs and surface as a divergence).
+    #[test]
+    fn sampler_z_matches_pre_optimization() {
+        let cases = [
+            (1.43300980528773f64, 1.43200980528773f64), // keygen gen_poly
+            (1.2778336969128337, 1.2778336969128337),   // ~signer floor
+            (1.7794, 1.32),
+            (1.8205, 1.17),
+        ];
+        for &(sig, smin) in &cases {
+            let sigma = FixedPoint64::from(sig);
+            let sigma_min = FixedPoint64::from(smin);
+            for &mu_v in &[0.0f64, 0.3, -0.7, 5.5, 12.25] {
+                let mu = FixedPoint64::from(mu_v);
+                let mut r_old = StdRng::seed_from_u64(0x5A3D_0000 ^ sig.to_bits());
+                let mut r_new = StdRng::seed_from_u64(0x5A3D_0000 ^ sig.to_bits());
+                for i in 0..20_000 {
+                    let a = old_sampler_z(mu, sigma, sigma_min, &mut r_old);
+                    let b = sampler_z(mu, sigma, sigma_min, &mut r_new);
+                    assert_eq!(a, b, "divergence at sample {i} (sigma={sig}, mu={mu_v})");
+                }
+            }
+        }
+    }
 
     /// RNG used only for testing purposes, whereby the produced
     /// string of random bytes is equal to the one it is initialized
