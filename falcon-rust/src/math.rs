@@ -46,6 +46,33 @@ pub const NTRU_SOLVE_BABAI_COEFF_BITS: [(f64, f64, f64, f64); 11] = [
     (6307.52,24.48,6319.66,24.51), // depth 10  n =    1 (xgcd, no Babai)
 ];
 
+/// Window / back-shift schedule for one Babai reduction pass, shared by all
+/// three estimator loops ([`babai_reduce_bigint`], [`babai_reduce_rns_generic`],
+/// [`babai_reduce_rns_runtime`]) so they stay bit-identical (the differential
+/// tests depend on it).
+///
+/// The per-coefficient quotient `k_true = C / f` has `d = capital_size − size`
+/// bits, but the f64 `round()` resolves only ~53 bits at once:
+/// - `d > 53`: window the top 106 bits (`capital_size − 106`) so the quotient is
+///   ≈ 2^53 — k_true's top 53 bits — and `back_shift = d − 53` re-aligns them.
+/// - `d ≤ 53`: k_true already fits in 53 bits, so window at the *denominator's*
+///   scale (`size − 53`), making the quotient equal k_true exactly and reducing
+///   all `d` bits in ONE pass, with `back_shift = 0`.
+///
+/// The earlier `d ≤ 53` form `(capital_size − 53, d)` scaled the quotient down to
+/// ≈ 2^(53 − size), i.e. only a few bits whenever `size` sat near its 53-bit
+/// floor (e.g. depth 3, where `max|f,g| ≈ 50`), so it crawled ~1 bit per pass —
+/// 24 wasted passes of an expensive n=128 multiply. Windowing at `size − 53`
+/// removes the crawl; f64 precision was never the limit (k_true is only ~28 bits
+/// there).
+fn babai_shifts(capital_size: u64, size: u64, d: u64) -> (u32, u32) {
+    if d > 53 {
+        ((capital_size - 106) as u32, (d - 53) as u32)
+    } else {
+        ((size - 53) as u32, 0)
+    }
+}
+
 /// Reduce the vector (F,G) relative to (f,g). This method follows the python
 /// implementation [1].
 ///
@@ -109,17 +136,11 @@ pub fn babai_reduce_bigint(
         }
         prev_capital_size = capital_size;
 
-        // When D = capital_size - size > 53, scaling both capital_F and f to
-        // ~2^53 makes the FFT quotient ≈ 1, capturing only ~1 bit of k_true per
-        // iteration.  Instead, scale capital_F to ~2^106 (shift 53 less) so the
-        // quotient ≈ 2^53, extracting 53 bits of k_true per iteration.  The
-        // back-shift on kf decreases by 53 to compensate.
+        // See `babai_shifts` for the windowing schedule (two-step for d > 53,
+        // full-k single pass for d <= 53).
         let d = capital_size - size;
-        let (capital_shift, back_shift) = if d > 53 {
-            ((capital_size as i64) - 106, d - 53)
-        } else {
-            ((capital_size as i64) - 53, d)
-        };
+        let (capital_shift, back_shift) = babai_shifts(capital_size, size, d);
+        let (capital_shift, back_shift) = (capital_shift as i64, back_shift as i64);
 
         let capital_f_adjusted = capital_f
             .map(|bi| Complex64::new(i128::try_from(bi >> capital_shift).unwrap() as f64, 0.0))
@@ -373,11 +394,7 @@ where
         prev_capital_size = capital_size;
 
         let d = capital_size - size;
-        let (capital_shift, back_shift) = if d > 53 {
-            ((capital_size - 106) as u32, (d - 53) as u32)
-        } else {
-            ((capital_size - 53) as u32, d as u32)
-        };
+        let (capital_shift, back_shift) = babai_shifts(capital_size, size, d);
 
         let numerator = window(&cf, capital_shift).hadamard_mul(&f_star_adjusted)
             + window(&cg, capital_shift).hadamard_mul(&g_star_adjusted);
@@ -558,11 +575,7 @@ pub(crate) fn babai_reduce_rns_runtime(
         prev_capital_size = capital_size;
 
         let d = capital_size - size;
-        let (capital_shift, back_shift) = if d > 53 {
-            ((capital_size - 106) as u32, (d - 53) as u32)
-        } else {
-            ((capital_size - 53) as u32, d as u32)
-        };
+        let (capital_shift, back_shift) = babai_shifts(capital_size, size, d);
 
         let k = estimate_k(&cf, &cg, capital_shift);
         if k.iter().all(|&x| x == 0) {
