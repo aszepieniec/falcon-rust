@@ -224,6 +224,15 @@ impl From<FixedPoint128> for FixedPoint64 {
     }
 }
 
+/// Widen FixedPoint64 (scale 2³²) to FixedPoint128 (scale 2⁶⁴). Lossless: the extra
+/// 32 fractional bits are zero. Used by the discrete-Gaussian sampler to evaluate the
+/// acceptance probability at full (64-bit) precision.
+impl From<FixedPoint64> for FixedPoint128 {
+    fn from(v: FixedPoint64) -> FixedPoint128 {
+        FixedPoint((v.0 as i128) << 32)
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Arithmetic operators
 // ---------------------------------------------------------------------------

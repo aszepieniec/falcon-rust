@@ -1,6 +1,6 @@
 use rand::{Rng, RngExt};
 
-use crate::fixed_point::FixedPoint64;
+use crate::fixed_point::{FixedPoint128, FixedPoint64};
 
 /// Sample an integer from {0, ..., 18} according to the distribution χ, which
 /// is close to the half-Gaussian distribution on the natural numbers with mean
@@ -31,7 +31,12 @@ fn base_sampler(bytes: [u8; 9]) -> i16 {
 }
 
 /// Compute an integer approximation of 2^63 * ccs * exp(-x).
-fn approx_exp(x: FixedPoint64, ccs: FixedPoint64) -> u64 {
+///
+/// Evaluated in FixedPoint128 (64 fractional bits) so the argument carries the full 63 bits
+/// of precision the FACCT polynomial's 63-bit constants require. Evaluating this at the old
+/// FixedPoint64 (32 fractional bits) quantized the argument to 2^-32 and left approx_exp with a
+/// ~2^-33 maximum relative error — below Falcon's mandated sampler precision (GHSA-25rm-9wvm-m38v).
+fn approx_exp(x: FixedPoint128, ccs: FixedPoint128) -> u64 {
     // The constants C are used to approximate exp(-x); these
     // constants are taken from FACCT (up to a scaling factor
     // of 2^63):
@@ -54,24 +59,25 @@ fn approx_exp(x: FixedPoint64, ccs: FixedPoint64) -> u64 {
     ];
 
     let mut y: u64 = C[0];
-    // x is in [0, ln(2)]; x.0 = x_real * 2^32; we want floor(x_real * 2^63) = x.0 * 2^31.
-    // Clamp to 0 if somehow negative (shouldn't happen in valid calls).
-    let z: u64 = if x.0 < 0 { 0 } else { (x.0 as u64) << 31 };
+    // x is in [0, ln(2)]; x.0 = x_real * 2^64; we want floor(x_real * 2^63) = x.0 >> 1.
+    // The shift KEEPS the low fractional bits (unlike the old 32-bit `<< 31`, which zero-filled
+    // them and quantized the argument to 2^-32). Clamp to 0 if somehow negative.
+    let z: u64 = if x.0 < 0 { 0 } else { (x.0 >> 1) as u64 };
     for cu in C.iter().skip(1) {
         let zy = (z as u128) * (y as u128);
         y = cu - ((zy >> 63) as u64);
     }
 
-    // ccs is in [0, 1]; ccs.0 = ccs_real * 2^32; we want floor(ccs_real * 2^63) = ccs.0 * 2^31.
-    let z2: u64 = if ccs.0 < 0 { 0 } else { (ccs.0 as u64) << 31 };
+    // ccs is in [0, 1]; ccs.0 = ccs_real * 2^64; we want floor(ccs_real * 2^63) = ccs.0 >> 1.
+    let z2: u64 = if ccs.0 < 0 { 0 } else { (ccs.0 >> 1) as u64 };
 
     (((z2 as u128) * (y as u128)) >> 63) as u64
 }
 
 /// A random bool that is true with probability ≈ ccs · exp(−x).
-fn ber_exp(x: FixedPoint64, ccs: FixedPoint64, random_bytes: [u8; 7]) -> bool {
-    let s = (x / FixedPoint64::LN_2).trunc() as usize;
-    let r = x - FixedPoint64::LN_2 * FixedPoint64::from(s as i32);
+fn ber_exp(x: FixedPoint128, ccs: FixedPoint128, random_bytes: [u8; 7]) -> bool {
+    let s = (x / FixedPoint128::LN_2).trunc() as usize;
+    let r = x - FixedPoint128::LN_2 * FixedPoint128::from(s as i32);
     let shamt = usize::min(s, 63);
     let z = ((((approx_exp(r, ccs) as u128) << 1) - 1) >> shamt) as u64;
     let mut w = 0i16;
@@ -93,22 +99,30 @@ pub(crate) fn sampler_z(
     sigma_min: FixedPoint64,
     rng: &mut dyn Rng,
 ) -> i16 {
-    let sigma_max = FixedPoint64::from(1.8205f64);
+    // The acceptance-probability computation (dss, ccs, x, and the exp() in ber_exp) is done in
+    // FixedPoint128 (64 fractional bits). At the old FixedPoint64 (32 fractional bits) the exp
+    // acceptance step ran at only 2^-33 relative precision — below Falcon's mandated sampler
+    // precision (GHSA-25rm-9wvm-m38v). The public signature stays FixedPoint64 so callers are
+    // unchanged; the inputs are widened losslessly here.
+    let mu = FixedPoint128::from(mu);
+    let sigma = FixedPoint128::from(sigma);
+    let sigma_min = FixedPoint128::from(sigma_min);
+    let sigma_max = FixedPoint128::from(1.8205f64);
     let inv_2sigma_max_sq =
-        FixedPoint64::ONE / (FixedPoint64::from(2.0f64) * sigma_max * sigma_max);
-    let isigma = FixedPoint64::ONE / sigma;
-    let dss = FixedPoint64::from(0.5f64) * isigma * isigma;
+        FixedPoint128::ONE / (FixedPoint128::from(2.0f64) * sigma_max * sigma_max);
+    let isigma = FixedPoint128::ONE / sigma;
+    let dss = FixedPoint128::from(0.5f64) * isigma * isigma;
     let s = mu.floor().trunc();
-    let r = mu - FixedPoint64::from(s);
+    let r = mu - FixedPoint128::from(s);
     let ccs = sigma_min * isigma;
     loop {
         let z0 = base_sampler(rng.random());
         let random_byte: u8 = rng.random();
         let b = (random_byte & 1) as i16;
         let z = b + ((b << 1) - 1) * z0;
-        let zf_min_r = FixedPoint64::from(z as i32) - r;
+        let zf_min_r = FixedPoint128::from(z as i32) - r;
         let x = zf_min_r * zf_min_r * dss
-            - FixedPoint64::from(z0 as i32 * z0 as i32) * inv_2sigma_max_sq;
+            - FixedPoint128::from(z0 as i32 * z0 as i32) * inv_2sigma_max_sq;
         if ber_exp(x, ccs, rng.random()) {
             return z + (s as i16);
         }
@@ -123,7 +137,7 @@ mod test {
     use rand::{rng, RngExt};
     use std::{thread::sleep, time::Duration};
 
-    use crate::fixed_point::FixedPoint64;
+    use crate::fixed_point::{FixedPoint128, FixedPoint64};
     use crate::samplerz::{approx_exp, ber_exp, sampler_z};
 
     /// RNG used only for testing purposes, whereby the produced
@@ -186,11 +200,12 @@ mod test {
     fn test_approx_exp() {
         // Known answers were generated with the following sage script (high precision):
         //   https://eprint.iacr.org/2016/1055 table 3.2
-        // After converting inputs to FixedPoint64, the FixedPoint32-bit fractional
-        // precision introduces ~2^31 error in the raw z computation (vs ~2^11 for f64).
-        // We use a loose tolerance of 2^40 to verify the approximation is in the right
-        // ballpark while still catching catastrophic errors.
-        let precision = 1u64 << 40;
+        // With the FixedPoint128 (64-bit fractional) acceptance path the only error is the f64
+        // rounding of the inputs (~2^11 on this 2^63 scale). Falcon mandates a sampler relative
+        // precision of about 2^-40..-46; 2^-40 on the 2^63 output scale is 2^23 absolute, so we
+        // assert the tight 2^23 bound. (The previous FixedPoint64 sampler was ~2^30 here — 2^-33
+        // relative — and this loosened tolerance had been raised to 2^40 to hide it; GHSA-25rm-9wvm-m38v.)
+        let precision = 1u64 << 23;
         let kats: [(f64, f64, u64); 10] = [
             (0.2314993926072656, 0.8148006314615972, 5962140072160879737),
             (0.2648875572812225, 0.12769669655309035, 903712282351034505),
@@ -208,13 +223,39 @@ mod test {
             (0.4876437338498085, 0.6159515298936868, 3488632981903743976),
         ];
         for (x, ccs, answer) in kats {
-            let result = approx_exp(FixedPoint64::from(x), FixedPoint64::from(ccs));
+            let result = approx_exp(FixedPoint128::from(x), FixedPoint128::from(ccs));
             let difference = (answer as i128) - (result as i128);
             assert!(
                 (difference * difference) as u128 <= (precision as u128) * (precision as u128),
                 "answer: {answer} versus approximation: {result}\ndifference: {difference} whereas precision: {precision}"
             );
         }
+    }
+
+    /// Regression guard for GHSA-25rm-9wvm-m38v: approx_exp must meet Falcon's mandated sampler
+    /// precision (about 2^-40..-46 relative). Measures the maximum relative error of approx_exp
+    /// against true exp() over the sampler's argument domain [0, ln 2]. The FixedPoint64 sampler
+    /// this replaced was 2^-33 (about 128x too coarse); FixedPoint128 restores about 2^-52 or better.
+    #[test]
+    fn approx_exp_meets_falcon_precision() {
+        let n: u64 = 500_000;
+        let two63 = 9_223_372_036_854_775_808.0f64; // 2^63
+        let mut maxrel = 0.0f64;
+        for i in 0..=n {
+            let x = (i as f64 / n as f64) * std::f64::consts::LN_2;
+            let approx = approx_exp(FixedPoint128::from(x), FixedPoint128::ONE) as f64 / two63;
+            let truev = (-x).exp();
+            let rel = ((approx - truev) / truev).abs();
+            if rel > maxrel {
+                maxrel = rel;
+            }
+        }
+        let requirement = 2f64.powi(-40); // loosest Falcon precision bound in the literature
+        assert!(
+            maxrel < requirement,
+            "approx_exp max relative error {maxrel:.3e} (2^{:.2}) exceeds Falcon's 2^-40 requirement",
+            maxrel.log2()
+        );
     }
 
     #[test]
@@ -249,8 +290,8 @@ mod test {
             assert_eq!(
                 answer,
                 ber_exp(
-                    FixedPoint64::from(x),
-                    FixedPoint64::from(ccs),
+                    FixedPoint128::from(x),
+                    FixedPoint128::from(ccs),
                     bytes.try_into().unwrap()
                 )
             );
