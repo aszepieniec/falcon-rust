@@ -56,23 +56,23 @@
 //! ```
 
 pub(crate) mod cyclotomic_fourier;
-pub(crate) mod rns;
 pub(crate) mod encoding;
 pub(crate) mod falcon;
-pub(crate) mod fixed_point;
-pub(crate) mod fp_field;
-pub(crate) mod multiword_int;
-pub(crate) mod multiword_poly;
-pub(crate) mod packed;
-pub(crate) mod rns_runtime;
 pub mod falcon1024;
 pub mod falcon512;
 pub mod falcon_field;
 pub(crate) mod fast_fft;
 pub(crate) mod ffsampling;
+pub(crate) mod fixed_point;
+pub(crate) mod fp_field;
 pub(crate) mod inverse;
 pub mod math; // pub for benching
+pub(crate) mod multiword_int;
+pub(crate) mod multiword_poly;
+pub(crate) mod packed;
 pub mod polynomial; // pub for benching
+pub(crate) mod rns;
+pub(crate) mod rns_runtime;
 pub(crate) mod samplerz;
 // The depth-0 NTRU-solve NTT is RNS with a single prime; reuse a 24-bit prime
 // from the multi-prime RNS list (`NttPrimes24Bit*`) rather than a bespoke 30-bit

@@ -37,16 +37,16 @@ assert!(falcon512::verify(&msg, &sig, &pk));
 
 ## Performance
 
-If you are after performance, you are probably better off with one of the implementations by the inventors, either the foreign function interface (FFI) into the optimized C code ([`pqcrypto-falcon`](https://crates.io/crates/pqcrypto-falcon)), or the optimized rust crate ([`fn-dsa`](https://crates.io/crates/fn-dsa)). The following benchmark was produced by my Intel(R) Core(TM) Ultra 9 275HX (which supports AVX2). You can make your own by running `cargo bench`.
+If you are after performance, you are probably better off with one of the implementations by the inventors, either the foreign function interface (FFI) into the optimized C code ([`pqcrypto-falcon`](https://crates.io/crates/pqcrypto-falcon)), or the optimized rust crate ([`fn-dsa`](https://crates.io/crates/fn-dsa)). The following benchmark was produced by my 12th Gen Intel(R) Core(TM) i9-12900K (which supports AVX2). You can make your own by running `cargo bench`.
 
 |                      | Keygen          | Sign      | Verify    |
 |----------------------|-----------------|-----------|-----------|
-|      falcon-rust 512 |   27.968 ms     | 253.19 µs | 13.605 µs |
-|     falcon-rust 1024 |   71.982 ms     | 509.57 µs | 28.004 µs |
-|            C FFI 512 |   3.5610 ms     | 118.27 µs | 22.636 µs |
-|           C FFI 1024 |   10.725 ms     | 235.69 µs | 44.329 µs |
-|           FN DSA 512 |   1.7758 ms     | 133.08 µs | 8.1014 µs |
-|          FN DSA 1024 |   8.3540 ms     | 253.82 µs | 16.871 µs |
+|      falcon-rust 512 |   14.272 ms     | 456.44 µs | 15.573 µs |
+|     falcon-rust 1024 |   30.498 ms     | 941.82 µs | 31.370 µs |
+|            C FFI 512 |   3.9177 ms     | 113.53 µs | 24.685 µs |
+|           C FFI 1024 |   11.532 ms     | 225.28 µs | 48.562 µs |
+|           FN DSA 512 |   2.0290 ms     | 154.70 µs | 10.343 µs |
+|          FN DSA 1024 |   9.0410 ms     | 300.76 µs | 20.696 µs |
 
 
 ## Features
@@ -57,7 +57,7 @@ If you are after performance, you are probably better off with one of the implem
  - [x] derandomized algorithms
  - [x] (de)serialization
  - [x] Montgomery representation
- - [ ] better algorithms (e.g. RNS)
+ - [x] residue number system
  - [ ] uncompressed signature format
  - [ ] signed-message interface
  - [ ] hardware optimizations
@@ -72,7 +72,6 @@ If you are after performance, you are probably better off with one of the implem
  - [ ] test interoperability against the reference implementation
  - [ ] negative tests
  - [ ] profile, and fix bottlenecks
- - [ ] Residue number system (RNS) for big integer arithmetic
  - [ ] streaming (de)serialization
  - [ ] investigate secret-dependent time variability
 
