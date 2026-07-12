@@ -26,7 +26,11 @@ fn base_sampler(bytes: [u8; 9]) -> i16 {
         198,
         1,
     ];
-    let u = u128::from_be_bytes([vec![0u8; 7], bytes.to_vec()].concat().try_into().unwrap());
+    // Interpret the 9 bytes as the low 72 bits of a big-endian u128 (top 7 bytes
+    // zero). Stack buffer — no per-sample allocation.
+    let mut buf = [0u8; 16];
+    buf[7..16].copy_from_slice(&bytes);
+    let u = u128::from_be_bytes(buf);
     RCDT.into_iter().filter(|r| u < *r).count() as i16
 }
 
@@ -93,40 +97,58 @@ fn ber_exp(x: FixedPoint128, ccs: FixedPoint128, random_bytes: [u8; 7]) -> bool 
 
 /// Sample an integer from the Gaussian distribution with given mean (mu) and
 /// standard deviation (sigma).
+/// Precomputed, sigma-dependent constants for [`SamplerZCtx::sample`].  Building
+/// these once and sampling many times (as `gen_poly` does — 4096 samples at one
+/// fixed sigma) avoids redoing the setup — notably the `FixedPoint64` division
+/// `1/sigma` — on every sample.
+pub(crate) struct SamplerZCtx {
+    inv_2sigma_max_sq: FixedPoint128,
+    dss: FixedPoint128,
+    ccs: FixedPoint128,
+}
+
+impl SamplerZCtx {
+    pub(crate) fn new(sigma: FixedPoint128, sigma_min: FixedPoint128) -> Self {
+        let sigma_max = FixedPoint128::from(1.8205f64);
+        let inv_2sigma_max_sq =
+            FixedPoint128::ONE / (FixedPoint128::from(2.0f64) * sigma_max * sigma_max);
+        let isigma = FixedPoint128::ONE / sigma;
+        let dss = FixedPoint128::from(0.5f64) * isigma * isigma;
+        let ccs = sigma_min * isigma;
+        Self {
+            inv_2sigma_max_sq,
+            dss,
+            ccs,
+        }
+    }
+
+    /// Sample one integer centred at `mu` (the only per-sample-varying input).
+    pub(crate) fn sample(&self, mu: FixedPoint128, rng: &mut dyn Rng) -> i16 {
+        let s = mu.floor().trunc();
+        let r = mu - FixedPoint128::from(s);
+        loop {
+            let z0 = base_sampler(rng.random());
+            let random_byte: u8 = rng.random();
+            let b = (random_byte & 1) as i16;
+            let z = b + ((b << 1) - 1) * z0;
+            let zf_min_r = FixedPoint128::from(z as i32) - r;
+            let x = zf_min_r * zf_min_r * self.dss
+                - FixedPoint128::from(z0 as i32 * z0 as i32) * self.inv_2sigma_max_sq;
+            if ber_exp(x, self.ccs, rng.random()) {
+                return z + (s as i16);
+            }
+        }
+    }
+}
+
 pub(crate) fn sampler_z(
     mu: FixedPoint64,
     sigma: FixedPoint64,
     sigma_min: FixedPoint64,
     rng: &mut dyn Rng,
 ) -> i16 {
-    // The acceptance-probability computation (dss, ccs, x, and the exp() in ber_exp) is done in
-    // FixedPoint128 (64 fractional bits). At the old FixedPoint64 (32 fractional bits) the exp
-    // acceptance step ran at only 2^-33 relative precision — below Falcon's mandated sampler
-    // precision (GHSA-25rm-9wvm-m38v). The public signature stays FixedPoint64 so callers are
-    // unchanged; the inputs are widened losslessly here.
-    let mu = FixedPoint128::from(mu);
-    let sigma = FixedPoint128::from(sigma);
-    let sigma_min = FixedPoint128::from(sigma_min);
-    let sigma_max = FixedPoint128::from(1.8205f64);
-    let inv_2sigma_max_sq =
-        FixedPoint128::ONE / (FixedPoint128::from(2.0f64) * sigma_max * sigma_max);
-    let isigma = FixedPoint128::ONE / sigma;
-    let dss = FixedPoint128::from(0.5f64) * isigma * isigma;
-    let s = mu.floor().trunc();
-    let r = mu - FixedPoint128::from(s);
-    let ccs = sigma_min * isigma;
-    loop {
-        let z0 = base_sampler(rng.random());
-        let random_byte: u8 = rng.random();
-        let b = (random_byte & 1) as i16;
-        let z = b + ((b << 1) - 1) * z0;
-        let zf_min_r = FixedPoint128::from(z as i32) - r;
-        let x = zf_min_r * zf_min_r * dss
-            - FixedPoint128::from(z0 as i32 * z0 as i32) * inv_2sigma_max_sq;
-        if ber_exp(x, ccs, rng.random()) {
-            return z + (s as i16);
-        }
-    }
+    SamplerZCtx::new(FixedPoint128::from(sigma), FixedPoint128::from(sigma_min))
+        .sample(FixedPoint128::from(mu), rng)
 }
 
 #[cfg(test)]
