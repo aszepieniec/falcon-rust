@@ -1,6 +1,6 @@
 use rand::{Rng, RngExt};
 
-use crate::fixed_point::{FixedPoint128, FixedPoint64};
+use crate::fixed_point::FixedPoint128;
 
 /// Sample an integer from {0, ..., 18} according to the distribution χ, which
 /// is close to the half-Gaussian distribution on the natural numbers with mean
@@ -123,7 +123,7 @@ impl SamplerZCtx {
     }
 
     /// Sample one integer centred at `mu` (the only per-sample-varying input).
-    pub(crate) fn sample(&self, mu: FixedPoint128, rng: &mut dyn Rng) -> i16 {
+    pub(crate) fn sample<R: Rng + ?Sized>(&self, mu: FixedPoint128, rng: &mut R) -> i16 {
         let s = mu.floor().trunc();
         let r = mu - FixedPoint128::from(s);
         loop {
@@ -141,14 +141,13 @@ impl SamplerZCtx {
     }
 }
 
-pub(crate) fn sampler_z(
-    mu: FixedPoint64,
-    sigma: FixedPoint64,
-    sigma_min: FixedPoint64,
+pub(crate) fn sampler_z<FP: Into<FixedPoint128>>(
+    mu: FP,
+    sigma: FP,
+    sigma_min: FP,
     rng: &mut dyn Rng,
 ) -> i16 {
-    SamplerZCtx::new(FixedPoint128::from(sigma), FixedPoint128::from(sigma_min))
-        .sample(FixedPoint128::from(mu), rng)
+    SamplerZCtx::new(sigma.into(), sigma_min.into()).sample(mu.into(), rng)
 }
 
 #[cfg(test)]
@@ -159,7 +158,7 @@ mod test {
     use rand::{rng, RngExt};
     use std::{thread::sleep, time::Duration};
 
-    use crate::fixed_point::{FixedPoint128, FixedPoint64};
+    use crate::fixed_point::FixedPoint128;
     use crate::samplerz::{approx_exp, ber_exp, sampler_z};
     use rand::{rngs::StdRng, SeedableRng};
 
@@ -186,35 +185,34 @@ mod test {
             198,
             1,
         ];
-        let u =
-            u128::from_be_bytes([vec![0u8; 7], bytes.to_vec()].concat().try_into().unwrap());
+        let u = u128::from_be_bytes([vec![0u8; 7], bytes.to_vec()].concat().try_into().unwrap());
         RCDT.into_iter().filter(|r| u < *r).count() as i16
     }
 
-    /// Verbatim copy of `sampler_z` *before* the constant-hoisting optimization
-    /// (commit 892304c): recomputes the sigma constants and uses `old_base_sampler`.
+    /// Verbatim copy of `sampler_z` *before* the constant-hoisting
+    /// optimization: recomputes the sigma constants and uses `old_base_sampler`.
     fn old_sampler_z(
-        mu: FixedPoint64,
-        sigma: FixedPoint64,
-        sigma_min: FixedPoint64,
+        mu: FixedPoint128,
+        sigma: FixedPoint128,
+        sigma_min: FixedPoint128,
         rng: &mut dyn rand::Rng,
     ) -> i16 {
-        let sigma_max = FixedPoint64::from(1.8205f64);
+        let sigma_max = FixedPoint128::from(1.8205f64);
         let inv_2sigma_max_sq =
-            FixedPoint64::ONE / (FixedPoint64::from(2.0f64) * sigma_max * sigma_max);
-        let isigma = FixedPoint64::ONE / sigma;
-        let dss = FixedPoint64::from(0.5f64) * isigma * isigma;
+            FixedPoint128::ONE / (FixedPoint128::from(2.0f64) * sigma_max * sigma_max);
+        let isigma = FixedPoint128::ONE / sigma;
+        let dss = FixedPoint128::from(0.5f64) * isigma * isigma;
         let s = mu.floor().trunc();
-        let r = mu - FixedPoint64::from(s);
+        let r = mu - FixedPoint128::from(s);
         let ccs = sigma_min * isigma;
         loop {
             let z0 = old_base_sampler(rng.random());
             let random_byte: u8 = rng.random();
             let b = (random_byte & 1) as i16;
             let z = b + ((b << 1) - 1) * z0;
-            let zf_min_r = FixedPoint64::from(z as i32) - r;
+            let zf_min_r = FixedPoint128::from(z as i32) - r;
             let x = zf_min_r * zf_min_r * dss
-                - FixedPoint64::from(z0 as i32 * z0 as i32) * inv_2sigma_max_sq;
+                - FixedPoint128::from(z0 as i32 * z0 as i32) * inv_2sigma_max_sq;
             if ber_exp(x, ccs, rng.random()) {
                 return z + (s as i16);
             }
@@ -235,10 +233,10 @@ mod test {
             (1.8205, 1.17),
         ];
         for &(sig, smin) in &cases {
-            let sigma = FixedPoint64::from(sig);
-            let sigma_min = FixedPoint64::from(smin);
+            let sigma = FixedPoint128::from(sig);
+            let sigma_min = FixedPoint128::from(smin);
             for &mu_v in &[0.0f64, 0.3, -0.7, 5.5, 12.25] {
-                let mu = FixedPoint64::from(mu_v);
+                let mu = FixedPoint128::from(mu_v);
                 let mut r_old = StdRng::seed_from_u64(0x5A3D_0000 ^ sig.to_bits());
                 let mut r_new = StdRng::seed_from_u64(0x5A3D_0000 ^ sig.to_bits());
                 for i in 0..20_000 {
@@ -410,9 +408,7 @@ mod test {
 
     #[test]
     fn test_sampler_z() {
-        let sigma_min = FixedPoint64::from(1.277833697f64);
-        // Known answers from the FixedPoint64 implementation (updated from the f64 KATs
-        // in the Falcon spec table 3.2 — rejection decisions may differ at the boundary).
+        let sigma_min = 1.277833697f64;
         let kats = [
             (-91.90471153063714,1.7037990414754918,hex::decode("0fc5442ff043d66e91d1ea000000000000cac64ea5450a22941edc6c").unwrap(),-92i16),
             (-8.322564895434937,1.7037990414754918,hex::decode("f4da0f8d8444d1a77265c2000000000000ef6f98bbbb4bee7db8d9b3").unwrap(),-8),
@@ -434,8 +430,8 @@ mod test {
         for (i, (mu, sigma, random_bytes, answer)) in kats.into_iter().enumerate() {
             assert_eq!(
                 sampler_z(
-                    FixedPoint64::from(mu),
-                    FixedPoint64::from(sigma),
+                    mu,
+                    sigma,
                     sigma_min,
                     &mut UnsafeBufferRng::new(&random_bytes)
                 ),

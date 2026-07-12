@@ -145,7 +145,11 @@ impl FixedInt for i128 {
             .wrapping_add(a_lo.wrapping_mul(b_hi))
             .wrapping_add(a_lo.wrapping_mul(b_lo) >> half);
         let result_s = result_u as i128;
-        if a_neg ^ b_neg { -result_s } else { result_s }
+        if a_neg ^ b_neg {
+            -result_s
+        } else {
+            result_s
+        }
     }
     fn widen_div(a: i128, b: i128) -> i128 {
         let q = 32usize;
