@@ -9,7 +9,7 @@ use rand::Rng;
 use crate::{
     falcon_field::{Felt, Q},
     fast_fft::FastFft,
-    fixed_point::FixedPoint64,
+    fixed_point::FixedPoint128,
     multiword_int::MultiwordInt,
     multiword_poly::MultiwordPoly,
     packed::Packed,
@@ -19,7 +19,7 @@ use crate::{
         NttPrimes24Bit5, NttPrimes24Bit8, Rns,
     },
     rns_runtime::RuntimeNtt,
-    samplerz::sampler_z,
+    samplerz::SamplerZCtx,
     U32Field,
 };
 
@@ -194,8 +194,8 @@ pub fn babai_reduce_bigint(
                 let cg_old = capital_g
                     .map(|bi| Complex64::new(i64::try_from(bi >> cs_old).unwrap() as f64, 0.0))
                     .fft();
-                let num_old = cf_old.hadamard_mul(&f_star_adjusted)
-                    + cg_old.hadamard_mul(&g_star_adjusted);
+                let num_old =
+                    cf_old.hadamard_mul(&f_star_adjusted) + cg_old.hadamard_mul(&g_star_adjusted);
                 let quot_old = num_old.hadamard_div(&denominator_fft).ifft();
                 let k_old = quot_old.map(|f| BigInt::from(f.re.round() as i64));
                 if k_old.is_zero() {
@@ -316,10 +316,16 @@ where
 
     // Forward NTT of f and g once (reused every iteration).  `from_bigint`
     // works at any depth, including where the coefficients exceed i128.
-    let mut f_ntt: Vec<Rns<K, P>> =
-        f.coefficients.iter().map(Rns::<K, P>::from_bigint).collect();
-    let mut g_ntt: Vec<Rns<K, P>> =
-        g.coefficients.iter().map(Rns::<K, P>::from_bigint).collect();
+    let mut f_ntt: Vec<Rns<K, P>> = f
+        .coefficients
+        .iter()
+        .map(Rns::<K, P>::from_bigint)
+        .collect();
+    let mut g_ntt: Vec<Rns<K, P>> = g
+        .coefficients
+        .iter()
+        .map(Rns::<K, P>::from_bigint)
+        .collect();
     ntt_inplace_cached::<K, P>(&mut f_ntt, &tables);
     ntt_inplace_cached::<K, P>(&mut g_ntt, &tables);
 
@@ -337,8 +343,7 @@ where
     // `product_size_model_matches_measurements`); a too-small prime list `P`
     // for this depth would silently wrap the centered CRT, so catch it here in
     // debug builds instead of corrupting the reduction in release.
-    let modulus_signed_bits: f64 =
-        P::PRIMES.iter().map(|&p| (p as f64).log2()).sum::<f64>() - 1.0;
+    let modulus_signed_bits: f64 = P::PRIMES.iter().map(|&p| (p as f64).log2()).sum::<f64>() - 1.0;
     debug_assert!(
         modulus_signed_bits >= (size + 54) as f64,
         "RNS prime list too small: modulus {modulus_signed_bits:.0} signed bits < \
@@ -367,8 +372,11 @@ where
     // Pointwise-multiply the (already forward-transformed) `k_ntt` by `h_ntt`,
     // inverse-transform, and reconstruct each coefficient into `C`.
     let mul = |k_ntt: &[Rns<K, P>], h_ntt: &[Rns<K, P>]| -> Vec<C> {
-        let mut prod: Vec<Rns<K, P>> =
-            k_ntt.iter().zip(h_ntt.iter()).map(|(&a, &b)| a * b).collect();
+        let mut prod: Vec<Rns<K, P>> = k_ntt
+            .iter()
+            .zip(h_ntt.iter())
+            .map(|(&a, &b)| a * b)
+            .collect();
         intt_inplace_cached::<K, P>(&mut prod, &tables);
         prod.iter().map(C::from_rns).collect()
     };
@@ -382,7 +390,10 @@ where
         .fft()
     };
     let cap_size = |cf: &[C], cg: &[C]| -> u64 {
-        cf.iter().chain(cg.iter()).map(C::bit_length).fold(53, u64::max)
+        cf.iter()
+            .chain(cg.iter())
+            .map(C::bit_length)
+            .fold(53, u64::max)
     };
 
     let mut prev_capital_size = u64::MAX;
@@ -400,7 +411,11 @@ where
             + window(&cg, capital_shift).hadamard_mul(&g_star_adjusted);
         let quotient = numerator.hadamard_div(&denominator_fft).ifft();
 
-        let k: Vec<i128> = quotient.coefficients.iter().map(|c| c.re.round() as i128).collect();
+        let k: Vec<i128> = quotient
+            .coefficients
+            .iter()
+            .map(|c| c.re.round() as i128)
+            .collect();
         if k.iter().all(|&x| x == 0) {
             break;
         }
@@ -414,17 +429,26 @@ where
         let shifted_kg: Vec<C> = kg.iter().map(|p| p.shl(back_shift)).collect();
 
         if d > 53 {
-            let new_cs_f =
-                cf.iter().zip(shifted_kf.iter()).map(|(a, b)| a.sub(b).bit_length()).fold(0, u64::max);
-            let new_cs_g =
-                cg.iter().zip(shifted_kg.iter()).map(|(a, b)| a.sub(b).bit_length()).fold(0, u64::max);
+            let new_cs_f = cf
+                .iter()
+                .zip(shifted_kf.iter())
+                .map(|(a, b)| a.sub(b).bit_length())
+                .fold(0, u64::max);
+            let new_cs_g = cg
+                .iter()
+                .zip(shifted_kg.iter())
+                .map(|(a, b)| a.sub(b).bit_length())
+                .fold(0, u64::max);
             if u64::max(new_cs_f, new_cs_g) >= capital_size {
                 let cs_old = (capital_size - 53) as u32;
                 let num_old = window(&cf, cs_old).hadamard_mul(&f_star_adjusted)
                     + window(&cg, cs_old).hadamard_mul(&g_star_adjusted);
                 let quot_old = num_old.hadamard_div(&denominator_fft).ifft();
-                let k_old: Vec<i128> =
-                    quot_old.coefficients.iter().map(|c| c.re.round() as i128).collect();
+                let k_old: Vec<i128> = quot_old
+                    .coefficients
+                    .iter()
+                    .map(|c| c.re.round() as i128)
+                    .collect();
                 if k_old.iter().all(|&x| x == 0) {
                     break;
                 }
@@ -555,15 +579,19 @@ pub(crate) fn babai_reduce_rns_runtime(
     let k_poly = |k: &[i128]| -> MultiwordPoly {
         let mut kp = MultiwordPoly::zeros(n, 2);
         for (i, &v) in k.iter().enumerate() {
-            kp.coeff_mut(i).copy_from_slice(MultiwordInt::from_i128(v, 2).limbs());
+            kp.coeff_mut(i)
+                .copy_from_slice(MultiwordInt::from_i128(v, 2).limbs());
         }
         kp
     };
     let estimate_k = |cf: &MultiwordPoly, cg: &MultiwordPoly, sh: u32| -> Vec<i128> {
-        let numerator =
-            window(cf, sh).hadamard_mul(&f_star) + window(cg, sh).hadamard_mul(&g_star);
+        let numerator = window(cf, sh).hadamard_mul(&f_star) + window(cg, sh).hadamard_mul(&g_star);
         let quotient = numerator.hadamard_div(&denominator_fft).ifft();
-        quotient.coefficients.iter().map(|c| c.re.round() as i128).collect()
+        quotient
+            .coefficients
+            .iter()
+            .map(|c| c.re.round() as i128)
+            .collect()
     };
 
     let mut prev_capital_size = u64::MAX;
@@ -873,7 +901,6 @@ pub(crate) fn babai_reduce_rns<const K: usize, P: NttPrimeList<K>>(
             capital_f[i] -= kf[i];
             capital_g[i] -= kg[i];
         }
-
     }
     Ok(())
 }
@@ -1154,10 +1181,7 @@ fn field_norm_flatword(p: &Polynomial<BigInt>) -> Polynomial<BigInt> {
 /// lifted capital times a small galois-adjoint operand.  Bit-exact with
 /// karatsuba-then-reduce (`negacyclic_mul_dispatch_matches_bigint`).
 #[profiling]
-fn construction_mul_flatword(
-    a: &Polynomial<BigInt>,
-    b: &Polynomial<BigInt>,
-) -> Polynomial<BigInt> {
+fn construction_mul_flatword(a: &Polynomial<BigInt>, b: &Polynomial<BigInt>) -> Polynomial<BigInt> {
     let n = a.coefficients.len();
     let bits_a = a.coefficients.iter().map(|c| c.bits()).max().unwrap_or(0);
     let bits_b = b.coefficients.iter().map(|c| c.bits()).max().unwrap_or(0);
@@ -1368,8 +1392,8 @@ pub fn ntru_gen(
             let g_i64 = g.map(|&i| i as i64);
             let cf_i64 = capital_f.map(|&i| i as i64);
             let cg_i64 = capital_g.map(|&i| i as i64);
-            let ntru_eq = (f_i64 * cg_i64).reduce_by_cyclotomic(n)
-                - (g_i64 * cf_i64).reduce_by_cyclotomic(n);
+            let ntru_eq =
+                (f_i64 * cg_i64).reduce_by_cyclotomic(n) - (g_i64 * cf_i64).reduce_by_cyclotomic(n);
             if ntru_eq != Polynomial::constant(Q as i64) {
                 continue;
             }
@@ -1436,19 +1460,14 @@ pub fn ntru_gen_with_rns_depth(
 // fn gen_poly(n: usize, rng: &mut dyn Rng) -> Polynomial<i16> {
 #[profiling]
 fn gen_poly(n: usize, rng: &mut dyn Rng) -> Polynomial<i16> {
-    let mu = FixedPoint64::ZERO;
-    let sigma_star = FixedPoint64::from(1.43300980528773f64);
+    let mu = FixedPoint128::ZERO;
+    let sigma_star = FixedPoint128::from(1.43300980528773f64);
+    // Build the sigma-dependent sampler constants once, not per sample.
+    let ctx = SamplerZCtx::new(sigma_star, sigma_star - FixedPoint128::from(0.001f64));
     const NUM_COEFFICIENTS: usize = 4096;
     Polynomial {
         coefficients: (0..NUM_COEFFICIENTS)
-            .map(|_| {
-                sampler_z(
-                    mu,
-                    sigma_star,
-                    sigma_star - FixedPoint64::from(0.001f64),
-                    rng,
-                )
-            })
+            .map(|_| ctx.sample(mu, rng))
             .collect_vec()
             .chunks(NUM_COEFFICIENTS / n)
             .map(|ch| ch.iter().sum())
@@ -1503,8 +1522,8 @@ mod test {
     use itertools::Itertools;
     use num::BigInt;
     use proptest::collection::vec;
-    use proptest::strategy::Just;
     use proptest::prop_assert_eq;
+    use proptest::strategy::Just;
     use rand::{rngs::StdRng, SeedableRng};
     use test_strategy::proptest as strategy_proptest;
 
@@ -1714,12 +1733,33 @@ mod test {
     /// depth 2 through `babai_reduce_rns_runtime`.
     fn depth2_inputs(
         rng: &mut StdRng,
-    ) -> (Polynomial<BigInt>, Polynomial<BigInt>, Polynomial<BigInt>, Polynomial<BigInt>) {
+    ) -> (
+        Polynomial<BigInt>,
+        Polynomial<BigInt>,
+        Polynomial<BigInt>,
+        Polynomial<BigInt>,
+    ) {
         let n = 256;
-        let f = Polynomial::new((0..n).map(|_| rand_signed_bigint(rng, 24)).collect::<Vec<_>>());
-        let g = Polynomial::new((0..n).map(|_| rand_signed_bigint(rng, 24)).collect::<Vec<_>>());
-        let cf = Polynomial::new((0..n).map(|_| rand_signed_bigint(rng, 78)).collect::<Vec<_>>());
-        let cg = Polynomial::new((0..n).map(|_| rand_signed_bigint(rng, 78)).collect::<Vec<_>>());
+        let f = Polynomial::new(
+            (0..n)
+                .map(|_| rand_signed_bigint(rng, 24))
+                .collect::<Vec<_>>(),
+        );
+        let g = Polynomial::new(
+            (0..n)
+                .map(|_| rand_signed_bigint(rng, 24))
+                .collect::<Vec<_>>(),
+        );
+        let cf = Polynomial::new(
+            (0..n)
+                .map(|_| rand_signed_bigint(rng, 78))
+                .collect::<Vec<_>>(),
+        );
+        let cg = Polynomial::new(
+            (0..n)
+                .map(|_| rand_signed_bigint(rng, 78))
+                .collect::<Vec<_>>(),
+        );
         (f, g, cf, cg)
     }
 
@@ -1730,12 +1770,33 @@ mod test {
     /// for the right-sized (K = 5) prime list.
     fn depth3_inputs(
         rng: &mut StdRng,
-    ) -> (Polynomial<BigInt>, Polynomial<BigInt>, Polynomial<BigInt>, Polynomial<BigInt>) {
+    ) -> (
+        Polynomial<BigInt>,
+        Polynomial<BigInt>,
+        Polynomial<BigInt>,
+        Polynomial<BigInt>,
+    ) {
         let n = 128;
-        let f = Polynomial::new((0..n).map(|_| rand_signed_bigint(rng, 50)).collect::<Vec<_>>());
-        let g = Polynomial::new((0..n).map(|_| rand_signed_bigint(rng, 50)).collect::<Vec<_>>());
-        let cf = Polynomial::new((0..n).map(|_| rand_signed_bigint(rng, 154)).collect::<Vec<_>>());
-        let cg = Polynomial::new((0..n).map(|_| rand_signed_bigint(rng, 154)).collect::<Vec<_>>());
+        let f = Polynomial::new(
+            (0..n)
+                .map(|_| rand_signed_bigint(rng, 50))
+                .collect::<Vec<_>>(),
+        );
+        let g = Polynomial::new(
+            (0..n)
+                .map(|_| rand_signed_bigint(rng, 50))
+                .collect::<Vec<_>>(),
+        );
+        let cf = Polynomial::new(
+            (0..n)
+                .map(|_| rand_signed_bigint(rng, 154))
+                .collect::<Vec<_>>(),
+        );
+        let cg = Polynomial::new(
+            (0..n)
+                .map(|_| rand_signed_bigint(rng, 154))
+                .collect::<Vec<_>>(),
+        );
         (f, g, cf, cg)
     }
 
@@ -1744,12 +1805,33 @@ mod test {
     /// the K = 8 prime list) and the 5-limb (320-bit) capital.
     fn depth4_inputs(
         rng: &mut StdRng,
-    ) -> (Polynomial<BigInt>, Polynomial<BigInt>, Polynomial<BigInt>, Polynomial<BigInt>) {
+    ) -> (
+        Polynomial<BigInt>,
+        Polynomial<BigInt>,
+        Polynomial<BigInt>,
+        Polynomial<BigInt>,
+    ) {
         let n = 64;
-        let f = Polynomial::new((0..n).map(|_| rand_signed_bigint(rng, 101)).collect::<Vec<_>>());
-        let g = Polynomial::new((0..n).map(|_| rand_signed_bigint(rng, 101)).collect::<Vec<_>>());
-        let cf = Polynomial::new((0..n).map(|_| rand_signed_bigint(rng, 303)).collect::<Vec<_>>());
-        let cg = Polynomial::new((0..n).map(|_| rand_signed_bigint(rng, 303)).collect::<Vec<_>>());
+        let f = Polynomial::new(
+            (0..n)
+                .map(|_| rand_signed_bigint(rng, 101))
+                .collect::<Vec<_>>(),
+        );
+        let g = Polynomial::new(
+            (0..n)
+                .map(|_| rand_signed_bigint(rng, 101))
+                .collect::<Vec<_>>(),
+        );
+        let cf = Polynomial::new(
+            (0..n)
+                .map(|_| rand_signed_bigint(rng, 303))
+                .collect::<Vec<_>>(),
+        );
+        let cg = Polynomial::new(
+            (0..n)
+                .map(|_| rand_signed_bigint(rng, 303))
+                .collect::<Vec<_>>(),
+        );
         (f, g, cf, cg)
     }
 
@@ -1829,12 +1911,33 @@ mod test {
     /// bits.  Exercises a ≈256-bit `k·f` product that needs ~12 runtime primes.
     fn depth5_inputs(
         rng: &mut StdRng,
-    ) -> (Polynomial<BigInt>, Polynomial<BigInt>, Polynomial<BigInt>, Polynomial<BigInt>) {
+    ) -> (
+        Polynomial<BigInt>,
+        Polynomial<BigInt>,
+        Polynomial<BigInt>,
+        Polynomial<BigInt>,
+    ) {
         let n = 32;
-        let f = Polynomial::new((0..n).map(|_| rand_signed_bigint(rng, 202)).collect::<Vec<_>>());
-        let g = Polynomial::new((0..n).map(|_| rand_signed_bigint(rng, 202)).collect::<Vec<_>>());
-        let cf = Polynomial::new((0..n).map(|_| rand_signed_bigint(rng, 600)).collect::<Vec<_>>());
-        let cg = Polynomial::new((0..n).map(|_| rand_signed_bigint(rng, 600)).collect::<Vec<_>>());
+        let f = Polynomial::new(
+            (0..n)
+                .map(|_| rand_signed_bigint(rng, 202))
+                .collect::<Vec<_>>(),
+        );
+        let g = Polynomial::new(
+            (0..n)
+                .map(|_| rand_signed_bigint(rng, 202))
+                .collect::<Vec<_>>(),
+        );
+        let cf = Polynomial::new(
+            (0..n)
+                .map(|_| rand_signed_bigint(rng, 600))
+                .collect::<Vec<_>>(),
+        );
+        let cg = Polynomial::new(
+            (0..n)
+                .map(|_| rand_signed_bigint(rng, 600))
+                .collect::<Vec<_>>(),
+        );
         (f, g, cf, cg)
     }
 
@@ -1843,12 +1946,33 @@ mod test {
     /// uses `schoolbook_negacyclic_mul` and skips the `RuntimeNtt` entirely.
     fn depth7_inputs(
         rng: &mut StdRng,
-    ) -> (Polynomial<BigInt>, Polynomial<BigInt>, Polynomial<BigInt>, Polynomial<BigInt>) {
+    ) -> (
+        Polynomial<BigInt>,
+        Polynomial<BigInt>,
+        Polynomial<BigInt>,
+        Polynomial<BigInt>,
+    ) {
         let n = 8;
-        let f = Polynomial::new((0..n).map(|_| rand_signed_bigint(rng, 850)).collect::<Vec<_>>());
-        let g = Polynomial::new((0..n).map(|_| rand_signed_bigint(rng, 850)).collect::<Vec<_>>());
-        let cf = Polynomial::new((0..n).map(|_| rand_signed_bigint(rng, 2000)).collect::<Vec<_>>());
-        let cg = Polynomial::new((0..n).map(|_| rand_signed_bigint(rng, 2000)).collect::<Vec<_>>());
+        let f = Polynomial::new(
+            (0..n)
+                .map(|_| rand_signed_bigint(rng, 850))
+                .collect::<Vec<_>>(),
+        );
+        let g = Polynomial::new(
+            (0..n)
+                .map(|_| rand_signed_bigint(rng, 850))
+                .collect::<Vec<_>>(),
+        );
+        let cf = Polynomial::new(
+            (0..n)
+                .map(|_| rand_signed_bigint(rng, 2000))
+                .collect::<Vec<_>>(),
+        );
+        let cg = Polynomial::new(
+            (0..n)
+                .map(|_| rand_signed_bigint(rng, 2000))
+                .collect::<Vec<_>>(),
+        );
         (f, g, cf, cg)
     }
 
@@ -1859,7 +1983,12 @@ mod test {
     #[test]
     fn babai_reduce_rns_runtime_matches_bigint() {
         use super::babai_reduce_rns_runtime;
-        type Inputs = (Polynomial<BigInt>, Polynomial<BigInt>, Polynomial<BigInt>, Polynomial<BigInt>);
+        type Inputs = (
+            Polynomial<BigInt>,
+            Polynomial<BigInt>,
+            Polynomial<BigInt>,
+            Polynomial<BigInt>,
+        );
         type Gen = fn(&mut StdRng) -> Inputs;
         // (inputs, k_primes, cap_w) per depth.  k_primes covers ~bits(f)+54;
         // cap_w (limbs) holds the capital plus the mid-reduction shifts.
@@ -1923,8 +2052,14 @@ mod test {
         };
         let cap8 = cap(&NttPrimes24Bit8::PRIMES);
         let cap7 = cap(&NttPrimes24Bit8::PRIMES[..7]);
-        assert!(cap8 >= required, "K=8 capacity {cap8:.1} < depth-4 product {required:.1}");
-        assert!(cap7 < required, "K=7 capacity {cap7:.1} unexpectedly covers {required:.1}");
+        assert!(
+            cap8 >= required,
+            "K=8 capacity {cap8:.1} < depth-4 product {required:.1}"
+        );
+        assert!(
+            cap7 < required,
+            "K=7 capacity {cap7:.1} unexpectedly covers {required:.1}"
+        );
     }
 
     /// The capacity guard in babai_reduce_rns_generic must fire (debug builds)
