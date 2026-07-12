@@ -22,8 +22,6 @@ use std::cmp::Ordering;
 
 use num::{BigInt, Zero};
 
-use crate::rns::{NttPrimeList, Rns};
-
 // ---------------------------------------------------------------------------
 // Slice primitives (allocation-free; operands share `out.len()` limbs).
 // ---------------------------------------------------------------------------
@@ -117,11 +115,11 @@ pub(crate) fn umul_into(out: &mut [u64], a: &[u64], b: &[u64]) {
         *w = 0;
     }
     let lo = out.len();
-    for i in 0..a.len() {
+    for (i, a_i) in a.iter().enumerate() {
         if i >= lo {
             break;
         }
-        let ai = a[i] as u128;
+        let ai = *a_i as u128;
         if ai == 0 {
             continue;
         }
@@ -170,16 +168,17 @@ pub(crate) fn mul_into(out: &mut [u64], a: &[u64], b: &[u64]) {
     }
 }
 
-/// Logical left shift `out = a << bits`; bits beyond `out.len()·64` are dropped.
+/// Logical left shift `out = a << bits`; bits beyond `out.len()·64` are
+/// dropped.
 pub(crate) fn shl_into(out: &mut [u64], a: &[u64], bits: u32) {
     debug_assert_eq!(out.len(), a.len());
     let len = out.len();
     let limb = (bits / 64) as usize;
     let bit = bits % 64;
-    for i in 0..len {
+    for (i, out_i) in out.iter_mut().enumerate().take(len) {
         let src = i as isize - limb as isize;
         if src < 0 {
-            out[i] = 0;
+            *out_i = 0;
             continue;
         }
         let src = src as usize;
@@ -188,7 +187,7 @@ pub(crate) fn shl_into(out: &mut [u64], a: &[u64], bits: u32) {
             let lower = if src >= 1 { a[src - 1] as u128 } else { 0 };
             word = (word << bit) | (lower >> (64 - bit));
         }
-        out[i] = word as u64;
+        *out_i = word as u64;
     }
 }
 
@@ -199,7 +198,7 @@ pub(crate) fn shr_unsigned_into(out: &mut [u64], a: &[u64], bits: u32) {
     let len = out.len();
     let limb = (bits / 64) as usize;
     let bit = bits % 64;
-    for i in 0..len {
+    for (i, out_i) in out.iter_mut().enumerate().take(len) {
         let src = i + limb;
         let mut word = if src < len { a[src] as u128 } else { 0 };
         if bit != 0 {
@@ -207,7 +206,7 @@ pub(crate) fn shr_unsigned_into(out: &mut [u64], a: &[u64], bits: u32) {
             word = (word >> bit) | (hi << (64 - bit));
             word &= u64::MAX as u128;
         }
-        out[i] = word as u64;
+        *out_i = word as u64;
     }
 }
 
@@ -220,7 +219,13 @@ pub(crate) fn shr_to_i128(a: &[u64], shift: u32) -> i128 {
     let sign = if is_negative(a) { u64::MAX } else { 0 };
     let limb = (shift / 64) as usize;
     let bit = shift % 64;
-    let get = |idx: usize| -> u64 { if idx < len { a[idx] } else { sign } };
+    let get = |idx: usize| -> u64 {
+        if idx < len {
+            a[idx]
+        } else {
+            sign
+        }
+    };
     let mut lo = 0u128;
     for out_idx in 0..2 {
         let src = limb + out_idx;
@@ -327,7 +332,9 @@ pub(crate) struct MultiwordInt {
 impl MultiwordInt {
     /// Zero in `len` limbs.
     pub(crate) fn zero(len: usize) -> Self {
-        Self { limbs: vec![0; len] }
+        Self {
+            limbs: vec![0; len],
+        }
     }
 
     pub(crate) fn len(&self) -> usize {
@@ -349,39 +356,9 @@ impl MultiwordInt {
         Self { limbs }
     }
 
-    pub(crate) fn is_negative(&self) -> bool {
-        is_negative(&self.limbs)
-    }
-
-    pub(crate) fn bit_length(&self) -> u64 {
-        bit_length(&self.limbs)
-    }
-
-    pub(crate) fn shr_to_i128(&self, shift: u32) -> i128 {
-        shr_to_i128(&self.limbs, shift)
-    }
-
-    pub(crate) fn shl(&self, bits: u32) -> Self {
-        debug_assert!(
-            self.bit_length() + bits as u64 <= 64 * self.len() as u64,
-            "MultiwordInt shl overflow: {}-bit value << {bits} in {} limbs",
-            self.bit_length(),
-            self.len()
-        );
-        let mut out = vec![0u64; self.len()];
-        shl_into(&mut out, &self.limbs, bits);
-        Self { limbs: out }
-    }
-
     pub(crate) fn sub(&self, other: &Self) -> Self {
         let mut out = vec![0u64; self.len()];
         sub_into(&mut out, &self.limbs, &other.limbs);
-        Self { limbs: out }
-    }
-
-    fn neg(&self) -> Self {
-        let mut out = vec![0u64; self.len()];
-        neg_into(&mut out, &self.limbs);
         Self { limbs: out }
     }
 
@@ -438,24 +415,6 @@ impl MultiwordInt {
             acc
         }
     }
-
-    /// Const-K convenience wrapper over [`from_garner_digits`](Self::from_garner_digits).
-    pub(crate) fn from_rns<const K: usize, P: NttPrimeList<K>>(r: &Rns<K, P>, len: usize) -> Self {
-        Self::from_garner_digits(&r.to_garner(), &P::PRIMES, len)
-    }
-
-    /// Construct from a [`BigInt`] in `len` limbs (BigInt boundary only). The
-    /// magnitude must fit; a too-narrow `len` is caught in debug builds.
-    pub(crate) fn from_bigint(x: &BigInt, len: usize) -> Self {
-        let mut limbs = vec![0u64; len];
-        from_bigint_into(&mut limbs, x);
-        Self { limbs }
-    }
-
-    /// Reconstruct a [`BigInt`] (BigInt boundary only).
-    pub(crate) fn to_bigint(&self) -> BigInt {
-        to_bigint(&self.limbs)
-    }
 }
 
 impl std::ops::SubAssign<&MultiwordInt> for MultiwordInt {
@@ -466,10 +425,53 @@ impl std::ops::SubAssign<&MultiwordInt> for MultiwordInt {
 
 #[cfg(test)]
 mod tests {
-    use super::MultiwordInt;
-    use crate::rns::{NttPrimes24Bit8, Rns};
+    use super::*;
+    use crate::rns::{NttPrimeList, NttPrimes24Bit8, Rns};
     use num::{BigInt, Zero};
     use rand::{rngs::StdRng, RngExt, SeedableRng};
+
+    impl MultiwordInt {
+        pub(crate) fn bit_length(&self) -> u64 {
+            bit_length(&self.limbs)
+        }
+
+        pub(crate) fn shr_to_i128(&self, shift: u32) -> i128 {
+            shr_to_i128(&self.limbs, shift)
+        }
+
+        pub(crate) fn shl(&self, bits: u32) -> Self {
+            debug_assert!(
+                self.bit_length() + bits as u64 <= 64 * self.len() as u64,
+                "MultiwordInt shl overflow: {}-bit value << {bits} in {} limbs",
+                self.bit_length(),
+                self.len()
+            );
+            let mut out = vec![0u64; self.len()];
+            shl_into(&mut out, &self.limbs, bits);
+            Self { limbs: out }
+        }
+
+        /// Const-K convenience wrapper over [`from_garner_digits`](Self::from_garner_digits).
+        pub(crate) fn from_rns<const K: usize, P: NttPrimeList<K>>(
+            r: &Rns<K, P>,
+            len: usize,
+        ) -> Self {
+            Self::from_garner_digits(&r.to_garner(), &P::PRIMES, len)
+        }
+
+        /// Construct from a [`BigInt`] in `len` limbs (BigInt boundary only). The
+        /// magnitude must fit; a too-narrow `len` is caught in debug builds.
+        pub(crate) fn from_bigint(x: &BigInt, len: usize) -> Self {
+            let mut limbs = vec![0u64; len];
+            from_bigint_into(&mut limbs, x);
+            Self { limbs }
+        }
+
+        /// Reconstruct a [`BigInt`] (BigInt boundary only).
+        pub(crate) fn to_bigint(&self) -> BigInt {
+            to_bigint(&self.limbs)
+        }
+    }
 
     const LEN: usize = 4; // 256-bit width for the unit tests
 

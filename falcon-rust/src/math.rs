@@ -266,7 +266,7 @@ impl<const L: usize> ReductionCapital for Packed<L> {
         Packed::from_bigint(x)
     }
     fn to_bigint(&self) -> BigInt {
-        Packed::to_bigint(self)
+        Packed::to_bigint(*self)
     }
     fn bit_length(&self) -> u64 {
         Packed::bit_length(self)
@@ -812,8 +812,8 @@ pub fn babai_reduce_i32(
 pub(crate) fn babai_reduce_rns<const K: usize, P: NttPrimeList<K>>(
     f: &Polynomial<i32>,
     g: &Polynomial<i32>,
-    capital_f: &mut Vec<Rns<K, P>>,
-    capital_g: &mut Vec<Rns<K, P>>,
+    capital_f: &mut [Rns<K, P>],
+    capital_g: &mut [Rns<K, P>],
 ) -> Result<(), String> {
     let n = f.coefficients.len();
 
@@ -1009,8 +1009,8 @@ fn babai_rns_with_fallback<const K: usize, P: NttPrimeList<K>>(
 pub fn babai_reduce_rns_depth1(
     f: &Polynomial<i32>,
     g: &Polynomial<i32>,
-    capital_f: &mut Vec<i128>,
-    capital_g: &mut Vec<i128>,
+    capital_f: &mut [i128],
+    capital_g: &mut [i128],
 ) -> Result<(), String> {
     let mut cf_rns: Vec<Rns<2, NttPrimes24Bit2>> =
         capital_f.iter().map(|&v| Rns::from_i128(v)).collect();
@@ -1033,8 +1033,8 @@ pub fn babai_reduce_rns_depth1(
 pub fn babai_reduce_rns_depth2(
     f: &Polynomial<i32>,
     g: &Polynomial<i32>,
-    capital_f: &mut Vec<i128>,
-    capital_g: &mut Vec<i128>,
+    capital_f: &mut [i128],
+    capital_g: &mut [i128],
 ) -> Result<(), String> {
     let mut cf_rns: Vec<Rns<4, NttPrimes24Bit4>> =
         capital_f.iter().map(|&v| Rns::from_i128(v)).collect();
@@ -1945,7 +1945,7 @@ mod test {
     fn babai_reduce_rns_packed_depth3_matches_bigint() {
         use super::babai_reduce_rns_packed_depth3;
 
-        let mut rng = StdRng::seed_from_u64(0x9ac_ed_d3);
+        let mut rng = StdRng::seed_from_u64(0x09ac_edd3);
         for _ in 0..32 {
             let (f, g, cap_f, cap_g) = depth3_inputs(&mut rng);
 
@@ -2270,7 +2270,7 @@ mod test {
     fn babai_reduce_rns_packed_depth4_matches_bigint() {
         use super::babai_reduce_rns_packed_depth4;
 
-        let mut rng = StdRng::seed_from_u64(0x9ac_ed_d4);
+        let mut rng = StdRng::seed_from_u64(0x09ac_edd4);
         for _ in 0..16 {
             let (f, g, cap_f, cap_g) = depth4_inputs(&mut rng);
 

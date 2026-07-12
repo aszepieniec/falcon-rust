@@ -20,7 +20,11 @@ pub(crate) const fn negqinv_modr(q: u32) -> u32 {
     x = x.wrapping_mul(2u32.wrapping_sub(q.wrapping_mul(x))); // mod 65536
     x = x.wrapping_mul(2u32.wrapping_sub(q.wrapping_mul(x))); // mod 2^32
     let log2r = q.ilog2() + 1;
-    let mask = if log2r == 32 { u32::MAX } else { (1u32 << log2r) - 1 };
+    let mask = if log2r == 32 {
+        u32::MAX
+    } else {
+        (1u32 << log2r) - 1
+    };
     x.wrapping_neg() & mask
 }
 
@@ -40,19 +44,19 @@ pub(crate) const fn r_sq_modq(q: u32) -> u32 {
 const fn prime_factors_const(mut n: u32) -> ([u32; 9], usize) {
     let mut factors = [0u32; 9];
     let mut count = 0usize;
-    if n % 2 == 0 {
+    if n.is_multiple_of(2) {
         factors[count] = 2;
         count += 1;
-        while n % 2 == 0 {
+        while n.is_multiple_of(2) {
             n /= 2;
         }
     }
     let mut d = 3u32;
     while d * d <= n {
-        if n % d == 0 {
+        if n.is_multiple_of(d) {
             factors[count] = d;
             count += 1;
-            while n % d == 0 {
+            while n.is_multiple_of(d) {
                 n /= d;
             }
         }
@@ -71,12 +75,7 @@ const fn prime_factors_const(mut n: u32) -> ([u32; 9], usize) {
 /// When LOG2R ≤ 31 the intermediate magic_sum fits in u64.  When LOG2R = 32
 /// it falls back to u128.  Because LOG2R is a const generic, the dead branch
 /// is eliminated by the compiler at each monomorphisation.
-pub(crate) const fn montyred<const LOG2R: u32>(
-    a: u32,
-    b: u32,
-    p: u32,
-    neg_inv: u32,
-) -> u32 {
+pub(crate) const fn montyred<const LOG2R: u32>(a: u32, b: u32, p: u32, neg_inv: u32) -> u32 {
     let product = a as u64 * b as u64;
     if LOG2R <= 31 {
         let r_mask = (1u32 << LOG2R) - 1;
@@ -160,7 +159,11 @@ impl<const Q: u32> FpField<Q> {
     /// Field addition without going through the `Add` trait (which is not const).
     const fn add_fp(self, rhs: Self) -> Self {
         let s = self.0 as u64 + rhs.0 as u64;
-        FpField(if s >= Q as u64 { (s - Q as u64) as u32 } else { s as u32 })
+        FpField(if s >= Q as u64 {
+            (s - Q as u64) as u32
+        } else {
+            s as u32
+        })
     }
 
     /// Return a primitive nth root of unity in Z/QZ.
@@ -405,8 +408,7 @@ mod test {
         for _ in 0..1000 {
             let a = rng.random_range(0..Q);
             let b = rng.random_range(0..Q);
-            let expected =
-                ((a as u128 * b as u128 % Q as u128) * rinv as u128 % Q as u128) as u32;
+            let expected = ((a as u128 * b as u128 % Q as u128) * rinv as u128 % Q as u128) as u32;
             let got = FpField::<Q>::montyred(a, b);
             // montyred(a, b) = a*b*R^{-1} mod Q — but a,b here are canonical,
             // not Montgomery form, so use the direct definition.
@@ -540,7 +542,7 @@ mod test {
         // g^k != 1 for every proper divisor k of n
         let mut k = 1u32;
         while k < n {
-            if n % k == 0 {
+            if n.is_multiple_of(k) {
                 assert_ne!(g.pow(k as u64), FpField::<Q>::new(1), "Q={Q}, n={n}, k={k}");
             }
             k += 1;

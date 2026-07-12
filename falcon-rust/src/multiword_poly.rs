@@ -53,10 +53,6 @@ impl MultiwordPoly {
         self.n
     }
 
-    pub(crate) fn wordlen(&self) -> usize {
-        self.w
-    }
-
     /// Limb slice of coefficient `i`.
     pub(crate) fn coeff(&self, i: usize) -> &[u64] {
         &self.data[i * self.w..(i + 1) * self.w]
@@ -81,27 +77,6 @@ impl MultiwordPoly {
     /// Reconstruct a `BigInt` polynomial. (`BigInt` boundary — recursion exit.)
     pub(crate) fn to_bigint_poly(&self) -> Polynomial<BigInt> {
         Polynomial::new((0..self.n).map(|i| mw::to_bigint(self.coeff(i))).collect())
-    }
-
-    /// Lift to the next cyclotomic ring by interleaving zeros:
-    /// `[c0, c1, …]  ->  [c0, 0, c1, 0, …]` (length doubles). Mirrors
-    /// [`Polynomial::lift_next_cyclotomic`].
-    pub(crate) fn lift_next_cyclotomic(&self) -> Self {
-        let mut out = Self::zeros(self.n * 2, self.w);
-        for i in 0..self.n {
-            out.coeff_mut(2 * i).copy_from_slice(self.coeff(i));
-        }
-        out
-    }
-
-    /// Galois adjoint: negate the odd-indexed coefficients. Mirrors
-    /// [`Polynomial::galois_adjoint`].
-    pub(crate) fn galois_adjoint(&self) -> Self {
-        let mut out = self.clone();
-        for i in (1..self.n).step_by(2) {
-            mw::neg_in_place(out.coeff_mut(i));
-        }
-        out
     }
 
     /// Multiply each coefficient by `2^bits` (per-coefficient left shift).
@@ -150,11 +125,11 @@ impl MultiwordPoly {
     fn magnitudes(&self) -> (Self, Vec<bool>) {
         let mut mag = self.clone();
         let mut signs = vec![false; self.n];
-        for i in 0..self.n {
+        for (i, signs_i) in signs.iter_mut().enumerate().take(self.n) {
             let c = mag.coeff_mut(i);
             if mw::is_negative(c) {
                 mw::neg_in_place(c);
-                signs[i] = true;
+                *signs_i = true;
             }
         }
         (mag, signs)
@@ -173,13 +148,13 @@ impl MultiwordPoly {
         let (bmag, bsign) = other.magnitudes();
         let mut out = Self::zeros(n, out_w);
         let mut prod = vec![0u64; out_w];
-        for i in 0..n {
-            for j in 0..n {
+        for (i, &asign_i) in asign.iter().enumerate().take(n) {
+            for (j, &bsign_j) in bsign.iter().enumerate().take(n) {
                 mw::umul_into(&mut prod, amag.coeff(i), bmag.coeff(j));
                 let k = i + j;
                 let (slot, wrap) = if k < n { (k, false) } else { (k - n, true) };
                 // Negacyclic wrap flips sign once; operand signs flip it too.
-                if asign[i] ^ bsign[j] ^ wrap {
+                if asign_i ^ bsign_j ^ wrap {
                     mw::sub_into_self(out.coeff_mut(slot), &prod);
                 } else {
                     mw::add_into_self(out.coeff_mut(slot), &prod);
@@ -215,7 +190,7 @@ impl MultiwordPoly {
     /// shuffles with no per-coefficient allocation.
     pub(crate) fn field_norm(&self) -> Self {
         let n = self.n;
-        debug_assert!(n >= 2 && n % 2 == 0);
+        debug_assert!(n >= 2 && n.is_multiple_of(2));
         let half = n / 2;
 
         let mut f0 = Self::zeros(half, self.w);
@@ -248,35 +223,58 @@ impl MultiwordPoly {
         }
         out
     }
-
-    /// Reduce by `X^n_target + 1`, folding this polynomial's `self.n`
-    /// coefficients down to `n_target`: coefficient block `b = i / n_target`
-    /// contributes with sign `(-1)^b` into slot `i % n_target`. Mirrors
-    /// [`Polynomial::reduce_by_cyclotomic`].
-    pub(crate) fn reduce_by_cyclotomic(&self, n_target: usize) -> Self {
-        let mut out = Self::zeros(n_target, self.w);
-        for i in 0..self.n {
-            let slot = i % n_target;
-            let src = self.coeff(i);
-            let dst = out.coeff_mut(slot);
-            if (i / n_target) % 2 == 0 {
-                mw::add_into_self(dst, src);
-            } else {
-                mw::sub_into_self(dst, src);
-            }
-        }
-        out
-    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::MultiwordPoly;
+    use super::*;
     use crate::polynomial::Polynomial;
     use num::BigInt;
     use rand::{rngs::StdRng, RngExt, SeedableRng};
 
     const W: usize = 6; // 384-bit coefficients, room for shifts
+
+    impl MultiwordPoly {
+        /// Lift to the next cyclotomic ring by interleaving zeros:
+        /// `[c0, c1, …]  ->  [c0, 0, c1, 0, …]` (length doubles). Mirrors
+        /// [`Polynomial::lift_next_cyclotomic`].
+        pub(crate) fn lift_next_cyclotomic(&self) -> Self {
+            let mut out = Self::zeros(self.n * 2, self.w);
+            for i in 0..self.n {
+                out.coeff_mut(2 * i).copy_from_slice(self.coeff(i));
+            }
+            out
+        }
+
+        /// Galois adjoint: negate the odd-indexed coefficients. Mirrors
+        /// [`Polynomial::galois_adjoint`].
+        pub(crate) fn galois_adjoint(&self) -> Self {
+            let mut out = self.clone();
+            for i in (1..self.n).step_by(2) {
+                mw::neg_in_place(out.coeff_mut(i));
+            }
+            out
+        }
+
+        /// Reduce by `X^n_target + 1`, folding this polynomial's `self.n`
+        /// coefficients down to `n_target`: coefficient block `b = i / n_target`
+        /// contributes with sign `(-1)^b` into slot `i % n_target`. Mirrors
+        /// [`Polynomial::reduce_by_cyclotomic`].
+        pub(crate) fn reduce_by_cyclotomic(&self, n_target: usize) -> Self {
+            let mut out = Self::zeros(n_target, self.w);
+            for i in 0..self.n {
+                let slot = i % n_target;
+                let src = self.coeff(i);
+                let dst = out.coeff_mut(slot);
+                if (i / n_target).is_multiple_of(2) {
+                    mw::add_into_self(dst, src);
+                } else {
+                    mw::sub_into_self(dst, src);
+                }
+            }
+            out
+        }
+    }
 
     fn rand_bigint(rng: &mut StdRng) -> BigInt {
         // ~200-bit signed.
@@ -343,11 +341,7 @@ mod tests {
         let mut rng = StdRng::seed_from_u64(14);
         for _ in 0..100 {
             // Keep coefficients small so the shift stays within W limbs.
-            let p = Polynomial::new(
-                (0..16)
-                    .map(|_| BigInt::from(rng.random::<i64>()))
-                    .collect(),
-            );
+            let p = Polynomial::new((0..16).map(|_| BigInt::from(rng.random::<i64>())).collect());
             let m = MultiwordPoly::from_bigint_poly(&p, W);
             for &s in &[0u32, 1, 13, 64, 130] {
                 let want = Polynomial::new(p.coefficients.iter().map(|c| c << s).collect());

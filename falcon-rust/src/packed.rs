@@ -67,9 +67,9 @@ impl<const L: usize> Packed<L> {
     fn neg(&self) -> Self {
         let mut out = [0u64; L];
         let mut carry = 1u128;
-        for i in 0..L {
+        for (i, out_i) in out.iter_mut().enumerate().take(L) {
             let v = (!self.limbs[i]) as u128 + carry;
-            out[i] = v as u64;
+            *out_i = v as u64;
             carry = v >> 64;
         }
         Self { limbs: out }
@@ -144,7 +144,7 @@ impl<const L: usize> Packed<L> {
         let limb = (bits / 64) as usize;
         let bit = bits % 64;
         let mut out = [0u64; L];
-        for i in 0..L {
+        for (i, out_i) in out.iter_mut().enumerate().take(L) {
             let src = i as isize - limb as isize;
             if src < 0 {
                 continue;
@@ -159,7 +159,7 @@ impl<const L: usize> Packed<L> {
                 };
                 word = (word << bit) | (lower >> (64 - bit));
             }
-            out[i] = word as u64;
+            *out_i = word as u64;
         }
         Self { limbs: out }
     }
@@ -168,9 +168,9 @@ impl<const L: usize> Packed<L> {
     pub(crate) fn sub(&self, other: &Self) -> Self {
         let mut out = [0u64; L];
         let mut borrow = 0i128;
-        for i in 0..L {
+        for (i, out_i) in out.iter_mut().enumerate().take(L) {
             let v = self.limbs[i] as i128 - other.limbs[i] as i128 - borrow;
-            out[i] = v as u64;
+            *out_i = v as u64;
             borrow = if v < 0 { 1 } else { 0 };
         }
         Self { limbs: out }
@@ -184,9 +184,9 @@ impl<const L: usize> Packed<L> {
     fn mul_u32(&self, v: u32) -> Self {
         let mut out = [0u64; L];
         let mut carry = 0u128;
-        for i in 0..L {
+        for (i, out_i) in out.iter_mut().enumerate().take(L) {
             let prod = self.limbs[i] as u128 * v as u128 + carry;
-            out[i] = prod as u64;
+            *out_i = prod as u64;
             carry = prod >> 64;
         }
         Self { limbs: out }
@@ -218,9 +218,9 @@ impl<const L: usize> Packed<L> {
             l[0] = 1;
             Self { limbs: l }
         };
-        for i in 0..K {
+        for (i, &digits_i) in digits.iter().enumerate().take(K) {
             // acc += digit_i · (∏_{j<i} p_j)
-            acc = acc.add_packed(&modulus.mul_u32(digits[i]));
+            acc = acc.add_packed(&modulus.mul_u32(digits_i));
             modulus = modulus.mul_u32(P::PRIMES[i]);
         }
         // modulus == M; center to (−M/2, M/2].
@@ -236,9 +236,9 @@ impl<const L: usize> Packed<L> {
     fn add_packed(&self, other: &Self) -> Self {
         let mut out = [0u64; L];
         let mut carry = 0u128;
-        for i in 0..L {
+        for (i, out_i) in out.iter_mut().enumerate().take(L) {
             let s = self.limbs[i] as u128 + other.limbs[i] as u128 + carry;
-            out[i] = s as u64;
+            *out_i = s as u64;
             carry = s >> 64;
         }
         Self { limbs: out }
@@ -250,7 +250,7 @@ impl<const L: usize> Packed<L> {
         let limb = (bits / 64) as usize;
         let bit = bits % 64;
         let mut out = [0u64; L];
-        for i in 0..L {
+        for (i, out_i) in out.iter_mut().enumerate().take(L) {
             let src = i + limb;
             let mut word = if src < L { self.limbs[src] as u128 } else { 0 };
             if bit != 0 {
@@ -262,7 +262,7 @@ impl<const L: usize> Packed<L> {
                 word = (word >> bit) | (hi << (64 - bit));
                 word &= u64::MAX as u128;
             }
-            out[i] = word as u64;
+            *out_i = word as u64;
         }
         Self { limbs: out }
     }
@@ -295,7 +295,7 @@ impl<const L: usize> Packed<L> {
     }
 
     /// Reconstruct a [`BigInt`] (used at the reduction exit point only).
-    pub(crate) fn to_bigint(&self) -> BigInt {
+    pub(crate) fn to_bigint(self) -> BigInt {
         let neg = self.is_negative();
         let m = self.magnitude();
         let mut acc = BigInt::zero();

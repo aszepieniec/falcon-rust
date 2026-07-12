@@ -7,12 +7,20 @@ use rand::{rng, rngs::StdRng, RngExt, SeedableRng};
 fn random_bigint(bitsize: usize, rng: &mut StdRng) -> BigInt {
     let num_bytes = bitsize.div_ceil(8);
     let bytes = (0..num_bytes).map(|_| rng.random::<u8>()).collect_vec();
-    let sign = if rng.random() { Sign::Minus } else { Sign::Plus };
+    let sign = if rng.random() {
+        Sign::Minus
+    } else {
+        Sign::Plus
+    };
     BigInt::from_bytes_be(sign, &bytes)
 }
 
 fn random_poly(n: usize, bits: usize, rng: &mut StdRng) -> Polynomial<BigInt> {
-    Polynomial::new((0..n).map(|_| random_bigint(bits.max(1), rng)).collect_vec())
+    Polynomial::new(
+        (0..n)
+            .map(|_| random_bigint(bits.max(1), rng))
+            .collect_vec(),
+    )
 }
 
 pub fn ntru_gen_per_depth(c: &mut Criterion) {
@@ -22,9 +30,9 @@ pub fn ntru_gen_per_depth(c: &mut Criterion) {
     // field_norm at each depth (going down the recursion).
     // Uses schoolbook multiplication on two half-sized polynomials (O((n/2)²)).
     // Input: size n = 1024 >> depth, coefficient bit size from the table.
-    for depth in 0usize..=9 {
+    for (depth, (f, _, _, _)) in NTRU_SOLVE_BABAI_COEFF_BITS.iter().enumerate().take(9 + 1) {
         let n = 1024usize >> depth;
-        let fg_bits = NTRU_SOLVE_BABAI_COEFF_BITS[depth].0.ceil() as usize;
+        let fg_bits = f.ceil() as usize;
 
         group.bench_function(format!("field-norm/d={depth}"), |b| {
             b.iter_batched(
@@ -55,10 +63,12 @@ pub fn ntru_gen_per_depth(c: &mut Criterion) {
 
         group.bench_function(format!("karatsuba/d={depth}"), |b| {
             b.iter_batched(
-                || (
-                    random_poly(n, bits1, &mut rng),
-                    random_poly(n, bits2, &mut rng),
-                ),
+                || {
+                    (
+                        random_poly(n, bits1, &mut rng),
+                        random_poly(n, bits2, &mut rng),
+                    )
+                },
                 |(poly1, poly2)| {
                     let _ = poly1.karatsuba(&poly2).reduce_by_cyclotomic(n);
                 },

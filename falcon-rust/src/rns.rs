@@ -78,10 +78,7 @@ pub(crate) struct Rns<const N: usize, P: PrimeList<N>> {
 
 impl<const N: usize, P: PrimeList<N>> Clone for Rns<N, P> {
     fn clone(&self) -> Self {
-        Rns {
-            residues: self.residues,
-            _phantom: PhantomData,
-        }
+        *self
     }
 }
 
@@ -160,8 +157,8 @@ impl<const N: usize, P: PrimeList<N>> Rns<N, P> {
     /// Construct from a `u32`, reducing modulo each prime.
     pub(crate) fn from_u32(v: u32) -> Self {
         let mut residues = [0u32; N];
-        for i in 0..N {
-            residues[i] = Self::to_mont_at(v % P::PRIMES[i], i);
+        for (i, residues_i) in residues.iter_mut().enumerate().take(N) {
+            *residues_i = Self::to_mont_at(v % P::PRIMES[i], i);
         }
         Rns {
             residues,
@@ -180,11 +177,11 @@ impl<const N: usize, P: PrimeList<N>> Rns<N, P> {
     /// This is the canonical lossless output: the full RNS modulus M = ∏ PRIMES[i]
     /// does not fit in any primitive integer type, so no primitive reconstruction
     /// is provided here.
-    pub(crate) fn to_garner(&self) -> [u32; N] {
+    pub(crate) fn to_garner(self) -> [u32; N] {
         // Start with canonical residues.
         let mut u = [0u32; N];
-        for i in 0..N {
-            u[i] = self.residue(i);
+        for (i, u_i) in u.iter_mut().enumerate().take(N) {
+            *u_i = self.residue(i);
         }
         // Garner's algorithm: for each i, eliminate u[i] from all later entries.
         for i in 0..N {
@@ -205,10 +202,10 @@ impl<const N: usize, P: PrimeList<N>> Rns<N, P> {
     /// sign handling.
     pub(crate) fn from_i32(x: i32) -> Self {
         let mut residues = [0u32; N];
-        for i in 0..N {
+        for (i, residues_i) in residues.iter_mut().enumerate().take(N) {
             let p = P::PRIMES[i];
             let r = x.rem_euclid(p as i32) as u32;
-            residues[i] = Self::to_mont_at(r, i);
+            *residues_i = Self::to_mont_at(r, i);
         }
         Rns {
             residues,
@@ -220,9 +217,9 @@ impl<const N: usize, P: PrimeList<N>> Rns<N, P> {
     /// sign handling.
     pub(crate) fn from_i128(x: i128) -> Self {
         let mut residues = [0u32; N];
-        for i in 0..N {
+        for (i, residues_i) in residues.iter_mut().enumerate().take(N) {
             let r = x.rem_euclid(P::PRIMES[i] as i128) as u32;
-            residues[i] = Self::to_mont_at(r, i);
+            *residues_i = Self::to_mont_at(r, i);
         }
         Rns {
             residues,
@@ -236,12 +233,12 @@ impl<const N: usize, P: PrimeList<N>> Rns<N, P> {
     /// negative (analogous to two's complement but with modulus M).  Correct
     /// when the true value fits in i64.  For K ≥ 3 primes of ≥ 30 bits the
     /// modulus M exceeds 2^64 and values outside i64 range wrap silently.
-    pub(crate) fn to_i64(&self) -> i64 {
+    pub(crate) fn to_i64(self) -> i64 {
         let a = self.to_garner();
         let mut result = 0u128;
         let mut base = 1u128;
-        for i in 0..N {
-            result = result.wrapping_add(base.wrapping_mul(a[i] as u128));
+        for (i, &a_i) in a.iter().enumerate().take(N) {
+            result = result.wrapping_add(base.wrapping_mul(a_i as u128));
             base = base.wrapping_mul(P::PRIMES[i] as u128);
         }
         // base == M; symmetric range: values in (M/2, M) are negative.
@@ -259,14 +256,14 @@ impl<const N: usize, P: PrimeList<N>> Rns<N, P> {
     /// ≥ 3, where the modulus spans more than 5 primes).
     pub(crate) fn from_bigint(x: &BigInt) -> Self {
         let mut residues = [0u32; N];
-        for i in 0..N {
+        for (i, residues_i) in residues.iter_mut().enumerate().take(N) {
             let p = P::PRIMES[i];
             // Centered remainder in [0, p): (x mod p) with the sign fixed up.
             let mut r = x % &BigInt::from(p);
             if r.sign() == num::bigint::Sign::Minus {
                 r += BigInt::from(p);
             }
-            residues[i] = Self::to_mont_at(r.to_u32().unwrap(), i);
+            *residues_i = Self::to_mont_at(r.to_u32().unwrap(), i);
         }
         Rns {
             residues,
@@ -280,12 +277,12 @@ impl<const N: usize, P: PrimeList<N>> Rns<N, P> {
     /// returns the symmetric representative in `(-M/2, M/2]`.  This is the
     /// reconstruction used when the value can exceed i128, i.e. for the
     /// multi-word capital coefficients at recursion depth ≥ 3.
-    pub(crate) fn to_bigint(&self) -> BigInt {
+    pub(crate) fn to_bigint(self) -> BigInt {
         let a = self.to_garner();
         let mut result = BigInt::zero();
         let mut base = BigInt::one();
-        for i in 0..N {
-            result += &base * BigInt::from(a[i]);
+        for (i, &a_i) in a.iter().enumerate().take(N) {
+            result += &base * BigInt::from(a_i);
             base *= BigInt::from(P::PRIMES[i]);
         }
         // base == M; values in (M/2, M) represent negatives.
@@ -299,12 +296,12 @@ impl<const N: usize, P: PrimeList<N>> Rns<N, P> {
     ///
     /// Correct when the true value fits in i128.  For K ≤ 5 primes of ≤ 24 bits
     /// the modulus M < 2^120 and the u128 accumulator never overflows.
-    pub(crate) fn to_i128(&self) -> i128 {
+    pub(crate) fn to_i128(self) -> i128 {
         let a = self.to_garner();
         let mut result = 0u128;
         let mut base = 1u128;
-        for i in 0..N {
-            result = result.wrapping_add(base.wrapping_mul(a[i] as u128));
+        for (i, &a_i) in a.iter().enumerate().take(N) {
+            result = result.wrapping_add(base.wrapping_mul(a_i as u128));
             base = base.wrapping_mul(P::PRIMES[i] as u128);
         }
         if result > base / 2 {
@@ -334,10 +331,10 @@ impl<const N: usize, P: PrimeList<N>> Add for Rns<N, P> {
 
     fn add(self, rhs: Self) -> Self {
         let mut residues = [0u32; N];
-        for i in 0..N {
+        for (i, residues_i) in residues.iter_mut().enumerate().take(N) {
             let p = P::PRIMES[i] as u64;
             let s = self.residues[i] as u64 + rhs.residues[i] as u64;
-            residues[i] = (if s >= p { s - p } else { s }) as u32;
+            *residues_i = (if s >= p { s - p } else { s }) as u32;
         }
         Rns {
             residues,
@@ -357,9 +354,9 @@ impl<const N: usize, P: PrimeList<N>> Neg for Rns<N, P> {
 
     fn neg(self) -> Self {
         let mut residues = [0u32; N];
-        for i in 0..N {
+        for (i, residues_i) in residues.iter_mut().enumerate().take(N) {
             let r = self.residues[i];
-            residues[i] = if r == 0 { 0 } else { P::PRIMES[i] - r };
+            *residues_i = if r == 0 { 0 } else { P::PRIMES[i] - r };
         }
         Rns {
             residues,
@@ -387,8 +384,8 @@ impl<const N: usize, P: PrimeList<N>> Mul for Rns<N, P> {
 
     fn mul(self, rhs: Self) -> Self {
         let mut residues = [0u32; N];
-        for i in 0..N {
-            residues[i] = dispatch_log2r!(
+        for (i, residues_i) in residues.iter_mut().enumerate().take(N) {
+            *residues_i = dispatch_log2r!(
                 Self::LOG2R[i],
                 self.residues[i],
                 rhs.residues[i],
@@ -622,7 +619,14 @@ pub(crate) fn ntt_u32(a: &mut [u32], psi_rev: &[u32], p: u32, log2r: u32, neg_in
 
 /// Gentleman-Sande INTT butterfly over Z/pZ with Montgomery arithmetic.
 /// Includes the final scaling by `ninv_mont` (= n⁻¹ in Montgomery form).
-pub(crate) fn intt_u32(a: &mut [u32], psi_inv_rev: &[u32], ninv_mont: u32, p: u32, log2r: u32, neg_inv: u32) {
+pub(crate) fn intt_u32(
+    a: &mut [u32],
+    psi_inv_rev: &[u32],
+    ninv_mont: u32,
+    p: u32,
+    log2r: u32,
+    neg_inv: u32,
+) {
     let n = a.len();
     let mut t = 1;
     let mut m = n;
@@ -680,7 +684,7 @@ pub(crate) struct NttTables<const N: usize> {
 impl<const N: usize> NttTables<N> {
     /// Build the forward and inverse twiddle tables for length `n` once.
     pub(crate) fn new<P: NttPrimeList<N>>(n: usize) -> Self {
-        debug_assert!(n >= 1 && n <= 1024 && n.is_power_of_two());
+        debug_assert!((1..=1024).contains(&n) && n.is_power_of_two());
         let primes = P::PRIMES;
         let log2r: [u32; N] = std::array::from_fn(|i| primes[i].ilog2() + 1);
         let neg_inv: [u32; N] = std::array::from_fn(|i| negqinv_modr(primes[i]));
@@ -891,8 +895,8 @@ mod tests {
         /// Construct from a `u64`, reducing modulo each prime.
         fn from_u64(v: u64) -> Self {
             let mut residues = [0u32; N];
-            for i in 0..N {
-                residues[i] = Self::to_mont_at((v % P::PRIMES[i] as u64) as u32, i);
+            for (i, residues_i) in residues.iter_mut().enumerate().take(N) {
+                *residues_i = Self::to_mont_at((v % P::PRIMES[i] as u64) as u32, i);
             }
             Rns {
                 residues,
@@ -904,12 +908,12 @@ mod tests {
         ///
         /// Only correct when the true value is less than 2^64; wraps silently
         /// otherwise.
-        fn to_u64(&self) -> u64 {
+        fn to_u64(self) -> u64 {
             let a = self.to_garner();
             let mut result = 0u64;
             let mut base = 1u64;
-            for i in 0..N {
-                result = result.wrapping_add(base.wrapping_mul(a[i] as u64));
+            for (i, &a_i) in a.iter().enumerate().take(N) {
+                result = result.wrapping_add(base.wrapping_mul(a_i as u64));
                 base = base.wrapping_mul(P::PRIMES[i] as u64);
             }
             result
@@ -925,7 +929,11 @@ mod tests {
             ntt_tables_const::<5, 128, NttPrimes24Bit5>();
         let runtime = NttTables::<5>::new::<NttPrimes24Bit5>(128);
         for i in 0..5 {
-            assert_eq!(TABLES.0[i].as_slice(), runtime.psi_rev[i].as_slice(), "psi_rev[{i}]");
+            assert_eq!(
+                TABLES.0[i].as_slice(),
+                runtime.psi_rev[i].as_slice(),
+                "psi_rev[{i}]"
+            );
             assert_eq!(
                 TABLES.1[i].as_slice(),
                 runtime.psi_inv_rev[i].as_slice(),
@@ -940,8 +948,8 @@ mod tests {
         let primes = SmallPrimes::PRIMES;
         for v in [0u32, 1, 12345, 786_432, 998_244_352, 1_073_754_112] {
             let r = Rns3::from_u32(v);
-            for i in 0..3 {
-                assert_eq!(r.residue(i), v % primes[i], "v={v}, i={i}");
+            for (i, &primes_i) in primes.iter().enumerate() {
+                assert_eq!(r.residue(i), v % primes_i, "v={v}, i={i}");
             }
         }
     }
@@ -951,8 +959,8 @@ mod tests {
         let primes = SmallPrimes::PRIMES;
         let v: u64 = 0x_DEAD_BEEF_1234_5678;
         let r = Rns3::from_u64(v);
-        for i in 0..3 {
-            assert_eq!(r.residue(i), (v % primes[i] as u64) as u32, "i={i}");
+        for (i, &primes_i) in primes.iter().enumerate() {
+            assert_eq!(r.residue(i), (v % primes_i as u64) as u32, "i={i}");
         }
     }
 
@@ -983,10 +991,10 @@ mod tests {
             let ra = Rns3::from_u32(a);
             let rb = Rns3::from_u32(b);
             let rc = ra + rb;
-            for i in 0..3 {
+            for (i, primes_i) in primes.iter().enumerate() {
                 assert_eq!(
                     rc.residue(i),
-                    (a as u64 + b as u64) as u32 % primes[i],
+                    (a as u64 + b as u64) as u32 % primes_i,
                     "a={a}, b={b}, i={i}"
                 );
             }
@@ -1001,8 +1009,8 @@ mod tests {
             let ra = Rns3::from_u32(a);
             let rb = Rns3::from_u32(b);
             let rc = ra - rb;
-            for i in 0..3 {
-                let expected = ((a as i64 - b as i64).rem_euclid(primes[i] as i64)) as u32;
+            for (i, primes_i) in primes.iter().enumerate() {
+                let expected = ((a as i64 - b as i64).rem_euclid(*primes_i as i64)) as u32;
                 assert_eq!(rc.residue(i), expected, "a={a}, b={b}, i={i}");
             }
         }
@@ -1016,8 +1024,8 @@ mod tests {
             let ra = Rns3::from_u32(a);
             let rb = Rns3::from_u32(b);
             let rc = ra * rb;
-            for i in 0..3 {
-                let expected = (a as u64 * b as u64 % primes[i] as u64) as u32;
+            for (i, &primes_i) in primes.iter().enumerate() {
+                let expected = (a as u64 * b as u64 % primes_i as u64) as u32;
                 assert_eq!(rc.residue(i), expected, "a={a}, b={b}, i={i}");
             }
         }
@@ -1039,7 +1047,7 @@ mod tests {
 
     #[test]
     fn garner_reconstruction_matches_to_u64() {
-        for v in [0u64, 1, 42, 0xDEAD_BEEF, 0xFFFF_FFFF_FF] {
+        for v in [0u64, 1, 42, 0xDEAD_BEEF, 0x00FF_FFFF_FFFF] {
             let r = Rns3::from_u64(v);
             // Manually apply Horner from the Garner coefficients.
             let a = r.to_garner();
@@ -1056,8 +1064,8 @@ mod tests {
         let primes = SmallPrimes::PRIMES;
         for v in [0i32, 1, 12345, 786_432] {
             let r = Rns3::from_i32(v);
-            for i in 0..3 {
-                assert_eq!(r.residue(i), v as u32 % primes[i], "v={v}, i={i}");
+            for (i, &primes_i) in primes.iter().enumerate() {
+                assert_eq!(r.residue(i), v as u32 % primes_i, "v={v}, i={i}");
             }
         }
     }
@@ -1067,8 +1075,8 @@ mod tests {
         let primes = SmallPrimes::PRIMES;
         for v in [-1i32, -12345, -786_432] {
             let r = Rns3::from_i32(v);
-            for i in 0..3 {
-                let expected = v.rem_euclid(primes[i] as i32) as u32;
+            for (i, &primes_i) in primes.iter().enumerate() {
+                let expected = v.rem_euclid(primes_i as i32) as u32;
                 assert_eq!(r.residue(i), expected, "v={v}, i={i}");
             }
         }

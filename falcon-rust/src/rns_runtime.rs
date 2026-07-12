@@ -34,12 +34,12 @@ fn is_prime_u32(n: u32) -> bool {
     if n < 2 {
         return false;
     }
-    if n % 2 == 0 {
+    if n.is_multiple_of(2) {
         return n == 2;
     }
     let mut i = 3u64;
     while i * i <= n as u64 {
-        if n as u64 % i == 0 {
+        if (n as u64).is_multiple_of(i) {
             return false;
         }
         i += 2;
@@ -96,11 +96,11 @@ pub(crate) struct Transformed {
     ntt: Vec<Vec<u32>>,
 }
 
-/// Process-wide cache of [`RuntimeNtt`] contexts keyed by `(n, k)`. Building one
-/// costs `k` root-finds + twiddle tables + an O(k²) Garner inverse table, so the
-/// same depth's context is built once and shared across keygen attempts.
-static NTT_CACHE: LazyLock<Mutex<HashMap<(usize, usize), Arc<RuntimeNtt>>>> =
-    LazyLock::new(|| Mutex::new(HashMap::new()));
+/// Process-wide cache of [`RuntimeNtt`] contexts keyed by `(n, k)`. Building
+/// one costs `k` root-finds + twiddle tables + an O(k²) Garner inverse table,
+/// so the same depth's context is built once and shared across keygen attempts.
+type NttCache = HashMap<(usize, usize), Arc<RuntimeNtt>>;
+static NTT_CACHE: LazyLock<Mutex<NttCache>> = LazyLock::new(|| Mutex::new(HashMap::new()));
 
 /// Per-`(n, primes)` precomputed RNS multiply context.
 pub(crate) struct RuntimeNtt {
@@ -108,11 +108,11 @@ pub(crate) struct RuntimeNtt {
     primes: Vec<u32>,
     log2r: Vec<u32>,
     neg_inv: Vec<u32>,
-    r_sq: Vec<u32>,            // R^2 mod p (to convert into Montgomery form)
-    r64: Vec<u32>,            // 2^64 mod p (for multiword reduction)
-    psi_rev: Vec<Vec<u32>>,    // forward twiddles, Montgomery, bit-reversed
+    r_sq: Vec<u32>,             // R^2 mod p (to convert into Montgomery form)
+    r64: Vec<u32>,              // 2^64 mod p (for multiword reduction)
+    psi_rev: Vec<Vec<u32>>,     // forward twiddles, Montgomery, bit-reversed
     psi_inv_rev: Vec<Vec<u32>>, // inverse twiddles
-    ninv_mont: Vec<u32>,       // n^{-1}, Montgomery
+    ninv_mont: Vec<u32>,        // n^{-1}, Montgomery
     /// Garner inverses: `garner_inv[i][j] = primes[i]^{-1} mod primes[j]` for
     /// `j > i` (lower triangle unused). Flattened row-major.
     garner_inv: Vec<u32>,
@@ -193,10 +193,6 @@ impl RuntimeNtt {
             .clone()
     }
 
-    pub(crate) fn num_primes(&self) -> usize {
-        self.primes.len()
-    }
-
     pub(crate) fn primes(&self) -> &[u32] {
         &self.primes
     }
@@ -232,8 +228,14 @@ impl RuntimeNtt {
         for pi in 0..self.primes.len() {
             let (p, log2r, neg_inv) = (self.primes[pi], self.log2r[pi], self.neg_inv[pi]);
             let mut ar = vec![0u32; n];
-            for i in 0..n {
-                ar[i] = montmul_dyn(self.reduce_signed(a.coeff(i), pi), self.r_sq[pi], p, log2r, neg_inv);
+            for (i, ar_i) in ar.iter_mut().enumerate().take(n) {
+                *ar_i = montmul_dyn(
+                    self.reduce_signed(a.coeff(i), pi),
+                    self.r_sq[pi],
+                    p,
+                    log2r,
+                    neg_inv,
+                );
             }
             ntt_u32(&mut ar, &self.psi_rev[pi], p, log2r, neg_inv);
             ntt.push(ar);
@@ -258,14 +260,27 @@ impl RuntimeNtt {
         let mut kr = vec![0u32; n];
         for pi in 0..k {
             let (p, log2r, neg_inv) = (self.primes[pi], self.log2r[pi], self.neg_inv[pi]);
-            for i in 0..n {
-                kr[i] = montmul_dyn(self.reduce_signed(kp.coeff(i), pi), self.r_sq[pi], p, log2r, neg_inv);
+            for (i, kr_i) in kr.iter_mut().enumerate().take(n) {
+                *kr_i = montmul_dyn(
+                    self.reduce_signed(kp.coeff(i), pi),
+                    self.r_sq[pi],
+                    p,
+                    log2r,
+                    neg_inv,
+                );
             }
             ntt_u32(&mut kr, &self.psi_rev[pi], p, log2r, neg_inv);
-            for i in 0..n {
-                kr[i] = montmul_dyn(kr[i], h.ntt[pi][i], p, log2r, neg_inv);
+            for (i, kr_i) in kr.iter_mut().enumerate().take(n) {
+                *kr_i = montmul_dyn(*kr_i, h.ntt[pi][i], p, log2r, neg_inv);
             }
-            intt_u32(&mut kr, &self.psi_inv_rev[pi], self.ninv_mont[pi], p, log2r, neg_inv);
+            intt_u32(
+                &mut kr,
+                &self.psi_inv_rev[pi],
+                self.ninv_mont[pi],
+                p,
+                log2r,
+                neg_inv,
+            );
             for i in 0..n {
                 residues[i * k + pi] = montmul_dyn(kr[i], 1, p, log2r, neg_inv);
             }
