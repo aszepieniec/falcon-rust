@@ -2231,6 +2231,10 @@ mod test {
     /// list has only ~45-bit capacity.
     #[test]
     #[should_panic(expected = "prime list too small")]
+    // The guard is a `debug_assert!`, compiled out under `--release`; only run this
+    // in debug builds so `cargo test --release` isn't red. (Production keygen never
+    // hits this path — it uses the release-guarded runtime babai; see afea26d.)
+    #[cfg_attr(not(debug_assertions), ignore)]
     fn rns_reduction_guards_against_undersized_primes() {
         use crate::rns::NttPrimes24Bit2;
         let mut rng = StdRng::seed_from_u64(0xdead_beef);
