@@ -594,6 +594,39 @@ pub(crate) fn babai_reduce_rns_runtime(
             .collect()
     };
 
+    // Capacity guard (active in release).  The per-depth `(k_primes, cap_w)`
+    // provisioning ([`rns_runtime_babai_params`]) covers a +6σ tail of the
+    // coefficient distribution; a rarer seed can exceed it, and then the RNS
+    // branch would silently wrap the centered CRT (modulus < product) or the
+    // schoolbook branch would truncate the product to `cap_w` limbs — either way
+    // corrupting (F, G).  Detect it from this seed's actual magnitudes and
+    // return `Err` so `ntru_solve` retries, the same recovery the depth-0
+    // `fG − gF = q` check provides.  (The sibling [`babai_reduce_rns_generic`]
+    // only `debug_assert!`s the analogous bound, which is compiled out in
+    // release; here it must hold on the shipped path.)
+    let capital_bits = cap_size(&cf, &cg);
+    if (cap_w as u64) * 64 < capital_bits + 2 {
+        return Err(format!(
+            "cap_w={cap_w} limbs ({} bits) too small for capital ~{capital_bits} bits \
+             plus the back-shifted k·f correction",
+            cap_w * 64
+        ));
+    }
+    if let Some(ctx) = &ntt {
+        // Signed reconstruction capacity of the runtime prime list, vs the
+        // `≈ size + 54`-bit k·f product (the measured model — see
+        // `product_size_model_matches_measurements`).
+        let modulus_signed_bits: f64 =
+            ctx.primes().iter().map(|&p| (p as f64).log2()).sum::<f64>() - 1.0;
+        if modulus_signed_bits < (size + 54) as f64 {
+            return Err(format!(
+                "RNS modulus {modulus_signed_bits:.0} signed bits < k·f product ~{} bits \
+                 (k_primes={k_primes}, max|f,g|={size})",
+                size + 54
+            ));
+        }
+    }
+
     let mut prev_capital_size = u64::MAX;
     loop {
         let capital_size = cap_size(&cf, &cg);
@@ -1343,6 +1376,28 @@ fn ntru_solve_entrypoint(
     }
 }
 
+/// Verify the NTRU equation `fG − gF = q  mod (X^n + 1)` for a candidate
+/// solution `(F, G)`.  The depth-0 reduction NTT uses a single 24-bit prime
+/// whose ~2^22 reconstruction range only narrowly covers the construction
+/// products, so a rare +Nσ seed can overflow it and corrupt F/G; this check
+/// turns that into a keygen retry instead of a silently invalid key.  Evaluated
+/// in i64 so the unreduced products cannot overflow.
+fn ntru_equation_holds(
+    f: &Polynomial<i16>,
+    g: &Polynomial<i16>,
+    capital_f: &Polynomial<i32>,
+    capital_g: &Polynomial<i32>,
+) -> bool {
+    let n = f.coefficients.len();
+    let f_i64 = f.map(|&i| i as i64);
+    let g_i64 = g.map(|&i| i as i64);
+    let cf_i64 = capital_f.map(|&i| i as i64);
+    let cg_i64 = capital_g.map(|&i| i as i64);
+    let ntru_eq =
+        (f_i64 * cg_i64).reduce_by_cyclotomic(n) - (g_i64 * cf_i64).reduce_by_cyclotomic(n);
+    ntru_eq == Polynomial::constant(Q as i64)
+}
+
 /// Sample 4 small polynomials f, g, F, G such that f * G - g * F = q mod (X^n + 1).
 /// Algorithm 5 (NTRUgen) of the documentation [1, p.34].
 ///
@@ -1386,15 +1441,8 @@ pub fn ntru_gen<R: Rng + ?Sized>(
             // Verify the NTRU equation fG − gF = q.  The depth-0 reduction NTT
             // uses a single 24-bit prime whose ~2^22 reconstruction range only
             // narrowly covers the products; this check turns any rare overflow
-            // into a retry instead of a silently invalid key.  Computed in i64
-            // so the unreduced products cannot overflow.
-            let f_i64 = f.map(|&i| i as i64);
-            let g_i64 = g.map(|&i| i as i64);
-            let cf_i64 = capital_f.map(|&i| i as i64);
-            let cg_i64 = capital_g.map(|&i| i as i64);
-            let ntru_eq =
-                (f_i64 * cg_i64).reduce_by_cyclotomic(n) - (g_i64 * cf_i64).reduce_by_cyclotomic(n);
-            if ntru_eq != Polynomial::constant(Q as i64) {
+            // into a retry instead of a silently invalid key.
+            if !ntru_equation_holds(&f, &g, &capital_f, &capital_g) {
                 continue;
             }
             return (
@@ -1444,6 +1492,11 @@ pub fn ntru_gen_with_rns_depth<R: Rng + ?Sized>(
         if let Some((capital_f, capital_g)) =
             ntru_solve_entrypoint(f.map(|&i| i as i32), g.map(|&i| i as i32), max_rns_depth)
         {
+            // Same depth-0 single-prime overflow guard as `ntru_gen`: reject a
+            // silently-corrupted (F, G) and retry rather than emit an invalid key.
+            if !ntru_equation_holds(&f, &g, &capital_f, &capital_g) {
+                continue;
+            }
             return (
                 f,
                 g,
@@ -1941,6 +1994,40 @@ mod test {
         (f, g, cf, cg)
     }
 
+    /// Realistic depth-6 inputs: n = 16, max|f,g| ≈ 401 bits, max|F,G| ≈ 1189
+    /// bits (from `NTRU_SOLVE_BABAI_COEFF_BITS[6]`).  Schoolbook regime (n ≤ 64).
+    fn depth6_inputs(
+        rng: &mut StdRng,
+    ) -> (
+        Polynomial<BigInt>,
+        Polynomial<BigInt>,
+        Polynomial<BigInt>,
+        Polynomial<BigInt>,
+    ) {
+        let n = 16;
+        let f = Polynomial::new(
+            (0..n)
+                .map(|_| rand_signed_bigint(rng, 401))
+                .collect::<Vec<_>>(),
+        );
+        let g = Polynomial::new(
+            (0..n)
+                .map(|_| rand_signed_bigint(rng, 401))
+                .collect::<Vec<_>>(),
+        );
+        let cf = Polynomial::new(
+            (0..n)
+                .map(|_| rand_signed_bigint(rng, 1189))
+                .collect::<Vec<_>>(),
+        );
+        let cg = Polynomial::new(
+            (0..n)
+                .map(|_| rand_signed_bigint(rng, 1189))
+                .collect::<Vec<_>>(),
+        );
+        (f, g, cf, cg)
+    }
+
     /// Realistic depth-7 inputs: n = 8, max|f,g| ≈ 850 bits, max|F,G| ≈ 2000
     /// bits.  Deep in the schoolbook regime (n ≤ 64), where the flat-word babai
     /// uses `schoolbook_negacyclic_mul` and skips the `RuntimeNtt` entirely.
@@ -1976,13 +2063,86 @@ mod test {
         (f, g, cf, cg)
     }
 
+    /// Realistic depth-8 inputs: n = 4, max|f,g| ≈ 1577 bits, max|F,G| ≈ 4703
+    /// bits (from `NTRU_SOLVE_BABAI_COEFF_BITS[8]`).  Schoolbook regime (n ≤ 64).
+    fn depth8_inputs(
+        rng: &mut StdRng,
+    ) -> (
+        Polynomial<BigInt>,
+        Polynomial<BigInt>,
+        Polynomial<BigInt>,
+        Polynomial<BigInt>,
+    ) {
+        let n = 4;
+        let f = Polynomial::new(
+            (0..n)
+                .map(|_| rand_signed_bigint(rng, 1577))
+                .collect::<Vec<_>>(),
+        );
+        let g = Polynomial::new(
+            (0..n)
+                .map(|_| rand_signed_bigint(rng, 1577))
+                .collect::<Vec<_>>(),
+        );
+        let cf = Polynomial::new(
+            (0..n)
+                .map(|_| rand_signed_bigint(rng, 4703))
+                .collect::<Vec<_>>(),
+        );
+        let cg = Polynomial::new(
+            (0..n)
+                .map(|_| rand_signed_bigint(rng, 4703))
+                .collect::<Vec<_>>(),
+        );
+        (f, g, cf, cg)
+    }
+
+    /// Realistic depth-9 inputs: n = 2, max|f,g| ≈ 3138 bits, max|F,G| ≈ 9403
+    /// bits (from `NTRU_SOLVE_BABAI_COEFF_BITS[9]`).  Schoolbook regime (n ≤ 64);
+    /// the deepest level the runtime path serves.
+    fn depth9_inputs(
+        rng: &mut StdRng,
+    ) -> (
+        Polynomial<BigInt>,
+        Polynomial<BigInt>,
+        Polynomial<BigInt>,
+        Polynomial<BigInt>,
+    ) {
+        let n = 2;
+        let f = Polynomial::new(
+            (0..n)
+                .map(|_| rand_signed_bigint(rng, 3138))
+                .collect::<Vec<_>>(),
+        );
+        let g = Polynomial::new(
+            (0..n)
+                .map(|_| rand_signed_bigint(rng, 3138))
+                .collect::<Vec<_>>(),
+        );
+        let cf = Polynomial::new(
+            (0..n)
+                .map(|_| rand_signed_bigint(rng, 9403))
+                .collect::<Vec<_>>(),
+        );
+        let cg = Polynomial::new(
+            (0..n)
+                .map(|_| rand_signed_bigint(rng, 9403))
+                .collect::<Vec<_>>(),
+        );
+        (f, g, cf, cg)
+    }
+
     /// The runtime-`K` flat-word backend ([`babai_reduce_rns_runtime`]) must
     /// produce exactly the same reduction as the BigInt-karatsuba oracle, across
-    /// depths 2–7 (n = 256, 128, 64, 32, 8): depths 2–3 (n>64) take the RNS
-    /// multiply, depths 4–7 the flat-word schoolbook multiply.
+    /// every depth the production dispatch serves (2–9; n = 256 … 2): depths 2–3
+    /// (n>64) take the RNS multiply, depths 4–9 the flat-word schoolbook one.
+    ///
+    /// The `(k_primes, cap_w)` come straight from the production
+    /// [`rns_runtime_babai_params`] — this test is the wrap-detector for the
+    /// *shipped* parameters, so it must not hardcode its own.
     #[test]
     fn babai_reduce_rns_runtime_matches_bigint() {
-        use super::babai_reduce_rns_runtime;
+        use super::{babai_reduce_rns_runtime, rns_runtime_babai_params};
         type Inputs = (
             Polynomial<BigInt>,
             Polynomial<BigInt>,
@@ -1990,16 +2150,19 @@ mod test {
             Polynomial<BigInt>,
         );
         type Gen = fn(&mut StdRng) -> Inputs;
-        // (inputs, k_primes, cap_w) per depth.  k_primes covers ~bits(f)+54;
-        // cap_w (limbs) holds the capital plus the mid-reduction shifts.
-        let cases: &[(&str, Gen, usize, usize, u64)] = &[
-            ("depth2", depth2_inputs as Gen, 5, 4, 0xd2),
-            ("depth3", depth3_inputs as Gen, 5, 6, 0xd3),
-            ("depth4", depth4_inputs as Gen, 8, 8, 0xd4),
-            ("depth5", depth5_inputs as Gen, 12, 12, 0xd5),
-            ("depth7", depth7_inputs as Gen, 41, 40, 0xd7),
+        // (name, inputs, depth, seed); params are looked up from production.
+        let cases: &[(&str, Gen, usize, u64)] = &[
+            ("depth2", depth2_inputs as Gen, 2, 0xd2),
+            ("depth3", depth3_inputs as Gen, 3, 0xd3),
+            ("depth4", depth4_inputs as Gen, 4, 0xd4),
+            ("depth5", depth5_inputs as Gen, 5, 0xd5),
+            ("depth6", depth6_inputs as Gen, 6, 0xd6),
+            ("depth7", depth7_inputs as Gen, 7, 0xd7),
+            ("depth8", depth8_inputs as Gen, 8, 0xd8),
+            ("depth9", depth9_inputs as Gen, 9, 0xd9),
         ];
-        for &(name, gen, k_primes, cap_w, seed) in cases {
+        for &(name, gen, depth, seed) in cases {
+            let (k_primes, cap_w) = rns_runtime_babai_params(depth);
             let mut rng = StdRng::seed_from_u64(0x5117_0000 + seed);
             for _ in 0..16 {
                 let (f, g, cap_f, cap_g) = gen(&mut rng);
