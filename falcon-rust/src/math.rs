@@ -1352,9 +1352,9 @@ fn ntru_solve_entrypoint(
 /// [1]: https://falcon-sign.info/falcon.pdf
 #[doc(hidden)]
 #[profiling]
-pub fn ntru_gen(
+pub fn ntru_gen<R: Rng + ?Sized>(
     n: usize,
-    rng: &mut dyn Rng,
+    rng: &mut R,
 ) -> (
     Polynomial<i16>,
     Polynomial<i16>,
@@ -1418,9 +1418,9 @@ pub fn ntru_gen(
 /// This function is marked pub for benchmarking purposes only.
 #[doc(hidden)]
 #[profiling]
-pub fn ntru_gen_with_rns_depth(
+pub fn ntru_gen_with_rns_depth<R: Rng + ?Sized>(
     n: usize,
-    rng: &mut dyn Rng,
+    rng: &mut R,
     max_rns_depth: usize,
 ) -> (
     Polynomial<i16>,
@@ -1459,7 +1459,7 @@ pub fn ntru_gen_with_rns_depth(
 /// sigma = 1.17 * sqrt(Q / (2n)).
 // fn gen_poly(n: usize, rng: &mut dyn Rng) -> Polynomial<i16> {
 #[profiling]
-fn gen_poly(n: usize, rng: &mut dyn Rng) -> Polynomial<i16> {
+fn gen_poly<R: Rng + ?Sized>(n: usize, rng: &mut R) -> Polynomial<i16> {
     let mu = FixedPoint128::ZERO;
     let sigma_star = FixedPoint128::from(1.43300980528773f64);
     // Build the sigma-dependent sampler constants once, not per sample.
