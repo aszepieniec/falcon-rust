@@ -158,7 +158,7 @@ mod test {
     use rand::{rng, RngExt};
     use std::{thread::sleep, time::Duration};
 
-    use crate::fixed_point::FixedPoint128;
+    use crate::fixed_point::{FixedPoint128, FixedPoint64};
     use crate::samplerz::{approx_exp, ber_exp, sampler_z};
     use rand::{rngs::StdRng, SeedableRng};
 
@@ -426,19 +426,45 @@ mod test {
             (-39.68827784633828, 1.6958406126012802, hex::decode("d6a1b51d76222a705a0259").unwrap(), -40),
             (-18.488607061056847, 1.6955259305261838, hex::decode("f0523bfaa8a394bf4ea5c10000000000000f842366fde286d6a30803").unwrap(), -22),
             (-48.39610939101591, 1.6955259305261838, hex::decode("87bd87e63374cee62127fc0000000000006931104aab64f136a0485b").unwrap(), -50),
+            // Regression vector for GHSA-25rm-9wvm-m38v. Adversarially constructed to land on a
+            // rejection boundary the pre-fix ~2^-33 acceptance-probability error flips: the old
+            // FixedPoint64 acceptance path returns 102, the current FixedPoint128 path returns 100.
+            // Only reproduces on the FixedPoint64 input grid the real signer uses (raw f64 -> 102),
+            // which is why this table quantizes its inputs to FixedPoint64 before sampling.
+            (100.000_000_5, 1.703_799_041_475_491_8, hex::decode("7895f43f559b370df80170198e14b8b5ffffffffffffffffffff0000000000000000").unwrap(), 100),
         ];
         for (i, (mu, sigma, random_bytes, answer)) in kats.into_iter().enumerate() {
             assert_eq!(
                 sampler_z(
-                    mu,
-                    sigma,
-                    sigma_min,
+                    FixedPoint64::from(mu),
+                    FixedPoint64::from(sigma),
+                    FixedPoint64::from(sigma_min),
                     &mut UnsafeBufferRng::new(&random_bytes)
                 ),
                 answer,
                 "error in kat {i}"
             );
         }
+    }
+
+    /// Regression vector for GHSA-25rm-9wvm-m38v. Commit bf2cf00 evaluated the Gaussian
+    /// acceptance probability at ~2^-33 relative precision (FixedPoint64), below the bound
+    /// Falcon's Rényi-divergence security analysis requires. This is an adversarially
+    /// constructed input that lands on a rejection boundary the 2^-33 error flips: on the
+    /// pre-fix (FixedPoint64) code it produces false; the current FixedPoint128 code produces
+    /// true. It guards against a re-regression that a random test vector would miss (the
+    /// discrepancy has natural frequency ~2^-33). The sampler_z-level counterpart lives in
+    /// `test_sampler_z`'s KAT table.
+    #[test]
+    fn ber_exp_regression_vector_ghsa_25rm_9wvm_m38v() {
+        // Pre-fix (FixedPoint64) returned false; the correct-precision path returns true.
+        let x = FixedPoint128::from(0.200_000_167_618_381_2_f64);
+        let ccs = FixedPoint128::from(0.749_990_853_318_824_9_f64);
+        let bytes: [u8; 7] = hex::decode("9d31c1a6ca10d7").unwrap().try_into().unwrap();
+        assert!(
+            ber_exp(x, ccs, bytes),
+            "ber_exp regression: acceptance decision flipped"
+        );
     }
 
     #[test]
