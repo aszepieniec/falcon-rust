@@ -469,16 +469,20 @@ pub fn sign<const N: usize>(m: &[u8], sk: &SecretKey<N>) -> Signature<N> {
     let r_cat_m = [r.to_vec(), m.to_vec()].concat();
 
     let c = hash_to_point(&r_cat_m, n);
-    let one_over_q = FixedPoint64::ONE / FixedPoint64::from(Q as i32);
+    // Signing arithmetic runs in FixedPoint128 so the Gaussian center that ffsampling derives from
+    // (t0, t1) and feeds to sampler_z carries the precision Falcon's sampler requires. Running this
+    // path at FixedPoint64 (32 fractional bits) left the sampler center at ~2^-32 (GHSA-67r5-83rq-qj5p,
+    // the ffSampling-side companion to the approx_exp fix for GHSA-25rm-9wvm-m38v).
+    let one_over_q = FixedPoint128::ONE / FixedPoint128::from(Q as i32);
     let c_over_q_fft = c
-        .map(|cc| Complex::new(one_over_q * FixedPoint64::from(cc.value() as i32), FixedPoint64::ZERO))
+        .map(|cc| Complex::new(one_over_q * FixedPoint128::from(cc.value() as i32), FixedPoint128::ZERO))
         .fft();
 
     // B = [[FFT(g), -FFT(f)], [FFT(G), -FFT(F)]]
-    let capital_f_fft = sk.b0[3].map(|&i| Complex::new(FixedPoint64::from(-i as i32), FixedPoint64::ZERO)).fft();
-    let f_fft = sk.b0[1].map(|&i| Complex::new(FixedPoint64::from(-i as i32), FixedPoint64::ZERO)).fft();
-    let capital_g_fft = sk.b0[2].map(|&i| Complex::new(FixedPoint64::from(i as i32), FixedPoint64::ZERO)).fft();
-    let g_fft = sk.b0[0].map(|&i| Complex::new(FixedPoint64::from(i as i32), FixedPoint64::ZERO)).fft();
+    let capital_f_fft = sk.b0[3].map(|&i| Complex::new(FixedPoint128::from(-i as i32), FixedPoint128::ZERO)).fft();
+    let f_fft = sk.b0[1].map(|&i| Complex::new(FixedPoint128::from(-i as i32), FixedPoint128::ZERO)).fft();
+    let capital_g_fft = sk.b0[2].map(|&i| Complex::new(FixedPoint128::from(i as i32), FixedPoint128::ZERO)).fft();
+    let g_fft = sk.b0[0].map(|&i| Complex::new(FixedPoint128::from(i as i32), FixedPoint128::ZERO)).fft();
     let t0 = c_over_q_fft.hadamard_mul(&capital_f_fft);
     let t1 = -c_over_q_fft.hadamard_mul(&f_fft);
 
@@ -494,12 +498,14 @@ pub fn sign<const N: usize>(m: &[u8], sk: &SecretKey<N>) -> Signature<N> {
             let s0 = t0_min_z0.hadamard_mul(&g_fft) + t1_min_z1.hadamard_mul(&capital_g_fft);
             let s1 = t0_min_z0.hadamard_mul(&f_fft) + t1_min_z1.hadamard_mul(&capital_f_fft);
 
-            // Compute squared norm via i128: |s_k|^2 can be ~2^54, too large for FixedPoint64.
-            // norm_sum holds sum_k(|s0_k|^2 + |s1_k|^2) in raw Q31.32 bits (× 2^32).
+            // Compute squared norm via i128. s0/s1 are now FixedPoint128 (64 fractional bits); take
+            // the top 32 fractional bits (>> 32) before squaring so this is bit-identical to the
+            // prior FixedPoint64 computation and cannot overflow i128 (|s_k|^2 can be ~2^54).
+            // norm_sum holds sum_k(|s0_k|^2 + |s1_k|^2) in raw Q31.32 units (× 2^32).
             // Reject if sum / n > bound  ⟺  norm_sum > n × bound × 2^32.
-            let sq = |a: &Complex<FixedPoint64>| -> i128 {
-                let re = a.re.0 as i128;
-                let im = a.im.0 as i128;
+            let sq = |a: &Complex<FixedPoint128>| -> i128 {
+                let re = (a.re.0 >> 32) as i128;
+                let im = (a.im.0 >> 32) as i128;
                 (re * re + im * im) >> 32
             };
             let norm_sum: i128 = s0.coefficients.iter().map(sq).sum::<i128>()
