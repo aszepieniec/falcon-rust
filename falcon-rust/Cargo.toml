@@ -1,6 +1,6 @@
 [package]
 name = "falcon-rust"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 description = "A rust implementation of the Falcon post-quantum digital signature scheme."
 license = "MIT"
@@ -23,7 +23,7 @@ num = "0.4.3"
 rand = "0.10.1"
 rand_distr = "0.6.0"
 shake = "0.1.0"
-falcon-profiler = { version = "0.2.0", path = "../falcon-profiler" }
+falcon-profiler = { version = "0.3.0", path = "../falcon-profiler" }
 
 [dev-dependencies]
 proptest = "1.11.0"
