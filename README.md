@@ -41,8 +41,8 @@ If you are after performance, you are probably better off with one of the implem
 
 |                      | Keygen          | Sign      | Verify    |
 |----------------------|-----------------|-----------|-----------|
-|      falcon-rust 512 |   14.272 ms     | 456.44 µs | 15.573 µs |
-|     falcon-rust 1024 |   30.498 ms     | 941.82 µs | 31.370 µs |
+|      falcon-rust 512 |   14.272 ms     | 647.63 µs | 15.573 µs |
+|     falcon-rust 1024 |   30.498 ms     | 1.3578 ms | 31.370 µs |
 |            C FFI 512 |   3.9177 ms     | 113.53 µs | 24.685 µs |
 |           C FFI 1024 |   11.532 ms     | 225.28 µs | 48.562 µs |
 |           FN DSA 512 |   2.0290 ms     | 154.70 µs | 10.343 µs |
@@ -77,5 +77,5 @@ If you are after performance, you are probably better off with one of the implem
 
 ## Contributing
 
-Contributions are welcome! If accepted, contributions will be released under the same
+Contributions are welcome. If accepted, contributions will be released under the same
 license.

@@ -9,7 +9,7 @@ use crate::{
     falcon_field::{Felt, Q},
     fast_fft::FastFft,
     ffsampling::{build_falcon_tree, ffsampling, LdlTree},
-    fixed_point::{FixedPoint64, FixedPoint128},
+    fixed_point::{FixedPoint128, FixedPoint64},
     math::ntru_gen,
     polynomial::{hash_to_point, Polynomial},
 };
@@ -102,9 +102,10 @@ impl<const N: usize> SecretKey<N> {
 
     #[profiling]
     pub(crate) fn from_b0(b0: [Polynomial<i16>; 4]) -> Self {
-        let b0_fft = b0
-            .clone()
-            .map(|c| c.map(|cc| Complex::new(FixedPoint128::from(*cc as i64), FixedPoint128::ZERO)).fft());
+        let b0_fft = b0.clone().map(|c| {
+            c.map(|cc| Complex::new(FixedPoint128::from(*cc as i64), FixedPoint128::ZERO))
+                .fft()
+        });
 
         let sigma = FixedPoint128::from(f64::from(FalconVariant::from_n(N).parameters().sigma));
         let tree = build_falcon_tree(b0_fft, sigma);
@@ -475,14 +476,27 @@ pub fn sign<const N: usize>(m: &[u8], sk: &SecretKey<N>) -> Signature<N> {
     // the ffSampling-side companion to the approx_exp fix for GHSA-25rm-9wvm-m38v).
     let one_over_q = FixedPoint128::ONE / FixedPoint128::from(Q as i32);
     let c_over_q_fft = c
-        .map(|cc| Complex::new(one_over_q * FixedPoint128::from(cc.value() as i32), FixedPoint128::ZERO))
+        .map(|cc| {
+            Complex::new(
+                one_over_q * FixedPoint128::from(cc.value() as i32),
+                FixedPoint128::ZERO,
+            )
+        })
         .fft();
 
     // B = [[FFT(g), -FFT(f)], [FFT(G), -FFT(F)]]
-    let capital_f_fft = sk.b0[3].map(|&i| Complex::new(FixedPoint128::from(-i as i32), FixedPoint128::ZERO)).fft();
-    let f_fft = sk.b0[1].map(|&i| Complex::new(FixedPoint128::from(-i as i32), FixedPoint128::ZERO)).fft();
-    let capital_g_fft = sk.b0[2].map(|&i| Complex::new(FixedPoint128::from(i as i32), FixedPoint128::ZERO)).fft();
-    let g_fft = sk.b0[0].map(|&i| Complex::new(FixedPoint128::from(i as i32), FixedPoint128::ZERO)).fft();
+    let capital_f_fft = sk.b0[3]
+        .map(|&i| Complex::new(FixedPoint128::from(-i as i32), FixedPoint128::ZERO))
+        .fft();
+    let f_fft = sk.b0[1]
+        .map(|&i| Complex::new(FixedPoint128::from(-i as i32), FixedPoint128::ZERO))
+        .fft();
+    let capital_g_fft = sk.b0[2]
+        .map(|&i| Complex::new(FixedPoint128::from(i as i32), FixedPoint128::ZERO))
+        .fft();
+    let g_fft = sk.b0[0]
+        .map(|&i| Complex::new(FixedPoint128::from(i as i32), FixedPoint128::ZERO))
+        .fft();
     let t0 = c_over_q_fft.hadamard_mul(&capital_f_fft);
     let t1 = -c_over_q_fft.hadamard_mul(&f_fft);
 
@@ -504,8 +518,8 @@ pub fn sign<const N: usize>(m: &[u8], sk: &SecretKey<N>) -> Signature<N> {
             // norm_sum holds sum_k(|s0_k|^2 + |s1_k|^2) in raw Q31.32 units (× 2^32).
             // Reject if sum / n > bound  ⟺  norm_sum > n × bound × 2^32.
             let sq = |a: &Complex<FixedPoint128>| -> i128 {
-                let re = (a.re.0 >> 32) as i128;
-                let im = (a.im.0 >> 32) as i128;
+                let re = a.re.0 >> 32;
+                let im = a.im.0 >> 32;
                 (re * re + im * im) >> 32
             };
             let norm_sum: i128 = s0.coefficients.iter().map(sq).sum::<i128>()
