@@ -467,6 +467,63 @@ mod test {
         );
     }
 
+    /// The 20 published BerExp precision vectors from
+    /// https://github.com/spartan8806/falcon-sampler-kat (`vectors/berexp.json`, vendored).
+    ///
+    /// These test the ACCEPTANCE-PROBABILITY PRECISION of `approx_exp`, not conformance: the Falcon
+    /// spec stipulates no minimum precision, and the ~2^-40 bar comes from the security analyses
+    /// (Prest'17, HPRR'19), so falling below it invalidates a proof precondition rather than
+    /// violating the spec. Each vector places the drawn value inside the window between `z` and
+    /// `z*(1 +/- 2^-40)`, which makes the accept/reject answer a direct measurement of whether
+    /// `approx_exp` meets that bar. Expected answers are derived from PQClean falcon-512 `clean`.
+    ///
+    /// Both error directions are covered (10 vectors each). The pre-fix FixedPoint64 path errs OVER
+    /// at x = 0.05 and UNDER at x = 0.35 in the same build, so a one-sided set would have missed
+    /// half of them -- which is the mistake GHSA-25rm-9wvm-m38v was about.
+    ///
+    /// Only the first 7 bytes of each vector's stream are used, because that is what `ber_exp`
+    /// consumes. Nothing is lost: the comparison walks the stream MSB-first and stops at the first
+    /// byte differing from `z`, which across all 20 vectors is byte index 4 or 5.
+    #[test]
+    fn berexp_precision_kats_falcon_sampler_kat() {
+        let raw = include_str!("../vectors/berexp.json");
+        let doc: serde_json::Value = serde_json::from_str(raw).expect("berexp.json parses");
+        let sets = doc["parameter_sets"]
+            .as_object()
+            .expect("parameter_sets is an object");
+
+        let mut checked = 0usize;
+        for (set_name, set) in sets {
+            for (i, v) in set["vectors"]
+                .as_array()
+                .expect("vectors is an array")
+                .iter()
+                .enumerate()
+            {
+                // x and ccs are strings in the file on purpose -- exact decimals that must not pick
+                // up a round trip through a JSON parser's float.
+                let x: f64 = v["x"].as_str().unwrap().parse().unwrap();
+                let ccs: f64 = v["ccs"].as_str().unwrap().parse().unwrap();
+                let expected = v["reference_accepts"].as_bool().unwrap();
+
+                let stream = hex::decode(v["bytes"].as_str().unwrap()).unwrap();
+                let bytes: [u8; 7] = stream[..7].try_into().unwrap();
+
+                let got = ber_exp(FixedPoint128::from(x), FixedPoint128::from(ccs), bytes);
+                assert_eq!(
+                    got,
+                    expected,
+                    "{set_name} vector {i} (x = {x}): disagrees with reference -- {}",
+                    v["flips_if"].as_str().unwrap_or("")
+                );
+                checked += 1;
+            }
+        }
+
+        // A vector file that silently lost its contents would otherwise pass vacuously.
+        assert_eq!(checked, 20, "expected 20 published vectors, ran {checked}");
+    }
+
     #[test]
     fn endianness() {
         let bytes: [u8; 9] = rng().random();

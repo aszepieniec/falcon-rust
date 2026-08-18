@@ -1,0 +1,261 @@
+{
+  "format": "falcon-sampler-kat.berexp.v1",
+  "generated_against": "PQClean falcon-512 clean (sign.c BerExp, fpr.c fpr_expm_p63)",
+  "discrimination_window": "2^-40 relative error in exp() -- the window THESE VECTORS are built at (u_drawn sits z>>40 from z_reference). Not a figure from any paper.",
+  "derived_requirement": "HPRR'19 (eprint 2019/1411) sect. 5 derives ~2^-43 for Falcon; Prest'17 (eprint 2017/480) sect. 3.3 gives delta <= 2^-37 for lambda <= 256. 2^-43 is STRICTER than the window above, so an implementation between 2^-40 and 2^-43 passes these vectors while sitting under the derived requirement.",
+  "note": "The Falcon specification stipulates no precision floor. These vectors test the premise the security proof requires, not a spec conformance requirement. A pass means 'not catastrophically under-provisioned', NOT 'meets HPRR'19'.",
+  "parameter_sets": {
+    "Falcon-512": {
+      "sigma_min": "1.277833697",
+      "ccs_used": "0.7099076094444444",
+      "vectors": [
+        {
+          "x": "0.05",
+          "ccs": "0.7099076094444444",
+          "bytes": "acdf7a6b994c3e32",
+          "z_reference": "0xacdf7a6b99f91dad",
+          "u_drawn": "0xacdf7a6b994c3e32",
+          "reference_accepts": true,
+          "discriminates_at": "2^-40",
+          "flips_if": "exp() under-computes by more than 2^-40",
+          "s": 0,
+          "r": 0.05
+        },
+        {
+          "x": "0.05",
+          "ccs": "0.7099076094444444",
+          "bytes": "acdf7a6b9aa5fd27",
+          "z_reference": "0xacdf7a6b99f91dad",
+          "u_drawn": "0xacdf7a6b9aa5fd27",
+          "reference_accepts": false,
+          "discriminates_at": "2^-40",
+          "flips_if": "exp() over-computes by more than 2^-40",
+          "s": 0,
+          "r": 0.05
+        },
+        {
+          "x": "0.2000001676183812",
+          "ccs": "0.7099076094444444",
+          "bytes": "94cb0965940ab9bf",
+          "z_reference": "0x94cb0965949f84c9",
+          "u_drawn": "0x94cb0965940ab9bf",
+          "reference_accepts": true,
+          "discriminates_at": "2^-40",
+          "flips_if": "exp() under-computes by more than 2^-40",
+          "s": 0,
+          "r": 0.2000001676183812
+        },
+        {
+          "x": "0.2000001676183812",
+          "ccs": "0.7099076094444444",
+          "bytes": "94cb096595344fd2",
+          "z_reference": "0x94cb0965949f84c9",
+          "u_drawn": "0x94cb096595344fd2",
+          "reference_accepts": false,
+          "discriminates_at": "2^-40",
+          "flips_if": "exp() over-computes by more than 2^-40",
+          "s": 0,
+          "r": 0.2000001676183812
+        },
+        {
+          "x": "0.35",
+          "ccs": "0.7099076094444444",
+          "bytes": "801143be0de70f51",
+          "z_reference": "0x801143be0e672095",
+          "u_drawn": "0x801143be0de70f51",
+          "reference_accepts": true,
+          "discriminates_at": "2^-40",
+          "flips_if": "exp() under-computes by more than 2^-40",
+          "s": 0,
+          "r": 0.35
+        },
+        {
+          "x": "0.35",
+          "ccs": "0.7099076094444444",
+          "bytes": "801143be0ee731d8",
+          "z_reference": "0x801143be0e672095",
+          "u_drawn": "0x801143be0ee731d8",
+          "reference_accepts": false,
+          "discriminates_at": "2^-40",
+          "flips_if": "exp() over-computes by more than 2^-40",
+          "s": 0,
+          "r": 0.35
+        },
+        {
+          "x": "0.5",
+          "ccs": "0.7099076094444444",
+          "bytes": "6e3a89ec9b00cf55",
+          "z_reference": "0x6e3a89ec9b6f09df",
+          "u_drawn": "0x6e3a89ec9b00cf55",
+          "reference_accepts": true,
+          "discriminates_at": "2^-40",
+          "flips_if": "exp() under-computes by more than 2^-40",
+          "s": 0,
+          "r": 0.5
+        },
+        {
+          "x": "0.5",
+          "ccs": "0.7099076094444444",
+          "bytes": "6e3a89ec9bdd4468",
+          "z_reference": "0x6e3a89ec9b6f09df",
+          "u_drawn": "0x6e3a89ec9bdd4468",
+          "reference_accepts": false,
+          "discriminates_at": "2^-40",
+          "flips_if": "exp() over-computes by more than 2^-40",
+          "s": 0,
+          "r": 0.5
+        },
+        {
+          "x": "0.65",
+          "ccs": "0.7099076094444444",
+          "bytes": "5edfebe0d56fefa7",
+          "z_reference": "0x5edfebe0d5cecf93",
+          "u_drawn": "0x5edfebe0d56fefa7",
+          "reference_accepts": true,
+          "discriminates_at": "2^-40",
+          "flips_if": "exp() under-computes by more than 2^-40",
+          "s": 0,
+          "r": 0.65
+        },
+        {
+          "x": "0.65",
+          "ccs": "0.7099076094444444",
+          "bytes": "5edfebe0d62daf7e",
+          "z_reference": "0x5edfebe0d5cecf93",
+          "u_drawn": "0x5edfebe0d62daf7e",
+          "reference_accepts": false,
+          "discriminates_at": "2^-40",
+          "flips_if": "exp() over-computes by more than 2^-40",
+          "s": 0,
+          "r": 0.65
+        }
+      ]
+    },
+    "Falcon-1024": {
+      "sigma_min": "1.298280334",
+      "ccs_used": "0.7212668522222222",
+      "vectors": [
+        {
+          "x": "0.05",
+          "ccs": "0.7212668522222222",
+          "bytes": "afa39c5daa93fae8",
+          "z_reference": "0xafa39c5dab439e85",
+          "u_drawn": "0xafa39c5daa93fae8",
+          "reference_accepts": true,
+          "discriminates_at": "2^-40",
+          "flips_if": "exp() under-computes by more than 2^-40",
+          "s": 0,
+          "r": 0.05
+        },
+        {
+          "x": "0.05",
+          "ccs": "0.7212668522222222",
+          "bytes": "afa39c5dabf34221",
+          "z_reference": "0xafa39c5dab439e85",
+          "u_drawn": "0xafa39c5dabf34221",
+          "reference_accepts": false,
+          "discriminates_at": "2^-40",
+          "flips_if": "exp() over-computes by more than 2^-40",
+          "s": 0,
+          "r": 0.05
+        },
+        {
+          "x": "0.2000001676183812",
+          "ccs": "0.7212668522222222",
+          "bytes": "972c882feac145ea",
+          "z_reference": "0x972c882feb587273",
+          "u_drawn": "0x972c882feac145ea",
+          "reference_accepts": true,
+          "discriminates_at": "2^-40",
+          "flips_if": "exp() under-computes by more than 2^-40",
+          "s": 0,
+          "r": 0.2000001676183812
+        },
+        {
+          "x": "0.2000001676183812",
+          "ccs": "0.7212668522222222",
+          "bytes": "972c882febef9efb",
+          "z_reference": "0x972c882feb587273",
+          "u_drawn": "0x972c882febef9efb",
+          "reference_accepts": false,
+          "discriminates_at": "2^-40",
+          "flips_if": "exp() over-computes by more than 2^-40",
+          "s": 0,
+          "r": 0.2000001676183812
+        },
+        {
+          "x": "0.35",
+          "ccs": "0.7212668522222222",
+          "bytes": "821ddcb5f49207ee",
+          "z_reference": "0x821ddcb5f51425cb",
+          "u_drawn": "0x821ddcb5f49207ee",
+          "reference_accepts": true,
+          "discriminates_at": "2^-40",
+          "flips_if": "exp() under-computes by more than 2^-40",
+          "s": 0,
+          "r": 0.35
+        },
+        {
+          "x": "0.35",
+          "ccs": "0.7212668522222222",
+          "bytes": "821ddcb5f59643a7",
+          "z_reference": "0x821ddcb5f51425cb",
+          "u_drawn": "0x821ddcb5f59643a7",
+          "reference_accepts": false,
+          "discriminates_at": "2^-40",
+          "flips_if": "exp() over-computes by more than 2^-40",
+          "s": 0,
+          "r": 0.35
+        },
+        {
+          "x": "0.5",
+          "ccs": "0.7212668522222222",
+          "bytes": "6ffe10656823c4e6",
+          "z_reference": "0x6ffe10656893c2f7",
+          "u_drawn": "0x6ffe10656823c4e6",
+          "reference_accepts": true,
+          "discriminates_at": "2^-40",
+          "flips_if": "exp() under-computes by more than 2^-40",
+          "s": 0,
+          "r": 0.5
+        },
+        {
+          "x": "0.5",
+          "ccs": "0.7212668522222222",
+          "bytes": "6ffe10656903c107",
+          "z_reference": "0x6ffe10656893c2f7",
+          "u_drawn": "0x6ffe10656903c107",
+          "reference_accepts": false,
+          "discriminates_at": "2^-40",
+          "flips_if": "exp() over-computes by more than 2^-40",
+          "s": 0,
+          "r": 0.5
+        },
+        {
+          "x": "0.65",
+          "ccs": "0.7212668522222222",
+          "bytes": "60648d84f794586b",
+          "z_reference": "0x60648d84f7f4bcf9",
+          "u_drawn": "0x60648d84f794586b",
+          "reference_accepts": true,
+          "discriminates_at": "2^-40",
+          "flips_if": "exp() under-computes by more than 2^-40",
+          "s": 0,
+          "r": 0.65
+        },
+        {
+          "x": "0.65",
+          "ccs": "0.7212668522222222",
+          "bytes": "60648d84f8552186",
+          "z_reference": "0x60648d84f7f4bcf9",
+          "u_drawn": "0x60648d84f8552186",
+          "reference_accepts": false,
+          "discriminates_at": "2^-40",
+          "flips_if": "exp() over-computes by more than 2^-40",
+          "s": 0,
+          "r": 0.65
+        }
+      ]
+    }
+  }
+}
