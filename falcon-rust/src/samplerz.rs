@@ -85,9 +85,14 @@ fn ber_exp(x: FixedPoint128, ccs: FixedPoint128, random_bytes: [u8; 7]) -> bool 
     let shamt = usize::min(s, 63);
     let z = ((((approx_exp(r, ccs) as u128) << 1) - 1) >> shamt) as u64;
     let mut w = 0i16;
-    for (index, i) in (0..64).step_by(8).rev().enumerate() {
-        let byte = random_bytes[index];
-        w = (byte as i16) - (((z >> i) & 0xff) as i16);
+    // Iterate the buffer itself, deriving the shift from the index. The previous form iterated
+    // `(0..64).step_by(8).rev()`, which yields EIGHT shifts against a SEVEN-byte buffer, so a draw
+    // whose leading bytes all tie with `z` indexed `random_bytes[7]` and panicked. Driving the loop
+    // from the array makes the bound hold by construction, and it follows automatically if the
+    // buffer width ever changes.
+    for (index, byte) in random_bytes.iter().enumerate() {
+        let shift = 8 * (random_bytes.len() - index);
+        w = (*byte as i16) - (((z >> shift) & 0xff) as i16);
         if w != 0 {
             break;
         }
@@ -465,6 +470,38 @@ mod test {
             ber_exp(x, ccs, bytes),
             "ber_exp regression: acceptance decision flipped"
         );
+    }
+
+    /// Regression test for an out-of-bounds index in `ber_exp`.
+    ///
+    /// The comparison loop iterated `(0..64).step_by(8).rev()` — eight shifts — while indexing a
+    /// seven-byte buffer, so `random_bytes[7]` was read whenever the first seven bytes all tied with
+    /// the corresponding bytes of `z`. From the sampler's own RNG that happens with probability
+    /// about 2^-56, which is why it was never observed; it is reachable deterministically here by
+    /// constructing the tying draw directly.
+    ///
+    /// Behaviour is otherwise unchanged: every decision was already made from the first seven bytes,
+    /// because the eighth iteration could only ever panic rather than return.
+    #[test]
+    fn ber_exp_all_bytes_tie_does_not_panic() {
+        let x = FixedPoint128::from(0.05_f64);
+        let ccs = FixedPoint128::from(0.709_907_609_444_444_4_f64);
+
+        // Reconstruct z exactly as ber_exp does.
+        let s = (x / FixedPoint128::LN_2).trunc() as usize;
+        let r = x - FixedPoint128::LN_2 * FixedPoint128::from(s as i32);
+        let shamt = usize::min(s, 63);
+        let z = ((((approx_exp(r, ccs) as u128) << 1) - 1) >> shamt) as u64;
+
+        // Every available byte equals z's byte at the same position, so the loop never breaks early
+        // and runs to the end of the buffer.
+        let mut bytes = [0u8; 7];
+        for (index, byte) in bytes.iter_mut().enumerate() {
+            *byte = ((z >> (8 * (7 - index))) & 0xff) as u8;
+        }
+
+        // Pre-fix this panicked with "index out of bounds: the len is 7 but the index is 7".
+        assert!(!ber_exp(x, ccs, bytes), "all bytes tie, so w == 0 and the draw is rejected");
     }
 
     /// The 20 published BerExp precision vectors from
