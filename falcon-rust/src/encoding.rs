@@ -137,7 +137,7 @@ pub(crate) fn decompress(x: &[u8], n: usize) -> Option<Vec<i16>> {
     // approach is that acc_len is updated with a simple decrement — no
     // division or modulo by 8 on every bit.
     let mut result = Vec::with_capacity(n);
-    let mut i = 0usize;   // byte cursor into x
+    let mut i = 0usize; // byte cursor into x
     let mut acc: u32 = 0;
     let mut acc_len: u32 = 0;
 
@@ -150,7 +150,7 @@ pub(crate) fn decompress(x: &[u8], n: usize) -> Option<Vec<i16>> {
         acc = (acc << 8) | x[i] as u32;
         i += 1;
         // After the shift, the fresh byte occupies bits acc_len..acc_len+7.
-        let s = (acc >> (acc_len + 7)) & 1;  // sign: 0 = positive, 1 = negative
+        let s = (acc >> (acc_len + 7)) & 1; // sign: 0 = positive, 1 = negative
         let mut m = (acc >> acc_len) & 0x7F; // |coeff| low 7 bits
 
         // Read the unary-encoded high bits: zero or more 0-bits, terminated

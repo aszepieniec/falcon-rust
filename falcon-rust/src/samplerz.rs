@@ -85,9 +85,12 @@ fn ber_exp(x: FixedPoint128, ccs: FixedPoint128, random_bytes: [u8; 7]) -> bool 
     let shamt = usize::min(s, 63);
     let z = ((((approx_exp(r, ccs) as u128) << 1) - 1) >> shamt) as u64;
     let mut w = 0i16;
-    for (index, i) in (0..64).step_by(8).rev().enumerate() {
-        let byte = random_bytes[index];
-        w = (byte as i16) - (((z >> i) & 0xff) as i16);
+
+    // Compare `random_bytes` against the bytes of `z`, most significant first.
+    // Zip takes the length of the shortest sequence.
+    let shifts = (0..u64::BITS).step_by(8).rev();
+    for (byte, shift) in random_bytes.into_iter().zip(shifts) {
+        w = (byte as i16) - (((z >> shift) & 0xff) as i16);
         if w != 0 {
             break;
         }
@@ -464,6 +467,34 @@ mod test {
         assert!(
             ber_exp(x, ccs, bytes),
             "ber_exp regression: acceptance decision flipped"
+        );
+    }
+
+    /// Regression test for an out-of-bounds index in `ber_exp`.
+    ///
+    /// Previously, all-equal bytes led to a panic.
+    #[test]
+    fn ber_exp_all_bytes_tie_leads_to_rejection() {
+        let x = FixedPoint128::from(0.05_f64);
+        let ccs = FixedPoint128::from(0.709_907_609_444_444_4_f64);
+
+        // Reconstruct z exactly as ber_exp does.
+        let s = (x / FixedPoint128::LN_2).trunc() as usize;
+        let r = x - FixedPoint128::LN_2 * FixedPoint128::from(s as i32);
+        let shamt = usize::min(s, 63);
+        let z = ((((approx_exp(r, ccs) as u128) << 1) - 1) >> shamt) as u64;
+
+        // Every available byte equals z's byte at the same position, so the
+        // loop never breaks early and runs to the end of the buffer.
+        let mut bytes = [0u8; 7];
+        for (index, byte) in bytes.iter_mut().enumerate() {
+            *byte = ((z >> (8 * (7 - index))) & 0xff) as u8;
+        }
+
+        // Pre-fix this panicked with "index out of bounds: the len is 7 but the index is 7".
+        assert!(
+            !ber_exp(x, ccs, bytes),
+            "all bytes tie, so w == 0 and the draw is rejected"
         );
     }
 

@@ -133,7 +133,6 @@ pub(crate) fn build_falcon_tree(
     convert_tree_fixed128(tree)
 }
 
-
 // ---------------------------------------------------------------------------
 // LDL tree (FixedPoint64) — stored in SecretKey, used by ffsampling
 // ---------------------------------------------------------------------------
@@ -171,21 +170,17 @@ pub(crate) fn ffsampling(
         }
         LdlTree::Leaf(value) => {
             let sigmin = FixedPoint128::from(parameters.sigmin);
-            let z0 = sampler_z(
-                t.0.coefficients[0].re,
-                value[0].re,
-                sigmin,
-                rng,
-            );
-            let z1 = sampler_z(
-                t.1.coefficients[0].re,
-                value[0].re,
-                sigmin,
-                rng,
-            );
+            let z0 = sampler_z(t.0.coefficients[0].re, value[0].re, sigmin, rng);
+            let z1 = sampler_z(t.1.coefficients[0].re, value[0].re, sigmin, rng);
             (
-                Polynomial::new(vec![Complex::new(FixedPoint128::from(z0), FixedPoint128::ZERO)]),
-                Polynomial::new(vec![Complex::new(FixedPoint128::from(z1), FixedPoint128::ZERO)]),
+                Polynomial::new(vec![Complex::new(
+                    FixedPoint128::from(z0),
+                    FixedPoint128::ZERO,
+                )]),
+                Polynomial::new(vec![Complex::new(
+                    FixedPoint128::from(z1),
+                    FixedPoint128::ZERO,
+                )]),
             )
         }
     }
@@ -243,10 +238,12 @@ mod test {
         let a: [Polynomial<ComplexFP>; 4] = (0..4)
             .map(|_| {
                 (0..n)
-                    .map(|_| Complex::new(
-                        FixedPoint64::from(rng.random::<f64>()),
-                        FixedPoint64::from(rng.random::<f64>()),
-                    ))
+                    .map(|_| {
+                        Complex::new(
+                            FixedPoint64::from(rng.random::<f64>()),
+                            FixedPoint64::from(rng.random::<f64>()),
+                        )
+                    })
                     .collect_vec()
             })
             .map(Polynomial::new)

@@ -9,7 +9,7 @@ use num_complex::{Complex, Complex64};
 use crate::{
     cyclotomic_fourier::CyclotomicFourier,
     falcon_field::Felt,
-    fixed_point::{FixedPoint64, FixedPoint128},
+    fixed_point::{FixedPoint128, FixedPoint64},
     fp_field::FpField,
     polynomial::Polynomial,
     U32Field,
@@ -1111,8 +1111,7 @@ impl FastFft for Polynomial<Complex64> {
 type ComplexFP = Complex<FixedPoint64>;
 
 lazy_static! {
-    static ref FP_BITREVERSED_POWERS_1024: Vec<ComplexFP> =
-        ComplexFP::bitreversed_powers(1024);
+    static ref FP_BITREVERSED_POWERS_1024: Vec<ComplexFP> = ComplexFP::bitreversed_powers(1024);
 }
 
 impl FastFft for Polynomial<ComplexFP> {

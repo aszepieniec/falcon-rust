@@ -157,10 +157,9 @@ impl<F: Zero + PartialEq + Clone> Polynomial<F> {
         }
         let mut max_index = self.coefficients.len() - 1;
         while self.coefficients[max_index] == F::zero() {
-            if let Some(new_index) = max_index.checked_sub(1) {
+            {
+                let new_index = max_index.checked_sub(1)?;
                 max_index = new_index;
-            } else {
-                return None;
             }
         }
         Some(max_index)

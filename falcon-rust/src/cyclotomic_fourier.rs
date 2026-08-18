@@ -253,7 +253,14 @@ impl CyclotomicFourier for Complex64 {
 
 impl<T: FixedInt> CyclotomicFourier for Complex<FixedPoint<T>>
 where
-    Complex<FixedPoint<T>>: Copy + One + Zero + Add<Output = Self> + Sub<Output = Self> + Mul<Output = Self> + MulAssign + Inverse,
+    Complex<FixedPoint<T>>: Copy
+        + One
+        + Zero
+        + Add<Output = Self>
+        + Sub<Output = Self>
+        + Mul<Output = Self>
+        + MulAssign
+        + Inverse,
 {
     fn primitive_root_of_unity(n: usize) -> Self {
         let c = Complex64::primitive_root_of_unity(n);
