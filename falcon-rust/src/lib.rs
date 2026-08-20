@@ -21,7 +21,7 @@
 //!
 //! # Usage
 //!
-//! First, `falcon-rust = "0.1.3"` to your `Cargo.toml` file.
+//! First, `falcon-rust = "0.3.1"` to your `Cargo.toml` file.
 //!
 //! Then to use the interface:
 //! ```

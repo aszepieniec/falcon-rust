@@ -19,7 +19,7 @@ between the standard and the submission, and these changes might break compatibi
 Falcon comes in two variants. Falcon512 claims at least 108 bits of security, and
 Falcon1024 claims at least 252 bits of security, both against quantum computers.
 
-This implementation adheres to the [specification](https://falcon-sign.info/falcon.pdf). It was originally written following the the official [python implementation](https://github.com/tprest/falcon.py), but has since deviated.
+This implementation adheres to the [specification](https://falcon-sign.info/falcon.pdf). It was originally modeled after the official [python implementation](https://github.com/tprest/falcon.py).
 
 ## Example
 
